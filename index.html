@@ -11,13 +11,13 @@
   <canvas id="map" aria-label="Карта провинций Fauxlore" tabindex="0"></canvas>
   <canvas id="labels" aria-hidden="true"></canvas>
   <aside class="panel" aria-label="Управление картой">
-    <header><div><span class="eyebrow">FAUXLORE</span><h1>Карта мира</h1></div><button id="collapse" aria-expanded="true" aria-controls="controls" title="Свернуть панель">−</button></header>
+    <header><div><span class="eyebrow">FAUXLORE</span><h1>Игровая область</h1></div><button id="collapse" aria-expanded="true" aria-controls="controls" title="Свернуть панель">−</button></header>
     <div id="controls">
       <p id="summary">Загрузка карты…</p>
       <form id="search-form"><label for="province-id">Найти провинцию</label><div class="search"><input id="province-id" type="number" min="1" step="1" placeholder="ID провинции" required><button type="submit">Найти</button></div></form>
       <button id="toggle-ids" class="wide" aria-pressed="false">Показать ID</button>
       <div class="zoom"><button id="zoom-out" aria-label="Отдалить">−</button><output id="zoom-value">—</output><button id="zoom-in" aria-label="Приблизить">+</button><button id="fit" title="Показать карту целиком">Вся карта</button></div>
-      <div class="legend"><span><i class="land"></i>Суша</span><span><i class="sea"></i>Море</span><span><i class="selected"></i>Выбрано</span></div>
+      <div class="legend"><span><i class="land"></i>Суша</span><span><i class="sea"></i>Море / озеро</span><span><i class="selected"></i>Выбрано</span></div>
       <p class="hint">Перетаскивание — перемещение<br>Колесо / два пальца — масштаб<br>Двойное нажатие — приблизить</p>
     </div>
   </aside>

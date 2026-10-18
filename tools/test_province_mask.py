@@ -1,9 +1,26 @@
 """Small topology regressions; run with python tools/test_province_mask.py."""
 import numpy as np
-from build_province_mask import label_runs, fill_borders, remove_land_artifacts
+from build_province_mask import label_runs, fill_borders, remove_land_artifacts, water_topology, merge_small_seas
 
 
 def main():
+    # A divided enclosed water body is lake throughout. Two connected tiny
+    # sea artifacts merge into the large sea without cycles or land changes.
+    ids = np.ones((15, 15), dtype=np.uint32)
+    ids[:, :7] = 2
+    ids[4, 6] = 3
+    ids[5, 6] = 4
+    ids[7:9, 10:12] = 5
+    ids[9:11, 10:12] = 6
+    types = np.array([0, 1, 2, 2, 2, 2, 2], dtype=np.uint8)
+    original_land = ids == 1
+    neighbors = water_topology(ids, types)
+    assert types.tolist() == [0, 1, 2, 2, 2, 3, 3]
+    records = merge_small_seas(ids, types, neighbors)
+    assert {r['id'] for r in records} == {3, 4}
+    assert not np.any(np.isin(ids, [3, 4]))
+    assert np.all(ids[original_land] == 1)
+    assert np.any(ids == 5) and np.any(ids == 6)
     # Land blocks connected by one original pixel must remain a single province.
     kinds = np.array([
         [2,2,2,2,2,2,2],

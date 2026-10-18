@@ -159,6 +159,101 @@ def remove_land_artifacts(labels, types, border, max_pixels=3):
     return records
 
 
+def remove_edge_sea_artifacts(labels, types, border, max_pixels=64):
+    """Retire tiny sea components touching the image edge as exterior noise.
+
+    Large sea provinces cropped by the image boundary are valid and remain
+    untouched. Tiny isolated transparent fragments at the edge are outside
+    the playable map and should stay background ID 0 instead of becoming
+    searchable provinces.
+    """
+    h, w = labels.shape
+    areas = np.bincount(labels.ravel(), minlength=len(types))
+    edge_ids = np.unique(np.concatenate((
+        labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]
+    )))
+    retired = [int(province_id) for province_id in edge_ids
+               if province_id > 0 and types[province_id] == 2
+               and areas[province_id] <= max_pixels]
+    records = []
+    for province_id in retired:
+        ys, xs = np.nonzero(labels == province_id)
+        records.append({'id': province_id, 'seed_area': int(areas[province_id]),
+                        'pixels': [[int(x), int(y)] for y, x in zip(ys, xs)]})
+        labels[ys, xs] = 0
+        # Keep these pixels as exterior background. They are removed after
+        # contour filling, so marking them as border preserves the seed check
+        # without sending them through another assignment pass.
+        border[ys, xs] = True
+        types[province_id] = 0
+    return records
+
+
+def water_topology(labels, types):
+    """Classify connected water networks: exterior/edge access means sea."""
+    neighbors = [dict() for _ in types]
+    for y in range(labels.shape[0]):
+        pairs = [(labels[y, :-1], labels[y, 1:])]
+        if y:
+            pairs.append((labels[y-1], labels[y]))
+        for a, b in pairs:
+            different = a != b
+            lo, hi = np.minimum(a[different], b[different]), np.maximum(a[different], b[different])
+            keys, counts = np.unique(lo.astype(np.uint64)*len(types)+hi, return_counts=True)
+            for key, count in zip(keys.tolist(), counts.tolist()):
+                i, j = divmod(key, len(types))
+                neighbors[i][j] = neighbors[i].get(j, 0)+count
+                neighbors[j][i] = neighbors[j].get(i, 0)+count
+    edge = set(np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1])).tolist())
+    sea = {i for i in range(1, len(types)) if types[i] == 2 and (i in edge or 0 in neighbors[i])}
+    pending = list(sea)
+    while pending:
+        for j in neighbors[pending.pop()]:
+            if types[j] == 2 and j not in sea:
+                sea.add(j)
+                pending.append(j)
+    for i in range(1, len(types)):
+        if types[i] == 2 and i not in sea:
+            types[i] = 3
+    return neighbors
+
+
+def merge_small_seas(labels, types, neighbors, max_pixels=64):
+    """Merge small sea IDs into water neighbors; preserve enclosed lakes."""
+    areas = np.bincount(labels.ravel(), minlength=len(types))
+    small = set(np.flatnonzero((types == 2) & (areas <= max_pixels)).tolist())
+    lookup = np.arange(len(types), dtype=np.uint32)
+    records = []
+    # Process whole groups so neighboring artifacts cannot merge in a cycle.
+    while small:
+        group = {min(small)}
+        pending = list(group)
+        while pending:
+            for j in neighbors[pending.pop()]:
+                if j in small and j not in group:
+                    group.add(j)
+                    pending.append(j)
+        small.difference_update(group)
+        contacts = {}
+        for i in group:
+            for j, count in neighbors[i].items():
+                if j not in group and types[j] == 2:
+                    contacts[j] = contacts.get(j, 0)+count
+        if contacts:
+            target = min(contacts, key=lambda j: (-contacts[j], j))
+        elif any(0 in neighbors[i] for i in group):
+            target = 0
+        else:
+            continue
+        for i in sorted(group):
+            lookup[i] = target
+            types[i] = 0
+            records.append({'id': i, 'area': int(areas[i]), 'assigned_to': target})
+    for y in range(labels.shape[0]):
+        labels[y] = lookup[labels[y]]
+    return records
+
+
 def main(source='fauxlore.png', destination='map-data'):
     started = time.time()
     out = Path(destination)
@@ -189,6 +284,9 @@ def main(source='fauxlore.png', destination='map-data'):
     assert unassigned == 0, 'Contour pixels must all belong to provinces'
     preserved_hash = sum(int(np.sum(labels[y][~border[y]], dtype=np.uint64)) for y in range(h))
     assert seed_hash == preserved_hash, 'Original seed pixels changed'
+    retired_edge_sea = remove_edge_sea_artifacts(labels, types, border)
+    neighbors = water_topology(labels, types)
+    retired_small_sea = merge_small_seas(labels, types, neighbors)
     for record in retired:
         receivers = {}
         for x, y in record['pixels']:
@@ -231,7 +329,7 @@ def main(source='fauxlore.png', destination='map-data'):
             assert areas[i] == 0, 'Retired ID still present'
             continue
         meta[f'#{i:06X}'] = {
-            'id': i, 'kind': 'land' if types[i] == 1 else 'sea',
+            'id': i, 'kind': {1: 'land', 2: 'sea', 3: 'lake'}[int(types[i])],
             'center': [round(sx[i]/areas[i], 2), round(sy[i]/areas[i], 2)],
             'bbox': [int(minx[i]), int(miny[i]), int(maxx[i]), int(maxy[i])],
             'area': int(areas[i]), 'seed_area': int(seed_areas[i]),
@@ -245,15 +343,19 @@ def main(source='fauxlore.png', destination='map-data'):
     colors[types == 2, 2] = 210
     preview = Image.fromarray(colors[labels[::5, ::5]])
     preview.save(out / 'province-preview.png')
-    Image.fromarray(np.array([[0,0,0], [255,231,214], [75,135,190]], dtype=np.uint8)[types[labels[::5, ::5]]]).save(out / 'terrain-preview.png')
+    Image.fromarray(np.array([[0,0,0], [255,231,214], [75,135,190], [75,135,190]], dtype=np.uint8)[types[labels[::5, ::5]]]).save(out / 'terrain-preview.png')
     tiny = [i for i in range(1, count) if types[i] != 0 and seed_areas[i] < 16]
     report = {
         'source': str(source), 'width': w, 'height': h,
         'provinces': int(np.count_nonzero(types)), 'land': int(np.sum(types == 1)),
-        'sea': int(np.sum(types == 2)), 'exterior_components': exterior_count,
+        'sea': int(np.sum(types == 2)), 'lake': int(np.sum(types == 3)), 'exterior_components': exterior_count,
         'contour_pixels': original_contour_pixels, 'unassigned_contour_pixels': unassigned,
         'reassigned_artifact_pixels': sum(r['seed_area'] for r in retired),
         'retired_land_artifacts': retired,
+        'retired_edge_sea_artifacts': retired_edge_sea,
+        'retired_small_sea_artifacts': retired_small_sea,
+        'small_sea_max_area': 64,
+        'lake_rule': 'Water network without 4-connected water access to exterior or image edge',
         'isolated_contour_pixels_assigned_by_distance': fallback_count,
         'contour_expansion_rounds': rounds, 'seed_pixels_preserved': seed_hash == preserved_hash,
         'png_roundtrip_verified': True,

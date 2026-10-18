@@ -1,0 +1,1668 @@
+{
+  "threshold_is_review_only": true,
+  "review_max_area": 500,
+  "counts": {
+    "land": {
+      "16": 0,
+      "64": 0,
+      "100": 0,
+      "500": 14,
+      "1000": 533,
+      "2000": 3189
+    },
+    "sea": {
+      "16": 0,
+      "64": 0,
+      "100": 2,
+      "500": 15,
+      "1000": 18,
+      "2000": 19
+    },
+    "lake": {
+      "16": 1,
+      "64": 1,
+      "100": 3,
+      "500": 23,
+      "1000": 35,
+      "2000": 44
+    }
+  },
+  "candidates": [
+    {
+      "id": 279,
+      "kind": "lake",
+      "center": [
+        931.0,
+        3163.0
+      ],
+      "bbox": [
+        931,
+        3163,
+        931,
+        3163
+      ],
+      "area": 1,
+      "seed_area": 1,
+      "neighbors": [
+        {
+          "id": 257,
+          "kind": "land",
+          "shared_pixel_edges": 4
+        }
+      ]
+    },
+    {
+      "id": 186,
+      "kind": "lake",
+      "center": [
+        2388.94,
+        3040.16
+      ],
+      "bbox": [
+        2385,
+        3034,
+        2392,
+        3046
+      ],
+      "area": 69,
+      "seed_area": 39,
+      "neighbors": [
+        {
+          "id": 171,
+          "kind": "land",
+          "shared_pixel_edges": 24
+        },
+        {
+          "id": 167,
+          "kind": "land",
+          "shared_pixel_edges": 18
+        }
+      ]
+    },
+    {
+      "id": 5124,
+      "kind": "sea",
+      "center": [
+        4013.36,
+        5911.82
+      ],
+      "bbox": [
+        4010,
+        5906,
+        4019,
+        5918
+      ],
+      "area": 78,
+      "seed_area": 57,
+      "neighbors": [
+        {
+          "id": 5095,
+          "kind": "land",
+          "shared_pixel_edges": 35
+        },
+        {
+          "id": 5129,
+          "kind": "sea",
+          "shared_pixel_edges": 11
+        }
+      ]
+    },
+    {
+      "id": 2399,
+      "kind": "lake",
+      "center": [
+        3512.2,
+        4144.43
+      ],
+      "bbox": [
+        3507,
+        4137,
+        3517,
+        4152
+      ],
+      "area": 88,
+      "seed_area": 41,
+      "neighbors": [
+        {
+          "id": 2339,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 2415,
+          "kind": "land",
+          "shared_pixel_edges": 23
+        }
+      ]
+    },
+    {
+      "id": 5682,
+      "kind": "sea",
+      "center": [
+        5667.02,
+        6559.65
+      ],
+      "bbox": [
+        5661,
+        6555,
+        5674,
+        6566
+      ],
+      "area": 100,
+      "seed_area": 71,
+      "neighbors": [
+        {
+          "id": 5667,
+          "kind": "land",
+          "shared_pixel_edges": 36
+        },
+        {
+          "id": 5615,
+          "kind": "sea",
+          "shared_pixel_edges": 18
+        }
+      ]
+    },
+    {
+      "id": 3379,
+      "kind": "lake",
+      "center": [
+        6600.71,
+        4575.49
+      ],
+      "bbox": [
+        6592,
+        4569,
+        6608,
+        4582
+      ],
+      "area": 104,
+      "seed_area": 61,
+      "neighbors": [
+        {
+          "id": 3315,
+          "kind": "land",
+          "shared_pixel_edges": 62
+        }
+      ]
+    },
+    {
+      "id": 2331,
+      "kind": "sea",
+      "center": [
+        824.02,
+        4119.09
+      ],
+      "bbox": [
+        817,
+        4115,
+        831,
+        4123
+      ],
+      "area": 105,
+      "seed_area": 83,
+      "neighbors": [
+        {
+          "id": 2177,
+          "kind": "land",
+          "shared_pixel_edges": 27
+        },
+        {
+          "id": 2360,
+          "kind": "sea",
+          "shared_pixel_edges": 17
+        },
+        {
+          "id": 2141,
+          "kind": "sea",
+          "shared_pixel_edges": 6
+        }
+      ]
+    },
+    {
+      "id": 3179,
+      "kind": "sea",
+      "center": [
+        2936.55,
+        4483.5
+      ],
+      "bbox": [
+        2934,
+        4476,
+        2941,
+        4496
+      ],
+      "area": 109,
+      "seed_area": 104,
+      "neighbors": [
+        {
+          "id": 3072,
+          "kind": "land",
+          "shared_pixel_edges": 32
+        },
+        {
+          "id": 3123,
+          "kind": "sea",
+          "shared_pixel_edges": 26
+        }
+      ]
+    },
+    {
+      "id": 3727,
+      "kind": "lake",
+      "center": [
+        4812.56,
+        4782.31
+      ],
+      "bbox": [
+        4807,
+        4773,
+        4817,
+        4793
+      ],
+      "area": 122,
+      "seed_area": 65,
+      "neighbors": [
+        {
+          "id": 3737,
+          "kind": "land",
+          "shared_pixel_edges": 32
+        },
+        {
+          "id": 3673,
+          "kind": "land",
+          "shared_pixel_edges": 26
+        },
+        {
+          "id": 3723,
+          "kind": "land",
+          "shared_pixel_edges": 10
+        }
+      ]
+    },
+    {
+      "id": 1498,
+      "kind": "lake",
+      "center": [
+        6492.36,
+        3790.07
+      ],
+      "bbox": [
+        6485,
+        3781,
+        6498,
+        3801
+      ],
+      "area": 136,
+      "seed_area": 78,
+      "neighbors": [
+        {
+          "id": 1381,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        },
+        {
+          "id": 1479,
+          "kind": "land",
+          "shared_pixel_edges": 23
+        },
+        {
+          "id": 1538,
+          "kind": "land",
+          "shared_pixel_edges": 22
+        }
+      ]
+    },
+    {
+      "id": 2246,
+      "kind": "sea",
+      "center": [
+        813.77,
+        4086.26
+      ],
+      "bbox": [
+        809,
+        4078,
+        818,
+        4097
+      ],
+      "area": 139,
+      "seed_area": 121,
+      "neighbors": [
+        {
+          "id": 2177,
+          "kind": "land",
+          "shared_pixel_edges": 38
+        },
+        {
+          "id": 2141,
+          "kind": "sea",
+          "shared_pixel_edges": 22
+        }
+      ]
+    },
+    {
+      "id": 1947,
+      "kind": "sea",
+      "center": [
+        477.73,
+        3965.8
+      ],
+      "bbox": [
+        468,
+        3959,
+        483,
+        3974
+      ],
+      "area": 143,
+      "seed_area": 124,
+      "neighbors": [
+        {
+          "id": 1864,
+          "kind": "land",
+          "shared_pixel_edges": 45
+        },
+        {
+          "id": 1772,
+          "kind": "sea",
+          "shared_pixel_edges": 19
+        }
+      ]
+    },
+    {
+      "id": 2067,
+      "kind": "lake",
+      "center": [
+        6855.54,
+        4015.22
+      ],
+      "bbox": [
+        6849,
+        4007,
+        6863,
+        4025
+      ],
+      "area": 152,
+      "seed_area": 98,
+      "neighbors": [
+        {
+          "id": 2031,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 1945,
+          "kind": "land",
+          "shared_pixel_edges": 16
+        },
+        {
+          "id": 1939,
+          "kind": "land",
+          "shared_pixel_edges": 15
+        },
+        {
+          "id": 2080,
+          "kind": "land",
+          "shared_pixel_edges": 10
+        }
+      ]
+    },
+    {
+      "id": 4094,
+      "kind": "sea",
+      "center": [
+        4634.48,
+        5079.76
+      ],
+      "bbox": [
+        4624,
+        5071,
+        4643,
+        5085
+      ],
+      "area": 166,
+      "seed_area": 127,
+      "neighbors": [
+        {
+          "id": 4058,
+          "kind": "land",
+          "shared_pixel_edges": 38
+        },
+        {
+          "id": 4099,
+          "kind": "land",
+          "shared_pixel_edges": 18
+        },
+        {
+          "id": 4019,
+          "kind": "sea",
+          "shared_pixel_edges": 16
+        }
+      ]
+    },
+    {
+      "id": 3493,
+      "kind": "lake",
+      "center": [
+        4595.05,
+        4638.35
+      ],
+      "bbox": [
+        4589,
+        4625,
+        4601,
+        4650
+      ],
+      "area": 172,
+      "seed_area": 101,
+      "neighbors": [
+        {
+          "id": 3433,
+          "kind": "land",
+          "shared_pixel_edges": 40
+        },
+        {
+          "id": 3452,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 3519,
+          "kind": "land",
+          "shared_pixel_edges": 19
+        }
+      ]
+    },
+    {
+      "id": 656,
+      "kind": "sea",
+      "center": [
+        5613.0,
+        3453.59
+      ],
+      "bbox": [
+        5607,
+        3444,
+        5619,
+        3462
+      ],
+      "area": 174,
+      "seed_area": 153,
+      "neighbors": [
+        {
+          "id": 563,
+          "kind": "sea",
+          "shared_pixel_edges": 36
+        },
+        {
+          "id": 578,
+          "kind": "land",
+          "shared_pixel_edges": 30
+        }
+      ]
+    },
+    {
+      "id": 3106,
+      "kind": "land",
+      "center": [
+        730.3,
+        4467.99
+      ],
+      "bbox": [
+        725,
+        4445,
+        739,
+        4480
+      ],
+      "area": 185,
+      "seed_area": 135,
+      "neighbors": [
+        {
+          "id": 2955,
+          "kind": "sea",
+          "shared_pixel_edges": 108
+        },
+        {
+          "id": 3011,
+          "kind": "land",
+          "shared_pixel_edges": 2
+        }
+      ]
+    },
+    {
+      "id": 328,
+      "kind": "lake",
+      "center": [
+        2804.69,
+        3215.47
+      ],
+      "bbox": [
+        2795,
+        3207,
+        2814,
+        3225
+      ],
+      "area": 220,
+      "seed_area": 156,
+      "neighbors": [
+        {
+          "id": 313,
+          "kind": "land",
+          "shared_pixel_edges": 35
+        },
+        {
+          "id": 318,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        },
+        {
+          "id": 297,
+          "kind": "land",
+          "shared_pixel_edges": 20
+        }
+      ]
+    },
+    {
+      "id": 4934,
+      "kind": "lake",
+      "center": [
+        5607.82,
+        5786.2
+      ],
+      "bbox": [
+        5595,
+        5780,
+        5624,
+        5794
+      ],
+      "area": 225,
+      "seed_area": 142,
+      "neighbors": [
+        {
+          "id": 4901,
+          "kind": "land",
+          "shared_pixel_edges": 36
+        },
+        {
+          "id": 4915,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 4946,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        }
+      ]
+    },
+    {
+      "id": 5308,
+      "kind": "lake",
+      "center": [
+        6828.08,
+        6090.33
+      ],
+      "bbox": [
+        6817,
+        6079,
+        6845,
+        6098
+      ],
+      "area": 227,
+      "seed_area": 152,
+      "neighbors": [
+        {
+          "id": 5276,
+          "kind": "land",
+          "shared_pixel_edges": 42
+        },
+        {
+          "id": 5282,
+          "kind": "land",
+          "shared_pixel_edges": 33
+        },
+        {
+          "id": 5298,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        }
+      ]
+    },
+    {
+      "id": 1315,
+      "kind": "sea",
+      "center": [
+        2939.1,
+        3719.45
+      ],
+      "bbox": [
+        2929,
+        3712,
+        2956,
+        3727
+      ],
+      "area": 236,
+      "seed_area": 191,
+      "neighbors": [
+        {
+          "id": 1256,
+          "kind": "land",
+          "shared_pixel_edges": 58
+        },
+        {
+          "id": 1053,
+          "kind": "sea",
+          "shared_pixel_edges": 40
+        },
+        {
+          "id": 1106,
+          "kind": "sea",
+          "shared_pixel_edges": 4
+        }
+      ]
+    },
+    {
+      "id": 1753,
+      "kind": "lake",
+      "center": [
+        5346.81,
+        3888.32
+      ],
+      "bbox": [
+        5332,
+        3880,
+        5360,
+        3898
+      ],
+      "area": 237,
+      "seed_area": 166,
+      "neighbors": [
+        {
+          "id": 1694,
+          "kind": "land",
+          "shared_pixel_edges": 41
+        },
+        {
+          "id": 1737,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 1783,
+          "kind": "land",
+          "shared_pixel_edges": 17
+        },
+        {
+          "id": 1716,
+          "kind": "land",
+          "shared_pixel_edges": 7
+        }
+      ]
+    },
+    {
+      "id": 2386,
+      "kind": "lake",
+      "center": [
+        3437.03,
+        4140.92
+      ],
+      "bbox": [
+        3419,
+        4133,
+        3456,
+        4150
+      ],
+      "area": 253,
+      "seed_area": 148,
+      "neighbors": [
+        {
+          "id": 2353,
+          "kind": "land",
+          "shared_pixel_edges": 54
+        },
+        {
+          "id": 2405,
+          "kind": "land",
+          "shared_pixel_edges": 45
+        },
+        {
+          "id": 2309,
+          "kind": "land",
+          "shared_pixel_edges": 15
+        }
+      ]
+    },
+    {
+      "id": 2018,
+      "kind": "land",
+      "center": [
+        4200.4,
+        3993.21
+      ],
+      "bbox": [
+        4188,
+        3986,
+        4210,
+        4001
+      ],
+      "area": 254,
+      "seed_area": 193,
+      "neighbors": [
+        {
+          "id": 1884,
+          "kind": "sea",
+          "shared_pixel_edges": 78
+        }
+      ]
+    },
+    {
+      "id": 280,
+      "kind": "sea",
+      "center": [
+        2611.79,
+        3171.72
+      ],
+      "bbox": [
+        2605,
+        3162,
+        2620,
+        3183
+      ],
+      "area": 267,
+      "seed_area": 224,
+      "neighbors": [
+        {
+          "id": 262,
+          "kind": "land",
+          "shared_pixel_edges": 41
+        },
+        {
+          "id": 259,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        },
+        {
+          "id": 284,
+          "kind": "sea",
+          "shared_pixel_edges": 14
+        }
+      ]
+    },
+    {
+      "id": 476,
+      "kind": "land",
+      "center": [
+        2178.83,
+        3337.21
+      ],
+      "bbox": [
+        2168,
+        3328,
+        2189,
+        3347
+      ],
+      "area": 269,
+      "seed_area": 208,
+      "neighbors": [
+        {
+          "id": 398,
+          "kind": "sea",
+          "shared_pixel_edges": 84
+        }
+      ]
+    },
+    {
+      "id": 197,
+      "kind": "lake",
+      "center": [
+        2380.62,
+        3068.42
+      ],
+      "bbox": [
+        2370,
+        3054,
+        2389,
+        3082
+      ],
+      "area": 271,
+      "seed_area": 177,
+      "neighbors": [
+        {
+          "id": 171,
+          "kind": "land",
+          "shared_pixel_edges": 35
+        },
+        {
+          "id": 202,
+          "kind": "land",
+          "shared_pixel_edges": 30
+        },
+        {
+          "id": 205,
+          "kind": "land",
+          "shared_pixel_edges": 26
+        },
+        {
+          "id": 167,
+          "kind": "land",
+          "shared_pixel_edges": 11
+        }
+      ]
+    },
+    {
+      "id": 2886,
+      "kind": "sea",
+      "center": [
+        2995.57,
+        4352.06
+      ],
+      "bbox": [
+        2984,
+        4343,
+        3014,
+        4362
+      ],
+      "area": 293,
+      "seed_area": 229,
+      "neighbors": [
+        {
+          "id": 2881,
+          "kind": "land",
+          "shared_pixel_edges": 57
+        },
+        {
+          "id": 2830,
+          "kind": "land",
+          "shared_pixel_edges": 34
+        },
+        {
+          "id": 2771,
+          "kind": "sea",
+          "shared_pixel_edges": 15
+        },
+        {
+          "id": 2679,
+          "kind": "sea",
+          "shared_pixel_edges": 6
+        }
+      ]
+    },
+    {
+      "id": 3040,
+      "kind": "sea",
+      "center": [
+        2888.91,
+        4419.32
+      ],
+      "bbox": [
+        2877,
+        4411,
+        2901,
+        4428
+      ],
+      "area": 297,
+      "seed_area": 266,
+      "neighbors": [
+        {
+          "id": 3026,
+          "kind": "land",
+          "shared_pixel_edges": 41
+        },
+        {
+          "id": 2904,
+          "kind": "sea",
+          "shared_pixel_edges": 30
+        },
+        {
+          "id": 2928,
+          "kind": "sea",
+          "shared_pixel_edges": 15
+        }
+      ]
+    },
+    {
+      "id": 2050,
+      "kind": "land",
+      "center": [
+        4113.46,
+        4012.7
+      ],
+      "bbox": [
+        4102,
+        4000,
+        4122,
+        4023
+      ],
+      "area": 302,
+      "seed_area": 228,
+      "neighbors": [
+        {
+          "id": 1884,
+          "kind": "sea",
+          "shared_pixel_edges": 39
+        },
+        {
+          "id": 1903,
+          "kind": "sea",
+          "shared_pixel_edges": 34
+        },
+        {
+          "id": 2094,
+          "kind": "sea",
+          "shared_pixel_edges": 19
+        }
+      ]
+    },
+    {
+      "id": 4113,
+      "kind": "sea",
+      "center": [
+        4160.29,
+        5095.43
+      ],
+      "bbox": [
+        4149,
+        5084,
+        4172,
+        5103
+      ],
+      "area": 305,
+      "seed_area": 269,
+      "neighbors": [
+        {
+          "id": 4087,
+          "kind": "land",
+          "shared_pixel_edges": 66
+        },
+        {
+          "id": 3984,
+          "kind": "sea",
+          "shared_pixel_edges": 22
+        }
+      ]
+    },
+    {
+      "id": 2919,
+      "kind": "lake",
+      "center": [
+        6664.52,
+        4370.03
+      ],
+      "bbox": [
+        6653,
+        4358,
+        6682,
+        4383
+      ],
+      "area": 315,
+      "seed_area": 187,
+      "neighbors": [
+        {
+          "id": 2834,
+          "kind": "land",
+          "shared_pixel_edges": 67
+        },
+        {
+          "id": 2940,
+          "kind": "land",
+          "shared_pixel_edges": 41
+        },
+        {
+          "id": 2939,
+          "kind": "land",
+          "shared_pixel_edges": 19
+        },
+        {
+          "id": 2888,
+          "kind": "land",
+          "shared_pixel_edges": 13
+        }
+      ]
+    },
+    {
+      "id": 1913,
+      "kind": "land",
+      "center": [
+        1286.19,
+        3963.2
+      ],
+      "bbox": [
+        1277,
+        3947,
+        1298,
+        3978
+      ],
+      "area": 332,
+      "seed_area": 258,
+      "neighbors": [
+        {
+          "id": 1756,
+          "kind": "sea",
+          "shared_pixel_edges": 48
+        },
+        {
+          "id": 1793,
+          "kind": "sea",
+          "shared_pixel_edges": 37
+        },
+        {
+          "id": 1889,
+          "kind": "sea",
+          "shared_pixel_edges": 18
+        },
+        {
+          "id": 1773,
+          "kind": "land",
+          "shared_pixel_edges": 5
+        }
+      ]
+    },
+    {
+      "id": 3541,
+      "kind": "lake",
+      "center": [
+        4788.24,
+        4676.87
+      ],
+      "bbox": [
+        4781,
+        4655,
+        4795,
+        4698
+      ],
+      "area": 334,
+      "seed_area": 227,
+      "neighbors": [
+        {
+          "id": 3521,
+          "kind": "land",
+          "shared_pixel_edges": 54
+        },
+        {
+          "id": 3513,
+          "kind": "land",
+          "shared_pixel_edges": 49
+        },
+        {
+          "id": 3481,
+          "kind": "land",
+          "shared_pixel_edges": 20
+        },
+        {
+          "id": 3594,
+          "kind": "land",
+          "shared_pixel_edges": 11
+        }
+      ]
+    },
+    {
+      "id": 463,
+      "kind": "sea",
+      "center": [
+        2982.56,
+        3330.59
+      ],
+      "bbox": [
+        2973,
+        3319,
+        2992,
+        3340
+      ],
+      "area": 362,
+      "seed_area": 331,
+      "neighbors": [
+        {
+          "id": 441,
+          "kind": "land",
+          "shared_pixel_edges": 67
+        },
+        {
+          "id": 303,
+          "kind": "sea",
+          "shared_pixel_edges": 23
+        }
+      ]
+    },
+    {
+      "id": 3166,
+      "kind": "land",
+      "center": [
+        850.56,
+        4487.01
+      ],
+      "bbox": [
+        824,
+        4471,
+        875,
+        4511
+      ],
+      "area": 366,
+      "seed_area": 244,
+      "neighbors": [
+        {
+          "id": 3078,
+          "kind": "sea",
+          "shared_pixel_edges": 250
+        }
+      ]
+    },
+    {
+      "id": 3343,
+      "kind": "lake",
+      "center": [
+        4159.12,
+        4562.77
+      ],
+      "bbox": [
+        4142,
+        4550,
+        4184,
+        4572
+      ],
+      "area": 368,
+      "seed_area": 248,
+      "neighbors": [
+        {
+          "id": 3314,
+          "kind": "land",
+          "shared_pixel_edges": 39
+        },
+        {
+          "id": 3371,
+          "kind": "land",
+          "shared_pixel_edges": 32
+        },
+        {
+          "id": 3296,
+          "kind": "land",
+          "shared_pixel_edges": 28
+        },
+        {
+          "id": 3337,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        },
+        {
+          "id": 3259,
+          "kind": "land",
+          "shared_pixel_edges": 16
+        }
+      ]
+    },
+    {
+      "id": 187,
+      "kind": "sea",
+      "center": [
+        2732.38,
+        3043.55
+      ],
+      "bbox": [
+        2714,
+        3036,
+        2751,
+        3049
+      ],
+      "area": 376,
+      "seed_area": 324,
+      "neighbors": [
+        {
+          "id": 189,
+          "kind": "land",
+          "shared_pixel_edges": 67
+        },
+        {
+          "id": 116,
+          "kind": "sea",
+          "shared_pixel_edges": 32
+        },
+        {
+          "id": 156,
+          "kind": "land",
+          "shared_pixel_edges": 5
+        }
+      ]
+    },
+    {
+      "id": 1379,
+      "kind": "lake",
+      "center": [
+        5559.82,
+        3751.99
+      ],
+      "bbox": [
+        5539,
+        3739,
+        5576,
+        3766
+      ],
+      "area": 380,
+      "seed_area": 270,
+      "neighbors": [
+        {
+          "id": 1422,
+          "kind": "land",
+          "shared_pixel_edges": 52
+        },
+        {
+          "id": 1349,
+          "kind": "land",
+          "shared_pixel_edges": 48
+        },
+        {
+          "id": 1344,
+          "kind": "land",
+          "shared_pixel_edges": 25
+        },
+        {
+          "id": 1268,
+          "kind": "land",
+          "shared_pixel_edges": 9
+        }
+      ]
+    },
+    {
+      "id": 1263,
+      "kind": "lake",
+      "center": [
+        3323.58,
+        3708.79
+      ],
+      "bbox": [
+        3308,
+        3693,
+        3336,
+        3723
+      ],
+      "area": 398,
+      "seed_area": 285,
+      "neighbors": [
+        {
+          "id": 1181,
+          "kind": "land",
+          "shared_pixel_edges": 50
+        },
+        {
+          "id": 1311,
+          "kind": "land",
+          "shared_pixel_edges": 38
+        },
+        {
+          "id": 1163,
+          "kind": "land",
+          "shared_pixel_edges": 30
+        },
+        {
+          "id": 1317,
+          "kind": "land",
+          "shared_pixel_edges": 10
+        }
+      ]
+    },
+    {
+      "id": 5353,
+      "kind": "land",
+      "center": [
+        5372.75,
+        6145.53
+      ],
+      "bbox": [
+        5356,
+        6129,
+        5387,
+        6157
+      ],
+      "area": 413,
+      "seed_area": 319,
+      "neighbors": [
+        {
+          "id": 5280,
+          "kind": "sea",
+          "shared_pixel_edges": 128
+        }
+      ]
+    },
+    {
+      "id": 3889,
+      "kind": "lake",
+      "center": [
+        7471.58,
+        4902.79
+      ],
+      "bbox": [
+        7455,
+        4886,
+        7490,
+        4917
+      ],
+      "area": 418,
+      "seed_area": 304,
+      "neighbors": [
+        {
+          "id": 3864,
+          "kind": "land",
+          "shared_pixel_edges": 49
+        },
+        {
+          "id": 3901,
+          "kind": "land",
+          "shared_pixel_edges": 46
+        },
+        {
+          "id": 3841,
+          "kind": "land",
+          "shared_pixel_edges": 41
+        }
+      ]
+    },
+    {
+      "id": 3201,
+      "kind": "lake",
+      "center": [
+        4817.35,
+        4497.11
+      ],
+      "bbox": [
+        4799,
+        4485,
+        4830,
+        4512
+      ],
+      "area": 420,
+      "seed_area": 309,
+      "neighbors": [
+        {
+          "id": 3235,
+          "kind": "land",
+          "shared_pixel_edges": 47
+        },
+        {
+          "id": 3144,
+          "kind": "land",
+          "shared_pixel_edges": 38
+        },
+        {
+          "id": 3147,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        },
+        {
+          "id": 3111,
+          "kind": "land",
+          "shared_pixel_edges": 10
+        }
+      ]
+    },
+    {
+      "id": 2977,
+      "kind": "land",
+      "center": [
+        3646.05,
+        4401.5
+      ],
+      "bbox": [
+        3633,
+        4387,
+        3662,
+        4413
+      ],
+      "area": 431,
+      "seed_area": 344,
+      "neighbors": [
+        {
+          "id": 2882,
+          "kind": "sea",
+          "shared_pixel_edges": 76
+        },
+        {
+          "id": 3017,
+          "kind": "sea",
+          "shared_pixel_edges": 38
+        }
+      ]
+    },
+    {
+      "id": 1938,
+      "kind": "lake",
+      "center": [
+        3808.03,
+        3972.52
+      ],
+      "bbox": [
+        3794,
+        3954,
+        3821,
+        3988
+      ],
+      "area": 436,
+      "seed_area": 326,
+      "neighbors": [
+        {
+          "id": 1873,
+          "kind": "land",
+          "shared_pixel_edges": 51
+        },
+        {
+          "id": 1982,
+          "kind": "land",
+          "shared_pixel_edges": 36
+        },
+        {
+          "id": 1924,
+          "kind": "land",
+          "shared_pixel_edges": 29
+        },
+        {
+          "id": 1866,
+          "kind": "land",
+          "shared_pixel_edges": 14
+        }
+      ]
+    },
+    {
+      "id": 2862,
+      "kind": "lake",
+      "center": [
+        21.43,
+        4343.35
+      ],
+      "bbox": [
+        8,
+        4331,
+        35,
+        4357
+      ],
+      "area": 442,
+      "seed_area": 343,
+      "neighbors": [
+        {
+          "id": 2793,
+          "kind": "land",
+          "shared_pixel_edges": 78
+        },
+        {
+          "id": 2890,
+          "kind": "land",
+          "shared_pixel_edges": 32
+        }
+      ]
+    },
+    {
+      "id": 5753,
+      "kind": "land",
+      "center": [
+        5676.47,
+        7016.11
+      ],
+      "bbox": [
+        5665,
+        6995,
+        5693,
+        7034
+      ],
+      "area": 442,
+      "seed_area": 321,
+      "neighbors": [
+        {
+          "id": 5740,
+          "kind": "sea",
+          "shared_pixel_edges": 132
+        },
+        {
+          "id": 5751,
+          "kind": "sea",
+          "shared_pixel_edges": 46
+        }
+      ]
+    },
+    {
+      "id": 3788,
+      "kind": "land",
+      "center": [
+        3031.78,
+        4819.73
+      ],
+      "bbox": [
+        3014,
+        4810,
+        3051,
+        4829
+      ],
+      "area": 447,
+      "seed_area": 351,
+      "neighbors": [
+        {
+          "id": 3749,
+          "kind": "sea",
+          "shared_pixel_edges": 91
+        },
+        {
+          "id": 3616,
+          "kind": "sea",
+          "shared_pixel_edges": 43
+        }
+      ]
+    },
+    {
+      "id": 5692,
+      "kind": "land",
+      "center": [
+        6841.6,
+        6598.36
+      ],
+      "bbox": [
+        6827,
+        6580,
+        6859,
+        6618
+      ],
+      "area": 461,
+      "seed_area": 344,
+      "neighbors": [
+        {
+          "id": 5674,
+          "kind": "sea",
+          "shared_pixel_edges": 178
+        }
+      ]
+    },
+    {
+      "id": 2251,
+      "kind": "land",
+      "center": [
+        3679.58,
+        4107.38
+      ],
+      "bbox": [
+        3663,
+        4078,
+        3693,
+        4133
+      ],
+      "area": 483,
+      "seed_area": 366,
+      "neighbors": [
+        {
+          "id": 2211,
+          "kind": "sea",
+          "shared_pixel_edges": 80
+        },
+        {
+          "id": 2289,
+          "kind": "land",
+          "shared_pixel_edges": 70
+        },
+        {
+          "id": 2198,
+          "kind": "land",
+          "shared_pixel_edges": 37
+        },
+        {
+          "id": 2145,
+          "kind": "land",
+          "shared_pixel_edges": 13
+        }
+      ]
+    },
+    {
+      "id": 2262,
+      "kind": "land",
+      "center": [
+        2647.82,
+        4095.83
+      ],
+      "bbox": [
+        2631,
+        4085,
+        2663,
+        4108
+      ],
+      "area": 490,
+      "seed_area": 399,
+      "neighbors": [
+        {
+          "id": 2206,
+          "kind": "sea",
+          "shared_pixel_edges": 71
+        },
+        {
+          "id": 2117,
+          "kind": "sea",
+          "shared_pixel_edges": 53
+        }
+      ]
+    },
+    {
+      "id": 3221,
+      "kind": "land",
+      "center": [
+        3542.06,
+        4501.88
+      ],
+      "bbox": [
+        3522,
+        4492,
+        3560,
+        4517
+      ],
+      "area": 500,
+      "seed_area": 403,
+      "neighbors": [
+        {
+          "id": 3017,
+          "kind": "sea",
+          "shared_pixel_edges": 61
+        },
+        {
+          "id": 3232,
+          "kind": "land",
+          "shared_pixel_edges": 46
+        },
+        {
+          "id": 3240,
+          "kind": "land",
+          "shared_pixel_edges": 31
+        }
+      ]
+    }
+  ]
+}

@@ -1,28 +1,15 @@
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#14232b">
-  <title>Fauxlore — карта</title>
-  <link rel="stylesheet" href="viewer.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101010"><title>Fauxlore — карта</title><link rel="stylesheet" href="viewer.css"></head>
 <body>
-  <canvas id="map" aria-label="Карта провинций Fauxlore" tabindex="0"></canvas>
-  <canvas id="labels" aria-hidden="true"></canvas>
-  <aside class="panel" aria-label="Управление картой">
-    <header><div><span class="eyebrow">FAUXLORE</span><h1>Игровая область</h1></div><button id="collapse" aria-expanded="true" aria-controls="controls" title="Свернуть панель">−</button></header>
-    <div id="controls">
-      <p id="summary">Загрузка карты…</p>
-      <form id="search-form"><label for="province-id">Найти провинцию</label><div class="search"><input id="province-id" type="number" min="1" step="1" placeholder="ID провинции" required><button type="submit">Найти</button></div></form>
-      <button id="toggle-ids" class="wide" aria-pressed="false">Показать ID</button>
-      <div class="zoom"><button id="zoom-out" aria-label="Отдалить">−</button><output id="zoom-value">—</output><button id="zoom-in" aria-label="Приблизить">+</button><button id="fit" title="Показать карту целиком">Вся карта</button></div>
-      <div class="legend"><span><i class="land"></i>Суша</span><span><i class="sea"></i>Море / озеро</span><span><i class="selected"></i>Выбрано</span></div>
-      <p class="hint">Перетаскивание — перемещение<br>Колесо / два пальца — масштаб<br>Двойное нажатие — приблизить</p>
-    </div>
-  </aside>
-  <section id="selection" class="panel selection" hidden aria-live="polite"><button id="clear-selection" class="close" aria-label="Снять выделение">×</button><span class="eyebrow">ПРОВИНЦИЯ</span><h2 id="selection-title"></h2><p id="selection-details"></p></section>
-  <div id="status" role="status" aria-live="polite">Загрузка данных…</div>
+  <canvas id="map" aria-label="Карта провинций Fauxlore" tabindex="0"></canvas><canvas id="labels" aria-hidden="true"></canvas>
+  <div class="turn-badge" aria-label="Игровой календарь">1452 год <span>/</span> 1 ход</div>
+  <nav id="left-dock" class="dock left" aria-label="Основные панели"></nav>
+  <nav id="right-dock" class="dock right" aria-label="Панели карты"></nav>
+  <aside id="drawer" class="surface drawer" hidden><header><h1 id="drawer-title"></h1><button class="icon-button" id="close-drawer" aria-label="Свернуть панель"><img src="assets/icons/x.svg" alt=""></button></header><div id="drawer-content" class="panel-content"></div></aside>
+  <section id="selection" class="surface selection" hidden aria-live="polite"><header><span class="eyebrow">ВЫБРАННЫЙ ОБЪЕКТ</span><button id="clear-selection" class="icon-button" aria-label="Снять выделение"><img src="assets/icons/x.svg" alt=""></button></header><h2 id="selection-title"></h2><div id="selection-details"></div></section>
+  <div id="map-scale" class="scale surface" aria-label="Масштаб карты"><div class="scale-values"><span id="scale-distance"></span><span id="scale-area"></span></div><div id="scale-line" class="scale-line"></div></div>
+  <div id="status" role="status" aria-live="polite">Подключение к базе…</div>
+  <dialog id="modal"><div class="modal-shell surface"><header><h2 id="modal-title"></h2><button id="close-modal" class="icon-button" aria-label="Закрыть окно"><img src="assets/icons/x.svg" alt=""></button></header><div id="modal-content"></div></div></dialog>
   <script type="module" src="viewer.js"></script>
-</body>
-</html>
+</body></html>

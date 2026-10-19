@@ -1,4 +1,6 @@
-// Tiled ID texture: no source artwork, CPU pixel copy, or network dependency.
+import {initUI,hydrateUI,api,settings,LAYERS} from './ui.js';
+import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
+// PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
 const canvas = $('map'), labels = $('labels'), ctx = labels.getContext('2d');
 const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
@@ -9,11 +11,13 @@ let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
 let regionSlots = 25;
+let colorsTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
 const status = (text, timeout = 0) => {
   clearTimeout(statusTimer); $('status').textContent = text;
   if (timeout) statusTimer = setTimeout(() => { $('status').textContent = ''; }, timeout);
 };
 function schedule() { if (!frame) frame = requestAnimationFrame(draw); }
+initUI(status);
 function compile(type, source) {
   const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
@@ -29,6 +33,7 @@ function setupGL() {
   uniform sampler2DArray uIds;
   uniform sampler2D uTileSlots;
   uniform sampler2D uTypes;
+  uniform sampler2D uColors;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
@@ -53,19 +58,23 @@ function setupGL() {
     vec2 screen=vec2(gl_FragCoord.x,uViewport.y-gl_FragCoord.y)/uDpr;
     ivec2 p=ivec2(floor(uPick?uPickPoint:(screen-uOffset)/uScale));
     if(any(lessThan(vec2(p),uRegion.xy))||any(greaterThanEqual(vec2(p),uRegion.zw))){
-      color=uPick?vec4(0.,0.,0.,1.):vec4(.071,.126,.157,1.);return;
+      color=uPick?vec4(0.,0.,0.,1.):vec4(.063,.063,.063,1.);return;
     }
     ivec4 bytes=bytesAt(p); int id=(bytes.r<<16)|(bytes.g<<8)|bytes.b;
     if(uPick){color=vec4(vec3(bytes.rgb)/255.,1.);return;}
-    if(id==0){color=vec4(.071,.126,.157,1.);return;}
+    if(id==0){color=vec4(.063,.063,.063,1.);return;}
     int kind=kindAt(p);
-    // Uniform province fills: land #ffe7d6, water #486370.
-    vec3 base=kind==1?vec3(1.,.905882,.839216):vec3(.282353,.388235,.439216);
+    // Lakes keep their own ID/type but use the same fill as rivers.
+    int rawKind=int(round(texelFetch(uTypes,ivec2(id%256,id/256),0).r*255.));
+    const vec3 riverColor=vec3(31./255.,135./255.,173./255.);
+    vec3 base=kind==1?vec3(1.,.905882,.839216):rawKind==3?riverColor:vec3(.282353,.388235,.439216);
+    vec4 thematic=texelFetch(uColors,ivec2(id%256,id/256),0);
+    if(thematic.a>.5&&rawKind!=3)base=thematic.rgb;
 
     // Multiply at 60% opacity. Packed darkness already includes source alpha;
     // transparent/white relief is neutral. Sampling stays in map coordinates.
     float reliefDarkness=float(bytes.a&127)/127.;
-    base*=1.-.4*reliefDarkness;
+    if(rawKind!=3)base*=1.-.4*reliefDarkness;
 
     // Selection colors are composited at 50% opacity over the standard fill.
     if(id==uSelected){
@@ -78,7 +87,7 @@ function setupGL() {
     // Sample only the original map texel: river width stays in map units
     // and scales with the terrain, without zoom-dependent dilation.
     bool river=kind==1&&(bytes.a&128)!=0;
-    if(river)base=vec3(.12,.53,.68);
+    if(river)base=riverColor;
 
     // Measure the stroke in screen pixels, using the fractional position
     // inside the source texel so it stays fixed even when zoomed in.
@@ -97,16 +106,17 @@ function setupGL() {
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
+  gl.uniform1i(loc.Colors,4);
   gl.uniform2f(loc.MapSize, width, height); gl.uniform1i(loc.TileSize, tileSize); gl.uniform1i(loc.Columns, columns);
   const maxId = Math.max(...provinces.keys());
-  const rows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*rows);
+  const typeRows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*typeRows);
   for (const p of provinces.values()) types[p.id] = {land:1,sea:2,lake:3}[p.kind];
   gl.activeTexture(gl.TEXTURE1);
   const typeTexture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, typeTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, rows, 0, gl.RED, gl.UNSIGNED_BYTE, types);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, typeRows, 0, gl.RED, gl.UNSIGNED_BYTE, types);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
   texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
@@ -135,6 +145,26 @@ function setupGL() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
   gl.disable(gl.DITHER); // Exact byte values for picking, including low province IDs.
+  colorsTexture=gl.createTexture(); updateLayerColors();
+}
+function updateLayerColors(){
+  if(!colorsTexture)return;
+  const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),colors=new Uint8Array(256*height*4);
+  const layer=activeSettings.layer;
+  const numeric=p=>layer==='population'?(p.population==null?null:Number(p.population)/p.area):(p.development==null?null:Number(p.development));
+  const numbers=['population','development'].includes(layer)?[...provinces.values()].map(numeric).filter(v=>v!==null):[];
+  const min=numbers.length?Math.min(...numbers):0,max=numbers.length?Math.max(...numbers):0;
+  for(const p of provinces.values()){
+    let rgb;
+    const category=p.layers?.[layer];
+    if(category&&/^#[0-9a-f]{6}$/i.test(category.color))rgb=category.color.slice(1).match(/../g).map(x=>parseInt(x,16));
+    else if(numbers.length&&numeric(p)!==null){const t=max===min?.5:(numeric(p)-min)/(max-min);rgb=[Math.round(55+177*t),Math.round(65+133*t),Math.round(62+41*t)];}
+    if(rgb)colors.set([...rgb,255],p.id*4);
+  }
+  gl.activeTexture(gl.TEXTURE4);gl.bindTexture(gl.TEXTURE_2D,colorsTexture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,colors);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.activeTexture(gl.TEXTURE0);
 }
 function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
@@ -173,12 +203,12 @@ function draw() {
   updateTileCapacity(); ensureVisibleTiles();
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0,0,canvas.width,canvas.height);
   uniforms(); gl.uniform1i(loc.Pick, 0); gl.drawArrays(gl.TRIANGLES,0,3);
-  drawLabels(); $('zoom-value').textContent = `${Math.round(view.scale*100)}%`;
+  drawLabels(); drawMeasurements(); updateScale();
 }
 function drawLabels() {
   const dpr = labels.width/innerWidth;
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,innerWidth,innerHeight);
-  if (!showIds) return;
+  if (!showIds&&!Object.values(activeSettings.information).some(Boolean)) return;
   ctx.font = '600 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 3; ctx.strokeStyle = '#13232ddd'; ctx.fillStyle = '#fff9e8';
   const occupied = new Set();
@@ -189,8 +219,54 @@ function drawLabels() {
     if (x < -30 || y < -10 || x > innerWidth+30 || y > innerHeight+10) continue;
     const key = `${Math.floor(x/42)},${Math.floor(y/18)}`;
     if (occupied.has(key) && p.id !== selected) continue;
-    occupied.add(key); ctx.strokeText(p.id,x,y); ctx.fillText(p.id,x,y);
+    const text=showIds?String(p.id):activeSettings.information.provinces?p.name:'';
+    if(!text)continue;
+    occupied.add(key); ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
   }
+  for(const layer of ['states','races','religions','resources','trade']){
+    if(!activeSettings.information[layer])continue;
+    const groups=new Map();
+    for(const p of provinces.values()){const entry=p.layers?.[layer];if(!entry)continue;const g=groups.get(entry.id)||{name:entry.name,x:0,y:0,area:0};g.x+=p.center[0]*p.area;g.y+=p.center[1]*p.area;g.area+=p.area;groups.set(entry.id,g);}
+    ctx.font='600 13px system-ui';ctx.fillStyle='#e7c667';
+    for(const g of groups.values()){const x=g.x/g.area*view.scale+view.x,y=g.y/g.area*view.scale+view.y;ctx.strokeText(g.name,x,y);ctx.fillText(g.name,x,y);}
+  }
+}
+function updateScale(){
+  const length=niceLength(140/view.scale),pixels=length*view.scale;
+  $('scale-distance').textContent=`${length.toLocaleString('ru-RU',{maximumFractionDigits:2})} km`;
+  $('scale-area').textContent=`${(length*length).toLocaleString('ru-RU',{maximumFractionDigits:2})} km² ▫`;
+  $('scale-area').title='Площадь квадрата со стороной, равной длине полоски';
+  $('scale-line').style.width=`${pixels}px`;
+}
+function toolResult(text){window.dispatchEvent(new CustomEvent('tools:result',{detail:text}));}
+function drawMeasurements(){
+  if(!toolPoints.length)return;
+  ctx.save();ctx.strokeStyle='#e7c667';ctx.fillStyle='#e7c667';ctx.lineWidth=2;ctx.setLineDash([5,4]);ctx.beginPath();
+  toolPoints.forEach((p,i)=>{const x=p[0]*view.scale+view.x,y=p[1]*view.scale+view.y;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});
+  if(areaClosed){ctx.closePath();ctx.fillStyle='#e7c66730';ctx.fill();}ctx.stroke();ctx.setLineDash([]);
+  for(const p of toolPoints){ctx.beginPath();ctx.arc(p[0]*view.scale+view.x,p[1]*view.scale+view.y,4,0,Math.PI*2);ctx.fillStyle='#e7c667';ctx.fill();}ctx.restore();
+}
+function finishArea(){
+  if(toolMode!=='area')return;
+  if(!simplePolygon(toolPoints)){status('Нужен контур из трёх и более точек без самопересечений',4000);return;}
+  areaClosed=true;toolResult(`Площадь: ${polygonArea(toolPoints).toLocaleString('ru-RU',{maximumFractionDigits:2})} km²`);schedule();
+}
+function mapClick(x,y){
+  const p=[(x-view.x)/view.scale,(y-view.y)/view.scale];
+  if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
+  lastPoint=p;
+  if(!toolMode){pick(x,y);return;}
+  if(toolMode==='coordinates'){toolPoints=[p];toolResult(`X: ${p[0].toFixed(2)} · Y: ${p[1].toFixed(2)}`);}
+  if(toolMode==='distance'){
+    if(toolPoints.length>=2)toolPoints=[];toolPoints.push(p);
+    toolResult(toolPoints.length===2?`Расстояние: ${distance(...toolPoints).toLocaleString('ru-RU',{maximumFractionDigits:2})} km`:'Выберите вторую точку');
+  }
+  if(toolMode==='area'){
+    if(areaClosed){toolPoints=[];areaClosed=false;}
+    if(!toolPoints.length||distance(toolPoints.at(-1),p)>1e-6)toolPoints.push(p);
+    toolResult(`Точек: ${toolPoints.length}. Нажмите «Завершить».`);
+  }
+  schedule();
 }
 function resize() {
   const oldW = canvas.width/(canvas.dataset.dpr || 1), oldH = canvas.height/(canvas.dataset.dpr || 1);
@@ -219,13 +295,18 @@ function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
 }
 function select(id, focus=false) {
   const p = provinces.get(id); if (!p) { status(`Провинция с ID ${id} не найдена в игровой области`,4000); return; }
-  selected = id; $('selection').hidden = false; $('selection-title').textContent = `№ ${id} · ${{land:'Суша',sea:'Море',lake:'Озеро'}[p.kind]}`;
-  $('selection-details').textContent = `Площадь: ${p.area.toLocaleString('ru-RU')} пикс.²`;
-  $('province-id').value = id;
+  selected = id; $('selection').hidden = false; $('selection-title').textContent = p.name;
+  const details=$('selection-details');details.replaceChildren();
+  const entries=[`ID ${id} · ${{land:'Суша',sea:'Море',lake:'Озеро'}[p.kind]}`,`Площадь: ${p.area.toLocaleString('ru-RU')} km²`];
+  for(const[layer,label]of Object.entries(LAYERS)){if(p.layers?.[layer])entries.push(`${label}: ${p.layers[layer].name}`);}
+  if(p.population!==null)entries.push(`Население: ${Number(p.population).toLocaleString('ru-RU')}`);
+  if(p.development!==null)entries.push(`Развитие: ${p.development}`);
+  for(const text of entries){const div=document.createElement('div');div.textContent=text;details.append(div);}
+  if($('province-id'))$('province-id').value = id;
   if (focus) {
     const [bx0,by0,bx1,by1] = p.bbox;
     const [x0,y0,x1,y1] = [Math.max(bx0,region[0]),Math.max(by0,region[1]),Math.min(bx1,region[2]-1),Math.min(by1,region[3]-1)];
-    const panelSpace = innerWidth > 600 ? 340 : 40;
+    const panelSpace = innerWidth > 600 ? 340 : 128;
     view.scale = Math.max(view.min,Math.min(view.max, (innerWidth-panelSpace)/Math.max(x1-x0+1,40)*.65, innerHeight/Math.max(y1-y0+1,40)*.65));
     view.x = (innerWidth+(innerWidth > 600 ? 290 : 0))/2 - (x0+x1)/2*view.scale;
     view.y = innerHeight/2 - (y0+y1)/2*view.scale;
@@ -271,26 +352,27 @@ function endPointer(e) {
   if(!pointers.has(e.pointerId))return;
   const click=!moved&&pointers.size===1&&e.type==='pointerup'; pointers.delete(e.pointerId);
   if(!pointers.size)canvas.classList.remove('dragging');
-  snapshotGesture(); if(click)pick(e.clientX,e.clientY);
+  snapshotGesture(); if(click)mapClick(e.clientX,e.clientY);
 }
 canvas.addEventListener('pointerup',endPointer); canvas.addEventListener('pointercancel',endPointer);
 canvas.addEventListener('wheel',e=>{ e.preventDefault(); zoom(Math.exp(-e.deltaY*(e.deltaMode===1?.045:.0015)),e.clientX,e.clientY); },{passive:false});
-canvas.addEventListener('dblclick',e=>{e.preventDefault();zoom(2,e.clientX,e.clientY);});
-$('zoom-in').onclick=()=>zoom(1.5); $('zoom-out').onclick=()=>zoom(1/1.5); $('fit').onclick=()=>{if(ready)fit();};
-$('toggle-ids').onclick=()=>{showIds=!showIds;$('toggle-ids').textContent=showIds?'Скрыть ID':'Показать ID';$('toggle-ids').setAttribute('aria-pressed',showIds);schedule();};
-$('search-form').onsubmit=e=>{e.preventDefault();if(ready)select(Number($('province-id').value),true);};
+canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();else if(!toolMode)zoom(2,e.clientX,e.clientY);});
+window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});
+window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});
+window.addEventListener('map:tool',e=>{toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
+window.addEventListener('map:finish',finishArea);
+window.addEventListener('map:undo',()=>{toolPoints.pop();areaClosed=false;toolResult(`Точек: ${toolPoints.length}`);schedule();});
+window.addEventListener('map:clear-tool',()=>{toolPoints=[];areaClosed=false;toolResult('Измерение очищено');schedule();});
+window.addEventListener('map:coordinate',e=>{const[x,y]=e.detail;if(x<region[0]||x>=region[2]||y<region[1]||y>=region[3]){status('Точка находится вне игровой области',4000);return;}view.scale=Math.max(view.scale,1);view.x=innerWidth/2-x*view.scale;view.y=innerHeight/2-y*view.scale;clampView();schedule();});
+window.addEventListener('map:copy-coordinates',async()=>{if(!lastPoint){status('Сначала выберите точку на карте',3000);return;}try{await navigator.clipboard.writeText(lastPoint.map(v=>v.toFixed(2)).join(', '));status('Координаты скопированы',2500);}catch{status('Не удалось скопировать координаты',3000);}});
 $('clear-selection').onclick=()=>{selected=0;$('selection').hidden=true;schedule();};
-$('collapse').onclick=()=>{const collapsed=!$('controls').hidden;$('controls').hidden=collapsed;$('collapse').textContent=collapsed?'+':'−';$('collapse').title=collapsed?'Развернуть панель':'Свернуть панель';$('collapse').setAttribute('aria-expanded',!collapsed);};
 window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const [metaResponse,regionResponse]=await Promise.all([fetch('map-data/provinces.json'),fetch('map-data/view-region.json')]);
-  if(!regionResponse.ok)throw new Error('Не найдены настройки игровой области');
-  region=(await regionResponse.json()).bounds;
+  const data=await api('map');region=data.region;
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
-  if(!metaResponse.ok)throw new Error('Не найдены файлы в map-data. Запустите сервер из папки fauxlore.');
-  provinces=new Map(Object.entries(await metaResponse.json()).map(([hex,p])=>[p.id,{...p,rgb:parseInt(hex.slice(1),16)}]));
+  provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   provinces=new Map([...provinces].filter(([,p])=>p.bbox[2]>=region[0]&&p.bbox[3]>=region[1]&&p.bbox[0]<region[2]&&p.bbox[1]<region[3]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   cacheSlots=Math.min(25,regionSlots);
@@ -298,11 +380,7 @@ async function init() {
   if(gl.getParameter(gl.MAX_TEXTURE_SIZE)<tileSize||gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)<cacheSlots)throw new Error('Браузер не поддерживает нужный размер тайлов WebGL.');
   setupGL();
   ready=true;resize();fit();
-  if(innerWidth<600 && !$('controls').hidden)$('collapse').click();
-  const land=[...provinces.values()].filter(p=>p.kind==='land').length;
-  const sea=[...provinces.values()].filter(p=>p.kind==='sea').length;
-  const lake=[...provinces.values()].filter(p=>p.kind==='lake').length;
-  $('summary').textContent=`${provinces.size.toLocaleString('ru-RU')} провинций · ${land.toLocaleString('ru-RU')} суша · ${sea.toLocaleString('ru-RU')} море · ${lake.toLocaleString('ru-RU')} озёра`;
-  status('Карта готова. Тайлы загружаются по мере приближения.',4000);
+  await hydrateUI({...data,provinces:[...provinces.values()]});
+  status('',0);
 }
-init().catch(error=>{console.error(error);status(error.message);$('summary').textContent='Не удалось загрузить карту';});
+init().catch(error=>{console.error(error);status(error.message);});

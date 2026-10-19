@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {distance,polygonArea,simplePolygon,niceLength} from '../map-tools.js';
+assert.equal(distance([0,0],[3,4]),5);
+assert.equal(polygonArea([[0,0],[10,0],[10,10],[0,10]]),100);
+assert.equal(polygonArea([[0,10],[10,10],[10,0],[0,0]]),100);
+assert.equal(simplePolygon([[0,0],[10,10],[0,10],[10,0]]),false);
+assert.equal(simplePolygon([[0,0],[10,0],[10,10],[0,10]]),true);
+assert.equal(simplePolygon([[0,0],[10,0],[0,0]]),false);
+for(const target of [.001,.1,1,3,140,1500])assert.ok(niceLength(target)>0&&niceLength(target)<=target);
+console.log('PASS: calibrated distance, winding-independent area, self-intersections, scale');

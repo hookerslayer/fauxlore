@@ -56,7 +56,7 @@ dialog:not(.auth-dialog) #modal-content{flex:1;min-height:0;overflow:visible}
 /* Menu navigation stays a single compact, scrollable column at every size. */
 dialog:not(.auth-dialog) .menu-layout{grid-template-columns:max-content minmax(0,1fr)}
 dialog:not(.auth-dialog) .menu-tabs{display:flex;width:max-content;max-width:100%;flex-direction:column;flex-wrap:nowrap;gap:3px;min-height:0;max-height:100%;overflow-y:auto;overflow-x:hidden;padding-right:3px}
-dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-width:100%;min-height:30px;height:30px;padding:5px 9px;font-size:11px;line-height:1.2}
+dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-width:none;min-height:30px;height:30px;padding:5px 9px;font-size:11px;line-height:1.2;white-space:nowrap;overflow-wrap:normal;word-break:normal}
 @media(max-width:760px){
   dialog:not(.auth-dialog) .menu-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,40%) minmax(0,1fr);gap:10px}
   dialog:not(.auth-dialog) .menu-tabs{max-height:none;justify-self:start}

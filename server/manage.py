@@ -7,8 +7,9 @@ from .app import hasher, email_value
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['init','import-map','create-admin','promote-admin'])
+    parser.add_argument('command',choices=['init','import-map','create-admin','promote-admin','assign-state'])
     parser.add_argument('--email')
+    parser.add_argument('--state')
     args=parser.parse_args()
     initialize()
     if args.command=='import-map':
@@ -31,6 +32,16 @@ def main():
             if not row:
                 raise SystemExit('Account not found')
         print('Admin role granted')
+    elif args.command=='assign-state':
+        if not args.state:raise SystemExit('--state is required')
+        email=email_value(args.email or input('Email: '))
+        with connect() as db:
+            account=db.execute('SELECT id FROM accounts WHERE email=%s',(email,)).fetchone()
+            state=db.execute("SELECT id FROM map_categories WHERE layer='states' AND lower(name)=lower(%s)",(args.state.strip(),)).fetchone()
+            if not account:raise SystemExit('Account not found')
+            if not state:raise SystemExit('State not found')
+            db.execute('INSERT INTO account_states(account_id,state_id) VALUES(%s,%s) ON CONFLICT DO NOTHING',(account['id'],state['id']))
+        print('State ownership assigned')
     else:
         print('Database initialized')
 

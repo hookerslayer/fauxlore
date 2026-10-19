@@ -1,17 +1,19 @@
-import {initUI,hydrateUI,api,settings,LAYERS} from './ui.js';
+import {initUI,hydrateUI,api,settings,LAYERS,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
+const html = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const canvas = $('map'), labels = $('labels'), ctx = labels.getContext('2d');
 const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
 const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), frame = 0;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
 let regionSlots = 25;
-let colorsTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
+let colorsTexture,controlColorsTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
+const thematicComponents=new Map();
 const status = (text, timeout = 0) => {
   clearTimeout(statusTimer); $('status').textContent = text;
   if (timeout) statusTimer = setTimeout(() => { $('status').textContent = ''; }, timeout);
@@ -34,11 +36,12 @@ function setupGL() {
   uniform sampler2D uTileSlots;
   uniform sampler2D uTypes;
   uniform sampler2D uColors;
+  uniform sampler2D uControlColors;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
   uniform int uTileSize,uColumns,uSelected;
-  uniform bool uPick;
+  uniform bool uPick,uShowControl;
   out vec4 color;
   ivec4 bytesAt(ivec2 p){
     if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,ivec2(uMapSize))))return ivec4(0);
@@ -82,6 +85,9 @@ function setupGL() {
       base=mix(base,selectedFill,.5);
     }
 
+    vec4 control=texelFetch(uControlColors,ivec2(id%256,id/256),0);
+    if(uShowControl&&control.a>.5&&mod(float(p.x+p.y),12.)<2.)base=mix(base,control.rgb,.92);
+
     // Rivers are packed into the alpha channel of the same nearest-filtered
     // map texture, keeping them pixelated and avoiding a second canvas pass.
     // Sample only the original map texel: river width stays in map units
@@ -106,10 +112,11 @@ function setupGL() {
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','Colors','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','ControlColors','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowControl'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
   gl.uniform1i(loc.Colors,4);
+  gl.uniform1i(loc.ControlColors,5);
   gl.uniform2f(loc.MapSize, width, height); gl.uniform1i(loc.TileSize, tileSize); gl.uniform1i(loc.Columns, columns);
   const maxId = Math.max(...provinces.keys());
   const typeRows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*typeRows);
@@ -145,12 +152,14 @@ function setupGL() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
   gl.disable(gl.DITHER); // Exact byte values for picking, including low province IDs.
-  colorsTexture=gl.createTexture(); updateLayerColors();
+  colorsTexture=gl.createTexture(); controlColorsTexture=gl.createTexture(); updateLayerColors();
 }
 function updateLayerColors(){
   if(!colorsTexture)return;
   const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),colors=new Uint8Array(256*height*4);
+  const controls=new Uint8Array(256*height*4);
   const layer=activeSettings.layer;
+  gl.useProgram(program);gl.uniform1i(loc.ShowControl,layer==='states'?1:0);
   const numeric=p=>layer==='population'?(p.population==null?null:Number(p.population)/p.area):(p.development==null?null:Number(p.development));
   const numbers=['population','development'].includes(layer)?[...provinces.values()].map(numeric).filter(v=>v!==null):[];
   const min=numbers.length?Math.min(...numbers):0,max=numbers.length?Math.max(...numbers):0;
@@ -160,9 +169,13 @@ function updateLayerColors(){
     if(category&&/^#[0-9a-f]{6}$/i.test(category.color))rgb=category.color.slice(1).match(/../g).map(x=>parseInt(x,16));
     else if(numbers.length&&numeric(p)!==null){const t=max===min?.5:(numeric(p)-min)/(max-min);rgb=[Math.round(55+177*t),Math.round(65+133*t),Math.round(62+41*t)];}
     if(rgb)colors.set([...rgb,255],p.id*4);
+    if(p.control_color&&p.control&&p.control!==p.layers?.states?.name){const controlRgb=p.control_color.slice(1).match(/../g).map(x=>parseInt(x,16));controls.set([...controlRgb,255],p.id*4);}
   }
   gl.activeTexture(gl.TEXTURE4);gl.bindTexture(gl.TEXTURE_2D,colorsTexture);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,colors);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.activeTexture(gl.TEXTURE5);gl.bindTexture(gl.TEXTURE_2D,controlColorsTexture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,controls);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
 }
@@ -205,30 +218,62 @@ function draw() {
   uniforms(); gl.uniform1i(loc.Pick, 0); gl.drawArrays(gl.TRIANGLES,0,3);
   drawLabels(); drawMeasurements(); updateScale();
 }
+function getThematicComponents(layer){
+  if(thematicComponents.has(layer))return thematicComponents.get(layer);
+  const visited=new Set(),components=[];
+  for(const start of provinces.values()){
+    const category=start.layers?.[layer];if(!category||visited.has(start.id))continue;
+    const members=[],queue=[start];visited.add(start.id);
+    for(let cursor=0;cursor<queue.length;cursor++){
+      const province=queue[cursor];members.push(province);
+      for(const neighborId of provinceAdjacency[province.id]||[]){
+        const neighbor=provinces.get(neighborId);
+        if(neighbor&&!visited.has(neighborId)&&neighbor.layers?.[layer]?.id===category.id){visited.add(neighborId);queue.push(neighbor);}
+      }
+    }
+    const area=members.reduce((sum,p)=>sum+p.area,0);
+    const center=members.reduce((sum,p)=>[sum[0]+p.center[0]*p.area,sum[1]+p.center[1]*p.area],[0,0]).map(value=>value/area);
+    components.push({name:category.name,members,area,center});
+  }
+  components.sort((a,b)=>b.area-a.area);thematicComponents.set(layer,components);return components;
+}
 function drawLabels() {
   const dpr = labels.width/innerWidth;
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,innerWidth,innerHeight);
-  if (!showIds&&!Object.values(activeSettings.information).some(Boolean)) return;
+  const showMarkers=activeSettings.markers?.capital||activeSettings.markers?.city;
+  if (!showIds&&!Object.values(activeSettings.information).some(Boolean)&&!showMarkers) return;
   ctx.font = '600 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 3; ctx.strokeStyle = '#13232ddd'; ctx.fillStyle = '#fff9e8';
-  const occupied = new Set();
+  const occupied = new Set(),labelRects=[];
   const ordered = [...provinces.values()].sort((a,b) => (b.id===selected)-(a.id===selected) || b.area-a.area);
   for (const p of ordered) {
     if(p.center[0]<region[0]||p.center[1]<region[1]||p.center[0]>=region[2]||p.center[1]>=region[3])continue;
     const x = p.center[0]*view.scale+view.x, y = p.center[1]*view.scale+view.y;
     if (x < -30 || y < -10 || x > innerWidth+30 || y > innerHeight+10) continue;
     const key = `${Math.floor(x/42)},${Math.floor(y/18)}`;
+    if(activeSettings.markers?.capital&&p.has_capital_marker){ctx.font='700 17px system-ui';ctx.fillStyle='#f3d778';ctx.strokeText('★',x,y-12);ctx.fillText('★',x,y-12);}
+    else if(activeSettings.markers?.city&&p.has_city_marker){ctx.font='700 15px system-ui';ctx.fillStyle='#f3d778';ctx.strokeText('●',x,y-11);ctx.fillText('●',x,y-11);}
     if (occupied.has(key) && p.id !== selected) continue;
-    const text=showIds?String(p.id):activeSettings.information.provinces?p.name:'';
+    const hasVisibleMarker=activeSettings.markers?.capital&&p.has_capital_marker||activeSettings.markers?.city&&p.has_city_marker;
+    const text=showIds?String(p.id):activeSettings.information.provinces||hasVisibleMarker&&activeSettings.markers?.names?p.name:'';
     if(!text)continue;
-    occupied.add(key); ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
+    occupied.add(key);const textWidth=ctx.measureText(text).width;labelRects.push({left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9});ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
   }
   for(const layer of ['states','races','religions','resources','trade']){
     if(!activeSettings.information[layer])continue;
-    const groups=new Map();
-    for(const p of provinces.values()){const entry=p.layers?.[layer];if(!entry)continue;const g=groups.get(entry.id)||{name:entry.name,x:0,y:0,area:0};g.x+=p.center[0]*p.area;g.y+=p.center[1]*p.area;g.area+=p.area;groups.set(entry.id,g);}
-    ctx.font='600 13px system-ui';ctx.fillStyle='#e7c667';
-    for(const g of groups.values()){const x=g.x/g.area*view.scale+view.x,y=g.y/g.area*view.scale+view.y;ctx.strokeText(g.name,x,y);ctx.fillText(g.name,x,y);}
+    const components=getThematicComponents(layer);ctx.font='600 13px system-ui';ctx.fillStyle='#e7c667';
+    for(const component of components){
+      const candidates=[...component.members].sort((a,b)=>Math.hypot(a.center[0]-component.center[0],a.center[1]-component.center[1])-Math.hypot(b.center[0]-component.center[0],b.center[1]-component.center[1]));
+      const width=ctx.measureText(component.name).width;
+      for(const province of candidates){
+        const [wx,wy]=province.center;if(wx<region[0]||wy<region[1]||wx>=region[2]||wy>=region[3])continue;
+        const x=wx*view.scale+view.x,y=wy*view.scale+view.y;if(x<-width/2||x>innerWidth+width/2||y<10||y>innerHeight-10)continue;
+        const key=`${Math.floor(x/42)},${Math.floor(y/18)}`;if(occupied.has(key))continue;
+        const rect={left:x-width/2-4,right:x+width/2+4,top:y-10,bottom:y+10};
+        if(labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4))continue;
+        occupied.add(key);labelRects.push(rect);ctx.strokeText(component.name,x,y);ctx.fillText(component.name,x,y);break;
+      }
+    }
   }
 }
 function updateScale(){
@@ -255,6 +300,16 @@ function mapClick(x,y){
   const p=[(x-view.x)/view.scale,(y-view.y)/view.scale];
   if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
   lastPoint=p;
+  if(isAdminPainting()&&adminPaint){
+    const id=pickProvinceId(x,y),province=provinces.get(id);
+    if(!province){status('Нажмите на провинцию',2500);return;}
+    if(province.kind!=='land'){status('Морские объекты нельзя редактировать',2500);return;}
+    select(id);
+    api(`admin/provinces/${id}`,{method:'PATCH',body:JSON.stringify({[adminPaint.field]:adminPaint.value})})
+      .then(result=>window.dispatchEvent(new CustomEvent('province:updated',{detail:result})))
+      .catch(error=>status(error.message,4000));
+    return;
+  }
   if(!toolMode){pick(x,y);return;}
   if(toolMode==='coordinates'){toolPoints=[p];toolResult(`X: ${p[0].toFixed(2)} · Y: ${p[1].toFixed(2)}`);}
   if(toolMode==='distance'){
@@ -295,13 +350,13 @@ function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
 }
 function select(id, focus=false) {
   const p = provinces.get(id); if (!p) { status(`Провинция с ID ${id} не найдена в игровой области`,4000); return; }
-  selected = id; $('selection').hidden = false; $('selection-title').textContent = p.name;
+  selected = id; $('selection').hidden = false;$('selection').classList.toggle('admin-edit',p.kind==='land'&&isAdminEditing()); $('selection-title').textContent = p.name;
   const details=$('selection-details');details.replaceChildren();
-  const entries=[`ID ${id} · ${{land:'Суша',sea:'Море',lake:'Озеро'}[p.kind]}`,`Площадь: ${p.area.toLocaleString('ru-RU')} km²`];
-  for(const[layer,label]of Object.entries(LAYERS)){if(p.layers?.[layer])entries.push(`${label}: ${p.layers[layer].name}`);}
-  if(p.population!==null)entries.push(`Население: ${Number(p.population).toLocaleString('ru-RU')}`);
-  if(p.development!==null)entries.push(`Развитие: ${p.development}`);
-  for(const text of entries){const div=document.createElement('div');div.textContent=text;details.append(div);}
+  const val=value=>value===null||value===undefined||value===''?'—':value;
+  const entries=p.kind==='sea'?[['ID',id],['Название',p.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`],['Тип объекта','Море']]:[['ID',id],['Тип объекта',p.kind==='lake'?'Озеро':'Суша'],['Название',p.name],['Раса',p.layers?.races?.name],['Религия',p.layers?.religions?.name],['Государство',p.layers?.states?.name],['Тип провинции',p.province_type],['Дворы',p.courts],['Население',Number(p.population??(Number(p.courts||0)*4)).toLocaleString('ru-RU')],['Ресурс',p.layers?.resources?.name],['Торговая зона',p.layers?.trade?.name],['Развитие',p.development],['Налоги',p.taxes],['Производство',p.production],['Склад',p.warehouse],['Контроль',p.control],['Напряженность',p.tension],['Климат',p.layers?.climate?.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`]];
+  for(const[label,value]of entries){const div=document.createElement('div');div.className='province-field';const name=document.createElement('span');name.textContent=`${label}: `;const content=document.createElement('strong');content.textContent=val(value);div.append(name,content);details.append(div);}
+  if(p.kind==='land'&&isAdminEditing())renderAdminEditor(p,details);
+  else if(p.kind==='land'&&canRenameProvince(p.layers?.states?.id))renderNameEditor(p,details);
   if($('province-id'))$('province-id').value = id;
   if (focus) {
     const [bx0,by0,bx1,by1] = p.bbox;
@@ -314,13 +369,30 @@ function select(id, focus=false) {
   }
   schedule();
 }
-function pick(x,y) {
+
+function renderAdminEditor(p,host){
+  const form=document.createElement('form');form.id='province-admin-form';form.className='province-editor';
+  const categories=categoryList;
+  const choice=(name,title,layer)=>`<label class="field"><span>${title}</span><select name="${name}"><option value="">—</option>${categories.filter(c=>c.layer===layer).map(c=>`<option value="${html(c.name)}" ${p.layers?.[layer]?.id===c.id?'selected':''}>${html(c.name)}</option>`).join('')}</select></label>`;
+  form.innerHTML=`<div class="editor-grid"><label class="field"><span>Название</span><input name="name" value="${html(p.name)}" maxlength="120" required></label>${choice('race','Раса','races')}${choice('religion','Религия','religions')}<label class="field"><span>Государство</span><input name="state" list="state-options" value="${html(p.layers?.states?.name||'')}" data-original="${html(p.layers?.states?.name||'')}"><datalist id="state-options">${categories.filter(c=>c.layer==='states').map(c=>`<option value="${html(c.name)}">`).join('')}</datalist></label><label class="field"><span>Тип провинции</span><select name="province_type" data-original="${html(p.province_type||'Нейтральная')}">${['Столица','Город','Регион','Колония','Нейтральная'].map(type=>`<option ${p.province_type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field"><span>Дворы</span><input name="courts" type="number" min="0" step="1" value="${p.courts??0}"></label>${choice('resource','Ресурс','resources')}${choice('trade','Торговая зона','trade')}<label class="field"><span>Развитие</span><input name="development" type="number" min="0" step="1" value="${p.development??''}"></label><label class="field"><span>Контроль / оккупант</span><input name="control" list="state-options" value="${html(p.control||'')}"></label>${choice('climate','Климат','climate')}<label class="check-row"><span>Маркер: Столица</span><input name="capital" type="checkbox" data-original="${p.has_capital_marker?'true':'false'}" ${p.has_capital_marker?'checked':''}></label><label class="check-row"><span>Маркер: Город</span><input name="city" type="checkbox" data-original="${p.has_city_marker?'true':'false'}" ${p.has_city_marker?'checked':''}></label></div><p class="hint">Население рассчитывается автоматически: дворы × 4. Налоги, производство, склад и напряжённость будут рассчитаны экономической моделью.</p><button class="primary" type="submit">Сохранить изменения</button>`;
+  host.append(form);
+  form.onsubmit=async event=>{event.preventDefault();const data=new FormData(form),payload={};for(const key of ['name','race','religion','resource','trade','control','climate'])payload[key]=data.get(key)||null;const stateInput=form.elements.state;if(stateInput.value.trim()!==stateInput.dataset.original)payload.state=stateInput.value.trim()||null;const type=form.elements.province_type;if(type.value!==type.dataset.original)payload.province_type=type.value;payload.courts=data.get('courts')===''?0:Number(data.get('courts'));payload.development=data.get('development')===''?null:Number(data.get('development'));for(const key of ['capital','city']){const input=form.elements[key];if(input.checked!==(input.dataset.original==='true'))payload[key]=input.checked;}const button=form.querySelector('button');button.disabled=true;try{const result=await api(`admin/provinces/${p.id}`,{method:'PATCH',body:JSON.stringify(payload)});window.dispatchEvent(new CustomEvent('province:updated',{detail:result}));}catch(error){button.disabled=false;status(error.message,4000);}};
+}
+function renderNameEditor(p,host){
+  const form=document.createElement('form');form.className='province-editor';form.innerHTML=`<label class="field"><span>Название провинции</span><input name="name" maxlength="120" value="${html(p.name)}" required></label><button type="submit">Сохранить название</button>`;host.append(form);
+  form.onsubmit=async event=>{event.preventDefault();try{const result=await api(`provinces/${p.id}/name`,{method:'PATCH',body:JSON.stringify({name:new FormData(form).get('name')})});window.dispatchEvent(new CustomEvent('province:renamed',{detail:result}));}catch(error){status(error.message,4000);}};
+}
+function pickProvinceId(x,y) {
   if (!ready) return;
   uniforms(); gl.bindFramebuffer(gl.FRAMEBUFFER,pickFramebuffer); gl.viewport(0,0,1,1);
   gl.uniform1i(loc.Pick,1); gl.uniform2f(loc.PickPoint,(x-view.x)/view.scale,(y-view.y)/view.scale);
   gl.drawArrays(gl.TRIANGLES,0,3);
   const pixel = new Uint8Array(4); gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel);
   const id = (pixel[0]<<16)|(pixel[1]<<8)|pixel[2];
+  return id;
+}
+function pick(x,y) {
+  const id=pickProvinceId(x,y);
   if (id) select(id); else { selected=0; $('selection').hidden=true; }
   schedule();
 }
@@ -358,6 +430,11 @@ canvas.addEventListener('pointerup',endPointer); canvas.addEventListener('pointe
 canvas.addEventListener('wheel',e=>{ e.preventDefault(); zoom(Math.exp(-e.deltaY*(e.deltaMode===1?.045:.0015)),e.clientX,e.clientY); },{passive:false});
 canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();else if(!toolMode)zoom(2,e.clientX,e.clientY);});
 window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});
+window.addEventListener('admin:editing',()=>{if(selected)select(selected);});
+window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(adminPaint)status('Нанесение включено: нажимайте на сухопутные провинции',3000);});
+window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();schedule();});
+window.addEventListener('map:refresh',async()=>{try{const data=await api('map');categoryList=data.categories;provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();schedule();}catch(error){status(error.message,5000);}});
+window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});
 window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});
 window.addEventListener('map:tool',e=>{toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
 window.addEventListener('map:finish',finishArea);
@@ -370,17 +447,16 @@ window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await api('map');region=data.region;
+  const data=await api('map');region=data.region;categoryList=data.categories;provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
-  provinces=new Map([...provinces].filter(([,p])=>p.bbox[2]>=region[0]&&p.bbox[3]>=region[1]&&p.bbox[0]<region[2]&&p.bbox[1]<region[3]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   cacheSlots=Math.min(25,regionSlots);
   width=10000;height=10000;tileSize=2048;columns=5;rows=5;
   if(gl.getParameter(gl.MAX_TEXTURE_SIZE)<tileSize||gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)<cacheSlots)throw new Error('Браузер не поддерживает нужный размер тайлов WebGL.');
   setupGL();
   ready=true;resize();fit();
-  await hydrateUI({...data,provinces:[...provinces.values()]});
+  await hydrateUI(data);
   status('',0);
 }
 init().catch(error=>{console.error(error);status(error.message);});

@@ -6,9 +6,12 @@
   <div class="turn-badge" aria-label="Игровой календарь">1452 год <span>/</span> 1 ход</div>
   <nav id="left-dock" class="dock left" aria-label="Основные панели"></nav>
   <nav id="right-dock" class="dock right" aria-label="Панели карты"></nav>
+  <aside id="legend-drawer" class="surface drawer left" hidden><header><h1 id="legend-title">Легенда</h1><button class="icon-button" id="close-legend" aria-label="Свернуть легенду"><img src="assets/icons/x.svg" alt=""></button></header><div id="legend-content" class="panel-content"></div></aside>
   <aside id="drawer" class="surface drawer" hidden><header><h1 id="drawer-title"></h1><button class="icon-button" id="close-drawer" aria-label="Свернуть панель"><img src="assets/icons/x.svg" alt=""></button></header><div id="drawer-content" class="panel-content"></div></aside>
   <section id="selection" class="surface selection" hidden aria-live="polite"><header><span class="eyebrow">ВЫБРАННЫЙ ОБЪЕКТ</span><button id="clear-selection" class="icon-button" aria-label="Снять выделение"><img src="assets/icons/x.svg" alt=""></button></header><h2 id="selection-title"></h2><div id="selection-details"></div></section>
   <div id="map-scale" class="scale surface" aria-label="Масштаб карты"><div class="scale-values"><span id="scale-distance"></span><span id="scale-area"></span></div><div id="scale-line" class="scale-line"></div></div>
+  <button id="chat-toggle" class="chat-toggle surface" aria-label="Открыть чат" aria-expanded="false"><img src="assets/icons/message-circle.svg" alt=""></button>
+  <aside id="chat-popover" class="surface chat-popover" hidden><header><h2>Чат</h2><button id="chat-close" class="icon-button" aria-label="Свернуть чат"><img src="assets/icons/x.svg" alt=""></button></header><div id="chat-popover-content" class="chat-body"></div></aside>
   <div id="status" role="status" aria-live="polite">Подключение к базе…</div>
   <dialog id="modal"><div class="modal-shell surface"><header><h2 id="modal-title"></h2><button id="close-modal" class="icon-button" aria-label="Закрыть окно"><img src="assets/icons/x.svg" alt=""></button></header><div id="modal-content"></div></div></dialog>
   <script type="module" src="viewer.js"></script>

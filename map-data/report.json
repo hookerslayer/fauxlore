@@ -2,9 +2,9 @@
   "source": "fauxlore.png",
   "width": 10000,
   "height": 10000,
-  "provinces": 5724,
+  "provinces": 5716,
   "land": 4596,
-  "sea": 1076,
+  "sea": 1068,
   "lake": 52,
   "exterior_components": 1,
   "contour_pixels": 1107808,
@@ -946,5 +946,39 @@
       ]
     ]
   ],
-  "elapsed_seconds": 37.7
+  "elapsed_seconds": 37.7,
+  "retired_manual_sea_merges": [
+    {
+      "id": 1315,
+      "assigned_to": 1301
+    },
+    {
+      "id": 463,
+      "assigned_to": 392
+    },
+    {
+      "id": 280,
+      "assigned_to": 175
+    },
+    {
+      "id": 4094,
+      "assigned_to": 4030
+    },
+    {
+      "id": 2470,
+      "assigned_to": 2260
+    },
+    {
+      "id": 3179,
+      "assigned_to": 3059
+    },
+    {
+      "id": 3040,
+      "assigned_to": 3059
+    },
+    {
+      "id": 3698,
+      "assigned_to": 3779
+    }
+  ]
 }

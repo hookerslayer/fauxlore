@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import unittest
+import json
 from urllib.parse import unquote
 from pathlib import Path
 
@@ -47,7 +48,7 @@ class APIIntegration(unittest.TestCase):
         c=self.client
         self.assertEqual(c.get('/api/health').json()['database'],'postgresql')
         payload=c.get('/api/map').json()
-        self.assertEqual(len(payload['provinces']),5724)
+        self.assertEqual(len(payload['provinces']),len(json.loads((ROOT/'map-data/provinces.json').read_text(encoding='utf-8'))))
         self.assertNotIn(1071,{p['id'] for p in payload['provinces']})
         self.assertEqual(c.get('/.local/database.json').status_code,404)
         self.assertEqual(c.get('/assets/%2e%2e/.local/database.json').status_code,404)
@@ -69,6 +70,7 @@ class APIIntegration(unittest.TestCase):
         self.assertEqual(response.json()['user']['role'],'player')
         self.assertIn('HttpOnly',response.headers['set-cookie'])
         self.assertEqual(c.patch('/api/admin/provinces/1550',json={'name':'Не разрешено'}).status_code,403)
+        self.assertEqual(c.post('/api/admin/markers',json={'province_id':1550,'x':10,'y':20,'type':'capital','name':'Столица'}).status_code,403)
         self.assertEqual(c.put('/api/preferences',json={'layer':'races','role':'admin'}).status_code,200)
         self.assertEqual(c.get('/api/preferences').json(),{'layer':'races'})
         c.post('/api/auth/logout',json={})
@@ -78,6 +80,32 @@ class APIIntegration(unittest.TestCase):
         with connect() as db:
             db.execute("UPDATE accounts SET role='admin' WHERE email=%s",(creds['email'],))
         self.assertEqual(c.patch('/api/admin/provinces/1550',json={'name':'Тестовая провинция'}).status_code,200)
+        terrain=c.patch('/api/admin/provinces/1550',json={'terrain_type':'forest'})
+        self.assertEqual(terrain.status_code,200,terrain.text)
+        self.assertEqual(terrain.json()['terrain_type'],'forest')
+        province=next(p for p in c.get('/api/map').json()['provinces'] if p['id']==1550)
+        self.assertEqual(province['terrain_type'],'forest')
+        self.assertEqual(c.patch('/api/admin/provinces/1550',json={'terrain_type':'marsh'}).json()['terrain_type'],'marsh')
+        self.assertEqual(c.patch('/api/admin/provinces/1550',json={'terrain_type':None}).json()['terrain_type'],None)
+        self.assertEqual(c.patch('/api/admin/provinces/1550',json={'terrain_type':'desert'}).status_code,422)
+        with connect() as db:
+            marker_point=db.execute('SELECT center FROM provinces WHERE id=1550').fetchone()['center']
+        marker=c.post('/api/admin/markers',json={'province_id':1550,'x':marker_point[0],'y':marker_point[1],'type':'capital','name':'Тестовая столица'})
+        self.assertEqual(marker.status_code,200,marker.text)
+        self.assertEqual(marker.json()['state_id'],1)
+        self.assertEqual(marker.json()['state_name'],'Тестовое государство')
+        self.assertEqual((marker.json()['x'],marker.json()['y']),tuple(marker_point))
+        map_marker=next(m for m in c.get('/api/map').json()['markers'] if m['id']==marker.json()['id'])
+        self.assertEqual((map_marker['x'],map_marker['y']),tuple(marker_point))
+        self.assertEqual(c.post('/api/admin/markers',json={'province_id':1550,'x':10,'y':20,'type':'ruins','name':'Старые руины'}).status_code,422)
+        removed_type=c.post('/api/admin/markers',json={'province_id':1550,'type':'interest','name':'Рунический камень','description':'Древняя надпись'})
+        self.assertEqual(removed_type.status_code,422)
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with connect() as db:
+                db.execute("INSERT INTO map_markers(province_id,x,y,type,name) VALUES(%s,%s,%s,'ruins','Удалённый тип')",(1550,*marker_point))
+        markers=c.get('/api/map').json()['markers']
+        self.assertEqual({m['id'] for m in markers},{marker.json()['id']})
+        self.assertEqual(c.delete(f"/api/admin/markers/{marker.json()['id']}",headers={'Content-Type':'application/json'}).status_code,200)
         with connect() as db:
             import_geometry(db)
             self.assertEqual(db.execute('SELECT name FROM provinces WHERE id=1550').fetchone()['name'],'Тестовая провинция')

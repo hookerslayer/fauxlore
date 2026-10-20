@@ -47,7 +47,7 @@ async function refresh(entry){
 }
 
 async function refreshAll(){await Promise.all([...mounts.values()].map(refresh));}
-function startPolling(){if(!pollTimer)pollTimer=setInterval(()=>refreshAll(),8000);}
+function startPolling(){if(!pollTimer)pollTimer=setInterval(()=>{if(!document.hidden)refreshAll();},window.FAUXLORE_CONFIG?.backend==='apps-script'?30000:8000);}
 
 export function mountChat(host,options){
   unmountChat(host);

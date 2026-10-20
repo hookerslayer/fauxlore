@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS provinces (
     province_type text NOT NULL DEFAULT 'Нейтральная',
     courts integer NOT NULL DEFAULT 0 CHECK(courts >= 0),
     control text,
+    terrain_type text CHECK(terrain_type IS NULL OR terrain_type IN ('forest','marsh')),
     has_capital_marker boolean NOT NULL DEFAULT false,
     has_city_marker boolean NOT NULL DEFAULT false,
     taxes numeric,
@@ -20,6 +21,8 @@ CREATE TABLE IF NOT EXISTS provinces (
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS province_type text NOT NULL DEFAULT 'Нейтральная';
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS courts integer NOT NULL DEFAULT 0 CHECK(courts >= 0);
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS control text;
+ALTER TABLE provinces ADD COLUMN IF NOT EXISTS terrain_type text
+    CHECK(terrain_type IS NULL OR terrain_type IN ('forest','marsh'));
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS has_capital_marker boolean NOT NULL DEFAULT false;
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS has_city_marker boolean NOT NULL DEFAULT false;
 ALTER TABLE provinces ADD COLUMN IF NOT EXISTS taxes numeric;
@@ -45,6 +48,32 @@ CREATE TABLE IF NOT EXISTS province_values (
     PRIMARY KEY(province_id,layer),
     FOREIGN KEY(layer,category_id) REFERENCES map_categories(layer,id)
 );
+CREATE TABLE IF NOT EXISTS map_markers (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    province_id integer NOT NULL REFERENCES provinces(id) ON DELETE CASCADE,
+    x double precision NOT NULL,
+    y double precision NOT NULL,
+    type text NOT NULL,
+    name text NOT NULL CHECK(length(name) BETWEEN 1 AND 120),
+    state_layer text NOT NULL DEFAULT 'states' CHECK(state_layer='states'),
+    state_id integer,
+    description text CHECK(description IS NULL OR length(description)<=1000),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY(state_layer,state_id) REFERENCES map_categories(layer,id),
+    CHECK((type='interest' AND description IS NOT NULL AND state_id IS NULL) OR
+          (type<>'interest' AND description IS NULL))
+);
+CREATE INDEX IF NOT EXISTS map_markers_province_idx ON map_markers(province_id);
+ALTER TABLE map_markers ADD COLUMN IF NOT EXISTS x double precision;
+ALTER TABLE map_markers ADD COLUMN IF NOT EXISTS y double precision;
+ALTER TABLE map_markers DROP CONSTRAINT IF EXISTS map_markers_type_check;
+UPDATE map_markers m SET x=(p.center->>0)::double precision,y=(p.center->>1)::double precision
+FROM provinces p WHERE p.id=m.province_id AND (m.x IS NULL OR m.y IS NULL);
+ALTER TABLE map_markers ALTER COLUMN x SET NOT NULL;
+ALTER TABLE map_markers ALTER COLUMN y SET NOT NULL;
+DELETE FROM map_markers WHERE type='ruins';
+ALTER TABLE map_markers ADD CONSTRAINT map_markers_type_check
+    CHECK(type IN ('capital','city','fortress','port')) NOT VALID;
 CREATE TABLE IF NOT EXISTS accounts (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email text NOT NULL UNIQUE, nickname text NOT NULL,
@@ -97,3 +126,4 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 );
 INSERT INTO schema_versions VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO schema_versions VALUES(2) ON CONFLICT DO NOTHING;
+INSERT INTO schema_versions VALUES(3) ON CONFLICT DO NOTHING;

@@ -12,6 +12,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from email.message import EmailMessage
 from pathlib import Path
+from typing import Literal
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
@@ -144,6 +145,16 @@ class Registration(Credentials):
     nickname: str = Field(min_length=2, max_length=40)
 
 
+class MapMarkerCreate(BaseModel):
+    model_config={'extra':'forbid'}
+    province_id: int = Field(gt=0,lt=16777216)
+    x: float = Field(ge=0,le=10000,allow_inf_nan=False)
+    y: float = Field(ge=0,le=10000,allow_inf_nan=False)
+    type: Literal['capital','city','fortress','port']
+    name: str = Field(min_length=1,max_length=120)
+    state_id: int | None = Field(default=None,gt=0)
+
+
 def email_value(value):
     value = value.strip().lower()
     if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', value):
@@ -173,6 +184,10 @@ def map_data():
         values = db.execute('''SELECT v.province_id,v.layer,c.id,c.name,c.color
             FROM province_values v JOIN map_categories c ON (v.layer,v.category_id)=(c.layer,c.id)''').fetchall()
         categories = db.execute('SELECT * FROM map_categories ORDER BY layer,name').fetchall()
+        markers = db.execute('''SELECT m.id,m.province_id,m.x,m.y,m.type,m.name,m.state_id,m.description,c.name AS state_name
+            FROM map_markers m LEFT JOIN map_categories c ON c.layer=m.state_layer AND c.id=m.state_id
+            WHERE m.type IN ('capital','city','fortress','port')
+            ORDER BY m.id''').fetchall()
     by_id = {p['id']:p for p in provinces}
     state_colors = {c['name']:c['color'] for c in categories if c['layer']=='states'}
     for value in values:
@@ -189,9 +204,15 @@ def map_data():
             continue
         if province.get('control') and province.get('control') != province.get('layers',{}).get('states',{}).get('name'):
             province['control_color']=state_colors.get(province['control'])
-    return {'provinces': provinces, 'categories': categories,
-            'adjacency': json.loads((ROOT/'map-data/province-adjacency.json').read_text()),
-            'region': json.loads((ROOT/'map-data/view-region.json').read_text())['bounds'],
+    tile_directory = ROOT/'map-data/tiles'
+    tile_signature = '|'.join(
+        f'{path.name}:{path.stat().st_mtime_ns}:{path.stat().st_size}'
+        for path in sorted(tile_directory.glob('*.png')))
+    tile_revision = hashlib.sha256(tile_signature.encode()).hexdigest()[:16]
+    return {'provinces': provinces, 'categories': categories, 'markers':markers,
+            'adjacency': json.loads((ROOT/'map-data/province-adjacency.json').read_text(encoding='utf-8')),
+            'region': json.loads((ROOT/'map-data/view-region.json').read_text(encoding='utf-8'))['bounds'],
+            'tile_revision': tile_revision,
             'calendar': {'year':1452,'turn':1}}
 
 
@@ -503,6 +524,7 @@ class ProvinceEdit(BaseModel):
     development: int | None = Field(default=None,ge=0,le=1000000)
     control: str | None = Field(default=None,max_length=100)
     climate: str | None = Field(default=None,max_length=80)
+    terrain_type: Literal['forest','marsh'] | None = None
     capital: bool | None = None
     city: bool | None = None
 
@@ -567,7 +589,7 @@ def province_payload(db,province_id):
     return province
 
 
-BULK_SCALAR_FIELDS={'province_type':'province_type','courts':'courts','development':'development','control':'control','capital':'has_capital_marker','city':'has_city_marker'}
+BULK_SCALAR_FIELDS={'province_type':'province_type','courts':'courts','development':'development','control':'control','terrain_type':'terrain_type','capital':'has_capital_marker','city':'has_city_marker'}
 BULK_FIELDS={**EDITABLE_LAYERS,**{key:key for key in BULK_SCALAR_FIELDS}}
 
 
@@ -591,6 +613,10 @@ def normalize_bulk_value(field,value,target=False):
         return value
     if field in ('capital','city'):
         if not isinstance(value,bool):raise HTTPException(422,'Для маркера выберите да или нет')
+        return value
+    if field=='terrain_type':
+        if value is None:return None
+        if value not in ('forest','marsh'):raise HTTPException(422,'Неизвестный тип местности')
         return value
     if value is None:return None
     if not isinstance(value,str) or len(value)>120:raise HTTPException(422,'Значение должно быть текстом')
@@ -626,6 +652,8 @@ def apply_province_changes(db,province,changes):
     if 'state' in changes and changes['state'] is not None:changes['state']=changes['state'].strip()
     if 'control' in changes and changes['control'] is not None:changes['control']=changes['control'].strip() or None
     if province['kind']!='land':raise HTTPException(422,'Редактировать можно только сухопутные провинции')
+    if 'terrain_type' in changes and changes['terrain_type'] not in (None,'forest','marsh'):
+        raise HTTPException(422,'Неизвестный тип местности')
     for field,layer in EDITABLE_LAYERS.items():
         if field in changes:assign_category(db,province_id,layer,changes[field],allow_new=field=='state')
     if 'control' in changes and changes['control']:changes['control']=ensure_state_category(db,changes['control'])['name']
@@ -634,6 +662,7 @@ def apply_province_changes(db,province,changes):
     if 'courts' in changes:updates.update(courts=changes['courts'],population=changes['courts']*4)
     if 'development' in changes:updates['development']=changes['development']
     if 'control' in changes:updates['control']=changes['control']
+    if 'terrain_type' in changes:updates['terrain_type']=changes['terrain_type']
     if 'capital' in changes:updates['has_capital_marker']=changes['capital']
     if 'city' in changes:updates['has_city_marker']=changes['city']
     state_exists=db.execute("SELECT 1 FROM province_values WHERE province_id=%s AND layer='states'",(province_id,)).fetchone() is not None
@@ -659,6 +688,37 @@ def edit_province(province_id: int, body: ProvinceEdit, request: Request):
         apply_province_changes(db,province,changes)
         result=province_payload(db,province_id)
     return result
+
+
+@app.post('/api/admin/markers')
+def create_map_marker(body: MapMarkerCreate, request: Request):
+    require_user(request,admin=True)
+    name=body.name.strip()
+    if not name:raise HTTPException(422,'Укажите название маркера')
+    with connect() as db:
+        province=db.execute('''SELECT p.id,p.bbox,v.category_id AS state_id FROM provinces p
+            LEFT JOIN province_values v ON v.province_id=p.id AND v.layer='states'
+            WHERE p.id=%s''',(body.province_id,)).fetchone()
+        if not province:raise HTTPException(404,'Провинция не найдена')
+        x0,y0,x1,y1=province['bbox']
+        if not (x0<=body.x<x1 and y0<=body.y<y1):raise HTTPException(422,'Точка не совпадает с выбранной провинцией')
+        state_id=body.state_id if body.state_id is not None else province['state_id']
+        if state_id is not None and not db.execute("SELECT 1 FROM map_categories WHERE layer='states' AND id=%s",(state_id,)).fetchone():
+            raise HTTPException(422,'Неизвестное государство')
+        row=db.execute('''INSERT INTO map_markers(province_id,x,y,type,name,state_id,description)
+            VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id,province_id,x,y,type,name,state_id,description''',
+            (body.province_id,body.x,body.y,body.type,name,state_id,None)).fetchone()
+        state=db.execute("SELECT name FROM map_categories WHERE layer='states' AND id=%s",(state_id,)).fetchone() if state_id is not None else None
+    return {**row,'state_name':state['name'] if state else None}
+
+
+@app.delete('/api/admin/markers/{marker_id}')
+def delete_map_marker(marker_id: int, request: Request):
+    require_user(request,admin=True)
+    with connect() as db:
+        row=db.execute('DELETE FROM map_markers WHERE id=%s RETURNING id',(marker_id,)).fetchone()
+    if not row:raise HTTPException(404,'Маркер не найден')
+    return {'id':row['id'],'deleted':True}
 
 
 def prepare_bulk_rules(body):
@@ -745,7 +805,7 @@ def public_file(path: str):
     if not target.is_relative_to(ROOT):
         raise HTTPException(404)
     canonical=target.relative_to(ROOT).as_posix()
-    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','chat.js','map-tools.js') or canonical.startswith(roots)
+    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','chat.js','map-tools.js','app-config.js','google-api.js','oauth-return.html','oauth-return.js') or canonical.startswith(roots)
     if not allowed or not target.is_file():
         raise HTTPException(404)
     return FileResponse(target)

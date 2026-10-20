@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,settings,LAYERS,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js';
+import {initUI,hydrateUI,api,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
@@ -7,13 +7,17 @@ const canvas = $('map'), labels = $('labels'), ctx = labels.getContext('2d');
 const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
 const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
+let tileRevision = '0';
 let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
 let regionSlots = 25;
-let colorsTexture,controlColorsTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
+let colorsTexture,controlColorsTexture,terrainTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
 const thematicComponents=new Map();
+let mapMarkers=[];
+const markerIcons=Object.fromEntries(['capital','city','fortress','port'].map(type=>{const image=new Image();image.src=`assets/markers/${type}.svg`;image.onload=schedule;return[type,image];}));
+const MARKER_HEIGHT={capital:12,city:10,fortress:8,port:6};
 const status = (text, timeout = 0) => {
   clearTimeout(statusTimer); $('status').textContent = text;
   if (timeout) statusTimer = setTimeout(() => { $('status').textContent = ''; }, timeout);
@@ -37,6 +41,7 @@ function setupGL() {
   uniform sampler2D uTypes;
   uniform sampler2D uColors;
   uniform sampler2D uControlColors;
+  uniform sampler2D uTerrain;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
@@ -107,16 +112,41 @@ function setupGL() {
       kindAt(p-ivec2(0,borderStep))!=kind&&kindAt(p-ivec2(0,borderStep))!=0);
     if(coastEdge)base=kind==1?vec3(0.):vec3(.055,.18,.26);
     else if(edge)base=kind==1?vec3(0.):vec3(.055,.18,.26);
+
+    // Terrain glyphs are map-space pixels, composited after relief, thematic
+    // fills, selection, control hatching, rivers and borders. Labels/markers
+    // are rendered by the later overlay canvas and remain above this pass.
+    int terrain=int(round(texelFetch(uTerrain,ivec2(id%256,id/256),0).r*255.));
+    if(kind==1&&terrain!=0){
+      bool mark=false;
+      if(terrain==1){
+        ivec2 cell=p/4;
+        int h=(cell.x*73+cell.y*151+(cell.x*cell.y)%997*19)%997;
+        ivec2 q=p%4;
+        int dotX=h%2,dotY=(h/7)%2;
+        mark=q.x>=dotX&&q.x<dotX+2&&q.y>=dotY&&q.y<dotY+2;
+      }else if(terrain==2){
+        int row=p.y/6;
+        int x=(p.x+(row%2)*6)%12,y=p.y%6;
+        int dashLength=3+(row*7)%3;
+        mark=y==2&&x<dashLength;
+      }
+      if(mark){
+        vec3 multiplyColor=terrain==1?vec3(.50,.38,.32):vec3(.42,.30,.24);
+        base*=mix(vec3(1.),multiplyColor,.4);
+      }
+    }
     color=vec4(base,1.);
   }`);
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','Colors','ControlColors','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowControl'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','ControlColors','Terrain','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowControl'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
   gl.uniform1i(loc.Colors,4);
   gl.uniform1i(loc.ControlColors,5);
+  gl.uniform1i(loc.Terrain,6);
   gl.uniform2f(loc.MapSize, width, height); gl.uniform1i(loc.TileSize, tileSize); gl.uniform1i(loc.Columns, columns);
   const maxId = Math.max(...provinces.keys());
   const typeRows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*typeRows);
@@ -152,7 +182,16 @@ function setupGL() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
   gl.disable(gl.DITHER); // Exact byte values for picking, including low province IDs.
-  colorsTexture=gl.createTexture(); controlColorsTexture=gl.createTexture(); updateLayerColors();
+  colorsTexture=gl.createTexture(); controlColorsTexture=gl.createTexture(); terrainTexture=gl.createTexture(); updateLayerColors(); updateTerrainTypes();
+}
+function updateTerrainTypes(){
+  if(!terrainTexture)return;
+  const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),terrain=new Uint8Array(256*height);
+  for(const p of provinces.values())if(p.kind==='land')terrain[p.id]={forest:1,marsh:2}[p.terrain_type]||0;
+  gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D,terrainTexture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,256,height,0,gl.RED,gl.UNSIGNED_BYTE,terrain);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.activeTexture(gl.TEXTURE0);
 }
 function updateLayerColors(){
   if(!colorsTexture)return;
@@ -208,7 +247,7 @@ function tileSlotFor(key,visible){
   tileCache.set(key,{slot,last:++tileUse}); return slot;
 }
 function clearTileSlot(key,slot){const[x,y]=key.split(',').map(Number);gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,x,y,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([0]));gl.activeTexture(gl.TEXTURE0);}
-async function loadTile(tx,ty,slot){const key=`${tx},${ty}`;tileLoading.set(key,slot);try{const response=await fetch(`map-data/tiles/${key.replace(',', '_')}.png`);if(!response.ok)throw new Error(`Не найден тайл ${key}`);const bitmap=await createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,slot,bitmap.width,bitmap.height,1,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);bitmap.close();const current=tileCache.get(key);if(current&&current.slot===slot){gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,tx,ty,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([slot+1]));gl.activeTexture(gl.TEXTURE0);}}catch(error){console.warn(error)}finally{if(tileLoading.get(key)===slot)tileLoading.delete(key);schedule();}}
+async function loadTile(tx,ty,slot){const key=`${tx},${ty}`;tileLoading.set(key,slot);try{const response=await fetch(`map-data/tiles/${key.replace(',', '_')}.png?v=${tileRevision}`);if(!response.ok)throw new Error(`Не найден тайл ${key}`);const bitmap=await createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,slot,bitmap.width,bitmap.height,1,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);bitmap.close();const current=tileCache.get(key);if(current&&current.slot===slot){gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,tx,ty,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([slot+1]));gl.activeTexture(gl.TEXTURE0);}}catch(error){console.warn(error)}finally{if(tileLoading.get(key)===slot)tileLoading.delete(key);schedule();}}
 function ensureVisibleTiles(){const visible=new Set(tileRange().map(([x,y])=>`${x},${y}`));for(const key of visible){const [tx,ty]=key.split(',').map(Number);const slot=tileSlotFor(key,visible);if(slot<0||tileLoading.has(key))continue;if(!tileCache.get(key)?.loaded){tileCache.get(key).loaded=true;loadTile(tx,ty,slot);}}}
 function updateTileCapacity(){const next=Math.min(regionSlots,view.scale>view.min*1.8?12:25);if(next!==cacheSlots)resetTileCache(next);}
 function draw() {
@@ -239,9 +278,12 @@ function getThematicComponents(layer){
 }
 function drawLabels() {
   const dpr = labels.width/innerWidth;
+  // Markers are part of the map composition: their anchors, icon sizes, and label offsets all follow map zoom.
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,innerWidth,innerHeight);
-  const showMarkers=activeSettings.markers?.capital||activeSettings.markers?.city;
+  const showMarkers=Object.keys(markerIcons).some(type=>activeSettings.markers?.[type])&&mapMarkers.length>0||activeSettings.markers?.capital||activeSettings.markers?.city;
   if (!showIds&&!Object.values(activeSettings.information).some(Boolean)&&!showMarkers) return;
+  const markersByProvince=new Map();
+  for(const marker of mapMarkers)if(activeSettings.markers?.[marker.type]){const list=markersByProvince.get(marker.province_id)||[];list.push(marker);markersByProvince.set(marker.province_id,list);}
   ctx.font = '600 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 3; ctx.strokeStyle = '#13232ddd'; ctx.fillStyle = '#fff9e8';
   const occupied = new Set(),labelRects=[];
@@ -249,15 +291,34 @@ function drawLabels() {
   for (const p of ordered) {
     if(p.center[0]<region[0]||p.center[1]<region[1]||p.center[0]>=region[2]||p.center[1]>=region[3])continue;
     const x = p.center[0]*view.scale+view.x, y = p.center[1]*view.scale+view.y;
-    if (x < -30 || y < -10 || x > innerWidth+30 || y > innerHeight+10) continue;
     const key = `${Math.floor(x/42)},${Math.floor(y/18)}`;
-    if(activeSettings.markers?.capital&&p.has_capital_marker){ctx.font='700 17px system-ui';ctx.fillStyle='#f3d778';ctx.strokeText('★',x,y-12);ctx.fillText('★',x,y-12);}
-    else if(activeSettings.markers?.city&&p.has_city_marker){ctx.font='700 15px system-ui';ctx.fillStyle='#f3d778';ctx.strokeText('●',x,y-11);ctx.fillText('●',x,y-11);}
+    const visibleMarkers=markersByProvince.get(p.id)||[];
+    if(activeSettings.markers?.capital&&p.has_capital_marker&&!visibleMarkers.some(m=>m.type==='capital'))visibleMarkers.push({type:'capital',name:p.name});
+    if(activeSettings.markers?.city&&p.has_city_marker&&!visibleMarkers.some(m=>m.type==='city'))visibleMarkers.push({type:'city',name:p.name});
+    const hasVisibleMarker=visibleMarkers.length>0;
+    const markerRows=activeSettings.markers?.names?visibleMarkers.filter(marker=>marker.name):[];
+    if(hasVisibleMarker)visibleMarkers.forEach(marker=>{
+        const mx=(Number.isFinite(marker.x)?marker.x:p.center[0])*view.scale+view.x;
+        const my=(Number.isFinite(marker.y)?marker.y:p.center[1])*view.scale+view.y;
+        const size=(MARKER_HEIGHT[marker.type]||10)*view.scale,image=markerIcons[marker.type];
+        const imageRatio=image?.naturalWidth&&image?.naturalHeight?image.naturalWidth/image.naturalHeight:1;
+        const iconWidth=size*imageRatio;
+        if(mx<-iconWidth||my<-size||mx>innerWidth+iconWidth||my>innerHeight+size)return;
+        if(image?.complete&&image.naturalWidth)ctx.drawImage(image,mx-iconWidth/2,my-size/2,iconWidth,size);
+        const name=markerRows.includes(marker)?marker.name:null;
+        if(name){
+          const labelSize=size*(2/3);
+          ctx.font=`600 ${labelSize}px system-ui`;ctx.textAlign='left';ctx.textBaseline='middle';
+          const left=mx+iconWidth/2+1.5*view.scale;
+          ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
+          ctx.strokeText(name,left,my);ctx.fillText(name,left,my);
+        }
+      });
+    if (x < -30 || y < -10 || x > innerWidth+30 || y > innerHeight+10) continue;
     if (occupied.has(key) && p.id !== selected) continue;
-    const hasVisibleMarker=activeSettings.markers?.capital&&p.has_capital_marker||activeSettings.markers?.city&&p.has_city_marker;
-    const text=showIds?String(p.id):activeSettings.information.provinces||hasVisibleMarker&&activeSettings.markers?.names?p.name:'';
+    const text=showIds?String(p.id):(!hasVisibleMarker||!activeSettings.markers?.names)&&activeSettings.information.provinces?p.name:'';
     if(!text)continue;
-    occupied.add(key);const textWidth=ctx.measureText(text).width;labelRects.push({left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9});ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
+    occupied.add(key);ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';const textWidth=ctx.measureText(text).width;labelRects.push({left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9});ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
   }
   for(const layer of ['states','races','religions','resources','trade']){
     if(!activeSettings.information[layer])continue;
@@ -300,6 +361,16 @@ function mapClick(x,y){
   const p=[(x-view.x)/view.scale,(y-view.y)/view.scale];
   if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
   lastPoint=p;
+  if(markerPlacement){
+    const province_id=pickProvinceId(x,y);
+    if(!province_id){status('Укажите точку внутри провинции',3000);return;}
+    const draft=markerPlacement;markerPlacement=null;
+    window.dispatchEvent(new CustomEvent('map:marker-location-selected',{detail:{...draft,province_id,x:p[0],y:p[1]}}));
+    status('Сохраняю маркер…',2500);return;
+  }
+  const marker=isAdmin()?pickMarker(x,y):null;
+  if(marker){window.dispatchEvent(new CustomEvent('map:marker-selected',{detail:{...marker,screenX:x,screenY:y}}));return;}
+  window.dispatchEvent(new CustomEvent('map:close-marker-popup'));
   if(isAdminPainting()&&adminPaint){
     const id=pickProvinceId(x,y),province=provinces.get(id);
     if(!province){status('Нажмите на провинцию',2500);return;}
@@ -351,9 +422,11 @@ function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
 function select(id, focus=false) {
   const p = provinces.get(id); if (!p) { status(`Провинция с ID ${id} не найдена в игровой области`,4000); return; }
   selected = id; $('selection').hidden = false;$('selection').classList.toggle('admin-edit',p.kind==='land'&&isAdminEditing()); $('selection-title').textContent = p.name;
+  window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:p}));
   const details=$('selection-details');details.replaceChildren();
   const val=value=>value===null||value===undefined||value===''?'—':value;
   const entries=p.kind==='sea'?[['ID',id],['Название',p.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`],['Тип объекта','Море']]:[['ID',id],['Тип объекта',p.kind==='lake'?'Озеро':'Суша'],['Название',p.name],['Раса',p.layers?.races?.name],['Религия',p.layers?.religions?.name],['Государство',p.layers?.states?.name],['Тип провинции',p.province_type],['Дворы',p.courts],['Население',Number(p.population??(Number(p.courts||0)*4)).toLocaleString('ru-RU')],['Ресурс',p.layers?.resources?.name],['Торговая зона',p.layers?.trade?.name],['Развитие',p.development],['Налоги',p.taxes],['Производство',p.production],['Склад',p.warehouse],['Контроль',p.control],['Напряженность',p.tension],['Климат',p.layers?.climate?.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`]];
+  if(p.kind==='land')entries.splice(entries.length-1,0,['Местность',({forest:'Лес',marsh:'Болото'})[p.terrain_type]]);
   for(const[label,value]of entries){const div=document.createElement('div');div.className='province-field';const name=document.createElement('span');name.textContent=`${label}: `;const content=document.createElement('strong');content.textContent=val(value);div.append(name,content);details.append(div);}
   if(p.kind==='land'&&isAdminEditing())renderAdminEditor(p,details);
   else if(p.kind==='land'&&canRenameProvince(p.layers?.states?.id))renderNameEditor(p,details);
@@ -374,9 +447,9 @@ function renderAdminEditor(p,host){
   const form=document.createElement('form');form.id='province-admin-form';form.className='province-editor';
   const categories=categoryList;
   const choice=(name,title,layer)=>`<label class="field"><span>${title}</span><select name="${name}"><option value="">—</option>${categories.filter(c=>c.layer===layer).map(c=>`<option value="${html(c.name)}" ${p.layers?.[layer]?.id===c.id?'selected':''}>${html(c.name)}</option>`).join('')}</select></label>`;
-  form.innerHTML=`<div class="editor-grid"><label class="field"><span>Название</span><input name="name" value="${html(p.name)}" maxlength="120" required></label>${choice('race','Раса','races')}${choice('religion','Религия','religions')}<label class="field"><span>Государство</span><input name="state" list="state-options" value="${html(p.layers?.states?.name||'')}" data-original="${html(p.layers?.states?.name||'')}"><datalist id="state-options">${categories.filter(c=>c.layer==='states').map(c=>`<option value="${html(c.name)}">`).join('')}</datalist></label><label class="field"><span>Тип провинции</span><select name="province_type" data-original="${html(p.province_type||'Нейтральная')}">${['Столица','Город','Регион','Колония','Нейтральная'].map(type=>`<option ${p.province_type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field"><span>Дворы</span><input name="courts" type="number" min="0" step="1" value="${p.courts??0}"></label>${choice('resource','Ресурс','resources')}${choice('trade','Торговая зона','trade')}<label class="field"><span>Развитие</span><input name="development" type="number" min="0" step="1" value="${p.development??''}"></label><label class="field"><span>Контроль / оккупант</span><input name="control" list="state-options" value="${html(p.control||'')}"></label>${choice('climate','Климат','climate')}<label class="check-row"><span>Маркер: Столица</span><input name="capital" type="checkbox" data-original="${p.has_capital_marker?'true':'false'}" ${p.has_capital_marker?'checked':''}></label><label class="check-row"><span>Маркер: Город</span><input name="city" type="checkbox" data-original="${p.has_city_marker?'true':'false'}" ${p.has_city_marker?'checked':''}></label></div><p class="hint">Население рассчитывается автоматически: дворы × 4. Налоги, производство, склад и напряжённость будут рассчитаны экономической моделью.</p><button class="primary" type="submit">Сохранить изменения</button>`;
+  form.innerHTML=`<div class="editor-grid"><label class="field"><span>Название</span><input name="name" value="${html(p.name)}" maxlength="120" required></label>${choice('race','Раса','races')}${choice('religion','Религия','religions')}<label class="field"><span>Государство</span><input name="state" list="state-options" value="${html(p.layers?.states?.name||'')}" data-original="${html(p.layers?.states?.name||'')}"><datalist id="state-options">${categories.filter(c=>c.layer==='states').map(c=>`<option value="${html(c.name)}">`).join('')}</datalist></label><label class="field"><span>Тип провинции</span><select name="province_type" data-original="${html(p.province_type||'Нейтральная')}">${['Столица','Город','Регион','Колония','Нейтральная'].map(type=>`<option ${p.province_type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field"><span>Дворы</span><input name="courts" type="number" min="0" step="1" value="${p.courts??0}"></label>${choice('resource','Ресурс','resources')}${choice('trade','Торговая зона','trade')}<label class="field"><span>Развитие</span><input name="development" type="number" min="0" step="1" value="${p.development??''}"></label><label class="field"><span>Контроль / оккупант</span><input name="control" list="state-options" value="${html(p.control||'')}"></label>${choice('climate','Климат','climate')}<label class="field"><span>Тип местности</span><select name="terrain_type"><option value="">— нет —</option><option value="forest" ${p.terrain_type==='forest'?'selected':''}>Лес</option><option value="marsh" ${p.terrain_type==='marsh'?'selected':''}>Болото</option></select></label><label class="check-row"><span>Маркер: Столица</span><input name="capital" type="checkbox" data-original="${p.has_capital_marker?'true':'false'}" ${p.has_capital_marker?'checked':''}></label><label class="check-row"><span>Маркер: Город</span><input name="city" type="checkbox" data-original="${p.has_city_marker?'true':'false'}" ${p.has_city_marker?'checked':''}></label></div><p class="hint">Население рассчитывается автоматически: дворы × 4. Налоги, производство, склад и напряжённость будут рассчитаны экономической моделью.</p><button class="primary" type="submit">Сохранить изменения</button>`;
   host.append(form);
-  form.onsubmit=async event=>{event.preventDefault();const data=new FormData(form),payload={};for(const key of ['name','race','religion','resource','trade','control','climate'])payload[key]=data.get(key)||null;const stateInput=form.elements.state;if(stateInput.value.trim()!==stateInput.dataset.original)payload.state=stateInput.value.trim()||null;const type=form.elements.province_type;if(type.value!==type.dataset.original)payload.province_type=type.value;payload.courts=data.get('courts')===''?0:Number(data.get('courts'));payload.development=data.get('development')===''?null:Number(data.get('development'));for(const key of ['capital','city']){const input=form.elements[key];if(input.checked!==(input.dataset.original==='true'))payload[key]=input.checked;}const button=form.querySelector('button');button.disabled=true;try{const result=await api(`admin/provinces/${p.id}`,{method:'PATCH',body:JSON.stringify(payload)});window.dispatchEvent(new CustomEvent('province:updated',{detail:result}));}catch(error){button.disabled=false;status(error.message,4000);}};
+  form.onsubmit=async event=>{event.preventDefault();const data=new FormData(form),payload={};for(const key of ['name','race','religion','resource','trade','control','climate'])payload[key]=data.get(key)||null;payload.terrain_type=data.get('terrain_type')||null;const stateInput=form.elements.state;if(stateInput.value.trim()!==stateInput.dataset.original)payload.state=stateInput.value.trim()||null;const type=form.elements.province_type;if(type.value!==type.dataset.original)payload.province_type=type.value;payload.courts=data.get('courts')===''?0:Number(data.get('courts'));payload.development=data.get('development')===''?null:Number(data.get('development'));for(const key of ['capital','city']){const input=form.elements[key];if(input.checked!==(input.dataset.original==='true'))payload[key]=input.checked;}const button=form.querySelector('button');button.disabled=true;try{const result=await api(`admin/provinces/${p.id}`,{method:'PATCH',body:JSON.stringify(payload)});window.dispatchEvent(new CustomEvent('province:updated',{detail:result}));}catch(error){button.disabled=false;status(error.message,4000);}};
 }
 function renderNameEditor(p,host){
   const form=document.createElement('form');form.className='province-editor';form.innerHTML=`<label class="field"><span>Название провинции</span><input name="name" maxlength="120" value="${html(p.name)}" required></label><button type="submit">Сохранить название</button>`;host.append(form);
@@ -395,6 +468,19 @@ function pick(x,y) {
   const id=pickProvinceId(x,y);
   if (id) select(id); else { selected=0; $('selection').hidden=true; }
   schedule();
+}
+function pickMarker(x,y){
+  let nearest=null,nearestDistance=Infinity;
+  for(const marker of mapMarkers){
+    if(!activeSettings.markers?.[marker.type]||!Number.isFinite(marker.x)||!Number.isFinite(marker.y))continue;
+    const size=(MARKER_HEIGHT[marker.type]||10)*view.scale,image=markerIcons[marker.type];
+    const ratio=image?.naturalWidth&&image?.naturalHeight?image.naturalWidth/image.naturalHeight:1;
+    const dx=x-(marker.x*view.scale+view.x),dy=y-(marker.y*view.scale+view.y);
+    if(Math.abs(dx)<=Math.max(7,size*ratio/2)&&Math.abs(dy)<=Math.max(7,size/2)){
+      const distance=dx*dx+dy*dy;if(distance<nearestDistance){nearest=marker;nearestDistance=distance;}
+    }
+  }
+  return nearest;
 }
 const pointers = new Map(); let gesture = null, moved = false;
 function snapshotGesture() {
@@ -432,8 +518,12 @@ canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')f
 window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});
 window.addEventListener('admin:editing',()=>{if(selected)select(selected);});
 window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(adminPaint)status('Нанесение включено: нажимайте на сухопутные провинции',3000);});
-window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();schedule();});
-window.addEventListener('map:refresh',async()=>{try{const data=await api('map');categoryList=data.categories;provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();schedule();}catch(error){status(error.message,5000);}});
+let markerPlacement=null;
+window.addEventListener('map:place-marker',e=>{markerPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!markerPlacement);if(markerPlacement)status('Щёлкните по точке провинции для размещения маркера',0);else status('',0);});
+window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
+window.addEventListener('map:refresh',async()=>{try{const data=await api('map');const nextTileRevision=String(data.tile_revision||0);if(nextTileRevision!==tileRevision){tileRevision=nextTileRevision;resetTileCache(cacheSlots);}categoryList=data.categories;mapMarkers=data.markers||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();}catch(error){status(error.message,5000);}});
+window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
+window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);schedule();});
 window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});
 window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});
 window.addEventListener('map:tool',e=>{toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
@@ -442,12 +532,12 @@ window.addEventListener('map:undo',()=>{toolPoints.pop();areaClosed=false;toolRe
 window.addEventListener('map:clear-tool',()=>{toolPoints=[];areaClosed=false;toolResult('Измерение очищено');schedule();});
 window.addEventListener('map:coordinate',e=>{const[x,y]=e.detail;if(x<region[0]||x>=region[2]||y<region[1]||y>=region[3]){status('Точка находится вне игровой области',4000);return;}view.scale=Math.max(view.scale,1);view.x=innerWidth/2-x*view.scale;view.y=innerHeight/2-y*view.scale;clampView();schedule();});
 window.addEventListener('map:copy-coordinates',async()=>{if(!lastPoint){status('Сначала выберите точку на карте',3000);return;}try{await navigator.clipboard.writeText(lastPoint.map(v=>v.toFixed(2)).join(', '));status('Координаты скопированы',2500);}catch{status('Не удалось скопировать координаты',3000);}});
-$('clear-selection').onclick=()=>{selected=0;$('selection').hidden=true;schedule();};
+$('clear-selection').onclick=()=>{selected=0;$('selection').hidden=true;window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:null}));schedule();};
 window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await api('map');region=data.region;categoryList=data.categories;provinceAdjacency=data.adjacency||{};
+  const data=await api('map');region=data.region;tileRevision=String(data.tile_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));

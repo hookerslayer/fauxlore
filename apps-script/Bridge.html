@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><script>
+const siteOrigin=<?!= originJson ?>,channel=<?!= channelJson ?>;
+window.addEventListener('message',event=>{
+  if(event.origin!==siteOrigin||event.data?.channel!==channel||event.data?.type!=='fauxlore:request')return;
+  const source=event.source,id=event.data.id;
+  google.script.run.withSuccessHandler(result=>source.postMessage({type:'fauxlore:response',channel,id,result},siteOrigin)).withFailureHandler(()=>source.postMessage({type:'fauxlore:response',channel,id,result:{ok:false,status:503,error:'Сервис Google временно недоступен'}},siteOrigin)).fxRpc(event.data.request);
+});
+window.top.postMessage({type:'fauxlore:ready',channel},siteOrigin);
+</script></body></html>

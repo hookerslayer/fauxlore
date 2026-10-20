@@ -11,5 +11,5 @@ function configureFauxlore_(){
   if(!p.getProperty('SITE_URL'))p.setProperty('SITE_URL','http://127.0.0.1:8003');
   if(!p.getProperty('SITE_URLS'))p.setProperty('SITE_URLS',JSON.stringify([site_(),'http://127.0.0.1:8003','https://hookerslayer.github.io/fauxlore'].filter((value,index,array)=>array.indexOf(value)===index)));
   const db=new Store_();
-  console.log(JSON.stringify({database:'google-sheets',provinces:db.rows('provinces').length,accounts:db.rows('accounts').length,messages:db.rows('chat_messages').length,markers:db.rows('map_markers').length}));
+  console.log(JSON.stringify({database:'google-sheets',provinces:db.rows('provinces').length,accounts:db.rows('accounts').length,markers:db.rows('map_markers').length}));
 }

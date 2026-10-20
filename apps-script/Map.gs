@@ -24,14 +24,44 @@ function assign_(db,id,layer,name){
   const value=db.rows('province_values').find(r=>r.province_id===id&&r.layer===layer);
   if(value)value.category_id=category.id;else db.add('province_values',{province_id:id,layer,category_id:category.id});
 }
+const MAP_CACHE_TTL_=60,MAP_CACHE_CHUNK_=18000;
+function mapCacheKey_(dataRevision,tileRevision){return 'map:v2:'+String(dataRevision??0)+':'+String(tileRevision??0);}
+function readMapCache_(key){
+  const cache=CacheService.getScriptCache(),count=Number(cache.get(key+':count'));
+  if(!Number.isInteger(count)||count<1||count>500)return null;
+  const chunks=[];
+  for(let offset=0;offset<count;offset+=100){
+    const keys=Array.from({length:Math.min(100,count-offset)},(_,i)=>key+':'+(offset+i));
+    const values=cache.getAll(keys);if(keys.some(k=>values[k]==null))return null;
+    chunks.push(...keys.map(k=>values[k]));
+  }
+  try{return JSON.parse(chunks.join(''));}catch{return null;}
+}
+function writeMapCache_(key,value){
+  const cache=CacheService.getScriptCache(),serialized=JSON.stringify(value),count=Math.ceil(serialized.length/MAP_CACHE_CHUNK_);
+  if(!count||count>500)return;
+  for(let offset=0;offset<count;offset+=100){
+    const entries={};for(let i=offset;i<Math.min(count,offset+100);i++)entries[key+':'+i]=serialized.slice(i*MAP_CACHE_CHUNK_,(i+1)*MAP_CACHE_CHUNK_);
+    cache.putAll(entries,MAP_CACHE_TTL_);
+  }
+  cache.put(key+':count',String(count),MAP_CACHE_TTL_);
+}
 function mapData_(db){
+  const region=db.get('region'),tileRevision=db.get('tile_revision'),dataRevision=db.get('data_revision');
+  const cacheKey=mapCacheKey_(dataRevision,tileRevision);let cached=null;try{cached=readMapCache_(cacheKey);}catch{}
+  if(cached)return cached;
+  const inRegion=p=>!Array.isArray(region)||region.length!==4||!Array.isArray(p.bbox)||p.bbox.length!==4||
+    (p.bbox[0]<region[2]&&p.bbox[2]>region[0]&&p.bbox[1]<region[3]&&p.bbox[3]>region[1]);
   const categories=db.rows('map_categories').map(clone_),categoryIndex=new Map(categories.map(r=>[r.layer+':'+r.id,r]));
-  const provinces=db.rows('provinces').map(r=>({...clone_(r),layers:{}})),index=new Map(provinces.map(p=>[p.id,p]));
+  const provinces=db.rows('provinces').filter(inRegion).map(r=>({...clone_(r),layers:{}})),index=new Map(provinces.map(p=>[p.id,p]));
   for(const value of db.rows('province_values')){const p=index.get(value.province_id),c=categoryIndex.get(value.layer+':'+value.category_id);if(p&&c)p.layers[value.layer]={id:c.id,name:c.name,color:c.color};}
   for(const p of provinces){if(p.kind==='sea'){delete p.layers;for(const key of ['province_type','courts','population','development','taxes','production','warehouse','control','tension','has_capital_marker','has_city_marker'])delete p[key];continue;}
     if(p.control&&p.control!==p.layers.states?.name)p.control_color=categories.find(c=>c.layer==='states'&&c.name===p.control)?.color;}
-  const markers=db.rows('map_markers').filter(m=>['capital','city','fortress','port'].includes(m.type)).map(m=>({...clone_(m),state_name:categoryIndex.get('states:'+m.state_id)?.name||null}));
-  return {provinces:provinces.sort((a,b)=>a.id-b.id),categories,markers,region:db.get('region'),calendar:db.get('calendar'),tile_revision:db.get('tile_revision'),data_revision:db.get('data_revision')};
+  const ids=new Set(index.keys());
+  const markers=db.rows('map_markers').filter(m=>ids.has(m.province_id)&&['capital','city','fortress','port'].includes(m.type)).map(m=>({...clone_(m),state_name:categoryIndex.get('states:'+m.state_id)?.name||null}));
+  const result={provinces:provinces.sort((a,b)=>a.id-b.id),categories,markers,region,calendar:db.get('calendar'),tile_revision:tileRevision,data_revision:dataRevision};
+  try{writeMapCache_(cacheKey,result);}catch(error){console.warn('Map cache write failed',error);}
+  return result;
 }
 function provincePayload_(db,id){
   const source=db.rows('provinces').find(p=>p.id===id);if(!source)fail_(404,'Провинция не найдена');

@@ -57,7 +57,7 @@ async def headers_and_origin(request, call_next):
             return Response('Cross-site write rejected', status_code=403)
         if not request.headers.get('content-type','').startswith('application/json'):
             return Response('JSON required', status_code=415)
-        large_json=request.url.path in ('/api/profile/avatar','/api/chat/messages')
+        large_json=request.url.path == '/api/profile/avatar'
         if int(request.headers.get('content-length','0')) > (3*1024*1024 if large_json else 65536):
             return Response('Request too large', status_code=413)
     response = await call_next(request)
@@ -89,7 +89,7 @@ def current_user(request):
     if not token:
         return None
     with connect() as db:
-        return db.execute('''SELECT a.id,a.email,a.nickname,a.role,a.reputation,a.avatar_type,a.chat_banned,a.is_test_profile,
+        return db.execute('''SELECT a.id,a.email,a.nickname,a.role,a.reputation,a.avatar_type,
             COALESCE((SELECT array_agg(state_id) FROM account_states x WHERE x.account_id=a.id),'{}') AS state_ids
             FROM accounts a JOIN sessions s ON a.id=s.account_id
             WHERE s.token_hash=%s AND s.expires_at>now()''', (digest(token),)).fetchone()
@@ -103,17 +103,6 @@ def require_user(request, admin=False):
         raise HTTPException(403, 'Нужна роль admin')
     return user
 
-
-def request_actor(db,request):
-    user=require_user(request)
-    test_id=request.headers.get('x-fauxlore-test-profile')
-    if not test_id:return user
-    if user['role']!='admin':raise HTTPException(403,'Тестовые профили доступны только администратору')
-    try:test_id=int(test_id)
-    except ValueError:raise HTTPException(400,'Некорректный тестовый профиль')
-    profile=db.execute("SELECT id,email,nickname,role,reputation,avatar_type,chat_banned,is_test_profile FROM accounts WHERE id=%s AND is_test_profile=true",(test_id,)).fetchone()
-    if not profile:raise HTTPException(403,'Тестовый профиль не найден')
-    return profile
 
 
 IMAGE_TYPES={'image/png':(b'\x89PNG\r\n\x1a\n',),'image/jpeg':(b'\xff\xd8\xff',),'image/gif':(b'GIF87a',b'GIF89a'),'image/webp':(b'RIFF',)}
@@ -237,7 +226,7 @@ def register(body: Registration, request: Request, response: Response):
             issue_session(db,response,user['id'])
     except UniqueViolation:
         raise HTTPException(409,'Не удалось зарегистрироваться с этим email')
-    return {'user':{**user,'state_ids':[],'reputation':0,'avatar_type':None,'chat_banned':False,'is_test_profile':False}}
+    return {'user':{**user,'state_ids':[],'reputation':0,'avatar_type':None}}
 
 
 @app.post('/api/auth/login')
@@ -254,7 +243,7 @@ def login(body: Credentials, request: Request, response: Response):
         if not user or user['is_test_profile']:
             raise HTTPException(401,'Неверный email или пароль')
         issue_session(db,response,user['id'])
-    return {'user':{k:user[k] for k in ('id','email','nickname','role','state_ids','reputation','avatar_type','chat_banned','is_test_profile')}}
+    return {'user':{k:user[k] for k in ('id','email','nickname','role','state_ids','reputation','avatar_type')}}
 
 
 @app.post('/api/auth/logout')
@@ -326,50 +315,17 @@ class AvatarBody(BaseModel):
     image_data: str | None = Field(default=None,max_length=2800000)
 
 
-class ChatMessageBody(BaseModel):
-    text: str | None = Field(default=None,max_length=2000)
-    image_data: str | None = Field(default=None,max_length=2800000)
-    image_selected: bool = False
-
-
-class ReactionBody(BaseModel):
-    reaction: str
-
-
-class ChatBanBody(BaseModel):
-    banned: bool
-
-
-def ensure_test_profiles(db):
-    rows=db.execute('SELECT id,email,nickname,role,reputation,is_test_profile,chat_banned FROM accounts WHERE is_test_profile=true ORDER BY id LIMIT 2').fetchall()
-    for number in range(len(rows)+1,3):
-        email=f'fauxlore-test-{number}@invalid.local'
-        row=db.execute('''INSERT INTO accounts(email,nickname,password_hash,is_test_profile)
-            VALUES(%s,%s,%s,true) ON CONFLICT(email) DO UPDATE SET is_test_profile=true
-            RETURNING id,email,nickname,role,reputation,is_test_profile,chat_banned''',
-            (email,f'Тестовый игрок {number}',hasher.hash(secrets.token_urlsafe(32)))).fetchone()
-        rows.append(row)
-    return rows
-
-
-@app.get('/api/admin/test-profiles')
-def admin_test_profiles(request: Request):
-    require_user(request,admin=True)
-    with connect() as db:
-        return ensure_test_profiles(db)
-
-
 @app.get('/api/profile')
 def profile(request: Request):
     with connect() as db:
-        actor=request_actor(db,request)
-        return {k:actor[k] for k in ('id','email','nickname','role','reputation','avatar_type','chat_banned','is_test_profile')}
+        user=require_user(request)
+        return {k:user[k] for k in ('id','email','nickname','role','reputation','avatar_type')}
 
 
 @app.post('/api/profile/avatar')
 def update_avatar(body: AvatarBody, request: Request):
     with connect() as db:
-        actor=request_actor(db,request)
+        actor=require_user(request)
         data,mime=image_bytes(body.image_data)
         db.execute('UPDATE accounts SET avatar_data=%s,avatar_type=%s WHERE id=%s',(data,mime,actor['id']))
     return {'ok':True,'avatar_url':f"/api/profile/avatar/{actor['id']}" if data else None}
@@ -382,108 +338,6 @@ def get_avatar(account_id: int, request: Request):
         row=db.execute('SELECT avatar_data,avatar_type FROM accounts WHERE id=%s',(account_id,)).fetchone()
     if not row or not row['avatar_data']:raise HTTPException(404,'Аватар не найден')
     return Response(content=bytes(row['avatar_data']),media_type=row['avatar_type'],headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
-
-
-def profile_card(row):
-    account_id=row.get('author_id',row['id'])
-    return {'id':account_id,'nickname':row['nickname'],'role':row['role'],'reputation':row['reputation'],
-            'avatar_url':f"/api/profile/avatar/{account_id}" if row.get('avatar_type') else None,
-            'is_test_profile':row.get('is_test_profile',False)}
-
-
-@app.get('/api/chat/messages')
-def chat_messages(request: Request):
-    actual=require_user(request)
-    with connect() as db:
-        actor=request_actor(db,request)
-        messages=db.execute('''SELECT m.id,m.account_id,m.body,m.image_type,m.created_at,m.deleted_at,
-                a.id AS author_id,a.nickname,a.role,a.reputation,a.avatar_type,a.chat_banned
-            FROM (SELECT * FROM chat_messages ORDER BY id DESC LIMIT 100) m
-            JOIN accounts a ON a.id=m.account_id ORDER BY m.id''').fetchall()
-        ids=[m['id'] for m in messages]
-        reactions={}
-        if ids:
-            for row in db.execute('SELECT message_id,reaction,count(*) AS total FROM chat_reactions WHERE message_id=ANY(%s) GROUP BY message_id,reaction',(ids,)).fetchall():
-                reactions.setdefault(row['message_id'],{})[row['reaction']]=row['total']
-            mine={row['message_id']:row['reaction'] for row in db.execute('SELECT message_id,reaction FROM chat_reactions WHERE message_id=ANY(%s) AND account_id=%s',(ids,actor['id'])).fetchall()}
-        else:mine={}
-        output=[]
-        for message in messages:
-            deleted=message['deleted_at'] is not None
-            output.append({'id':message['id'],'text':'Сообщение удалено администратором' if deleted else message['body'],
-                'image_url':None if deleted or not message['image_type'] else f"/api/chat/messages/{message['id']}/image",
-                'created_at':message['created_at'],'deleted':deleted,'author':profile_card(message),
-                'reactions':reactions.get(message['id'],{}),'my_reaction':mine.get(message['id']),
-                'can_delete':actual['role']=='admin' and not deleted,
-                'can_mute':actual['role']=='admin' and message['role']!='admin' and not message['chat_banned'],
-                'author_banned':message['chat_banned']})
-        return {'messages':output,'current_user':profile_card(actor),'can_moderate':actual['role']=='admin','muted':actor['chat_banned']}
-
-
-@app.post('/api/chat/messages')
-def send_chat_message(body: ChatMessageBody, request: Request):
-    actual=require_user(request);text=(body.text or '').strip() or None
-    with connect() as db:
-        actor=request_actor(db,request)
-        if actor['chat_banned']:raise HTTPException(403,'Этому профилю запрещено писать в чат')
-        data,mime=image_bytes(body.image_data)
-        if body.image_selected and not data:raise HTTPException(422,'Изображение не было передано. Выберите файл ещё раз.')
-        if not text and not data:raise HTTPException(422,'Добавьте текст или изображение')
-        row=db.execute('INSERT INTO chat_messages(account_id,body,image_data,image_type) VALUES(%s,%s,%s,%s) RETURNING id',(actor['id'],text,data,mime)).fetchone()
-    return {'id':row['id'],'image_attached':bool(data)}
-
-
-@app.get('/api/chat/messages/{message_id}/image')
-def chat_image(message_id: int, request: Request):
-    require_user(request)
-    with connect() as db:
-        row=db.execute('SELECT image_data,image_type FROM chat_messages WHERE id=%s AND deleted_at IS NULL',(message_id,)).fetchone()
-    if not row or not row['image_data']:raise HTTPException(404,'Изображение не найдено')
-    return Response(content=bytes(row['image_data']),media_type=row['image_type'],headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
-
-
-@app.post('/api/chat/messages/{message_id}/reaction')
-def react_to_message(message_id: int, body: ReactionBody, request: Request):
-    if body.reaction not in ('laugh','like','dislike'):raise HTTPException(422,'Неизвестная реакция')
-    with connect() as db:
-        actor=request_actor(db,request)
-        message=db.execute('SELECT account_id FROM chat_messages WHERE id=%s AND deleted_at IS NULL FOR UPDATE',(message_id,)).fetchone()
-        if not message:raise HTTPException(404,'Сообщение не найдено')
-        previous=db.execute('SELECT reaction FROM chat_reactions WHERE message_id=%s AND account_id=%s FOR UPDATE',(message_id,actor['id'])).fetchone()
-        new_reaction=None if previous and previous['reaction']==body.reaction else body.reaction
-        impact={'like':1,'dislike':-1,'laugh':0}
-        delta=(impact[new_reaction] if new_reaction else 0)-(impact[previous['reaction']] if previous else 0)
-        if new_reaction:
-            db.execute('''INSERT INTO chat_reactions(message_id,account_id,reaction) VALUES(%s,%s,%s)
-                ON CONFLICT(message_id,account_id) DO UPDATE SET reaction=excluded.reaction''',(message_id,actor['id'],new_reaction))
-        elif previous:db.execute('DELETE FROM chat_reactions WHERE message_id=%s AND account_id=%s',(message_id,actor['id']))
-        reputation_delta=delta if message['account_id']!=actor['id'] else 0
-        if reputation_delta:db.execute('UPDATE accounts SET reputation=reputation+%s WHERE id=%s',(reputation_delta,message['account_id']))
-        return {'reaction':new_reaction,'reputation_delta':reputation_delta}
-
-
-@app.delete('/api/admin/chat/messages/{message_id}')
-def delete_chat_message(message_id: int, request: Request):
-    require_user(request,admin=True)
-    with connect() as db:
-        message=db.execute('SELECT account_id FROM chat_messages WHERE id=%s AND deleted_at IS NULL FOR UPDATE',(message_id,)).fetchone()
-        if not message:raise HTTPException(404,'Сообщение не найдено')
-        impact=db.execute("SELECT COALESCE(sum(CASE reaction WHEN 'like' THEN 1 WHEN 'dislike' THEN -1 ELSE 0 END),0) AS score FROM chat_reactions WHERE message_id=%s",(message_id,)).fetchone()['score']
-        if impact:db.execute('UPDATE accounts SET reputation=reputation-%s WHERE id=%s',(impact,message['account_id']))
-        db.execute('DELETE FROM chat_reactions WHERE message_id=%s',(message_id,))
-        db.execute('UPDATE chat_messages SET body=NULL,image_data=NULL,image_type=NULL,deleted_at=now() WHERE id=%s',(message_id,))
-    return {'ok':True}
-
-
-@app.post('/api/admin/chat/users/{account_id}/ban')
-def set_chat_ban(account_id: int, body: ChatBanBody, request: Request):
-    admin=require_user(request,admin=True)
-    with connect() as db:
-        target=db.execute('SELECT role,is_test_profile FROM accounts WHERE id=%s FOR UPDATE',(account_id,)).fetchone()
-        if not target:raise HTTPException(404,'Пользователь не найден')
-        if target['role']=='admin' or account_id==admin['id']:raise HTTPException(403,'Нельзя ограничить чат другому администратору')
-        db.execute('UPDATE accounts SET chat_banned=%s WHERE id=%s',(body.banned,account_id))
-    return {'ok':True,'banned':body.banned}
 
 
 @app.get('/api/preferences')
@@ -805,7 +659,7 @@ def public_file(path: str):
     if not target.is_relative_to(ROOT):
         raise HTTPException(404)
     canonical=target.relative_to(ROOT).as_posix()
-    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','chat.js','map-tools.js','app-config.js','google-api.js','oauth-return.html','oauth-return.js') or canonical.startswith(roots)
+    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','map-tools.js','app-config.js','google-api.js','oauth-return.html','oauth-return.js') or canonical.startswith(roots)
     if not allowed or not target.is_file():
         raise HTTPException(404)
     return FileResponse(target)

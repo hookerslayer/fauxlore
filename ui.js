@@ -1,15 +1,13 @@
-import {mountChat,unmountChat} from './chat.js';
-import {isGoogleBackend,googleApi,googleLogin} from './google-api.js';
+import {isGoogleBackend,googleApi,googleLogin,loadInitialMap as loadGoogleInitialMap} from './google-api.js';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
 const INFO={roads:'Дороги',routes:'Торговые пути',provinces:'Названия провинций',states:'Названия государств',races:'Названия рас',religions:'Названия религий',resources:'Названия ресурсов',trade:'Названия торговых зон'};
-const MENU=['Профиль','Чат','Стена','Статистика','Уведомления','Дипломатия','Власть и династия','Провинции','Города','Экономика','Производство','Торговля','Военное дело','Шпионаж','Правила и механики','Сообщество VK'];
+const MENU=['Профиль','Стена','Статистика','Уведомления','Дипломатия','Власть и династия','Провинции','Города','Экономика','Производство','Торговля','Военное дело','Шпионаж','Правила и механики','Сообщество VK'];
 const PANELS={auth:['Авторизация','user-round','left'],menu:['Меню','menu','left'],legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emit=(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail}));
 let current=null,user=null,categories=[],allProvinces=[],mapMarkers=[],selectedProvince=null,pendingMarkerDraft=null,toolMode='',lastToolResult='',saveTimer,showStatus=()=>{},adminEditing=false,paintField='climate',paintValue='',paintActive=false,legendOpen=false;
-let testProfileId=localStorage.getItem('fauxlore.test-profile')||'',menuChatHost=null;
 const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','Государство'],['province_type','Тип провинции'],['courts','Дворы'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
 let bulkRules=[{condition_field:'climate',condition_value:'Холодный',target_field:'courts',target_value:800},{condition_field:'climate',condition_value:'Умеренный',target_field:'courts',target_value:1000},{condition_field:'climate',condition_value:'Тропический',target_field:'courts',target_value:1200}],bulkPreview=null,bulkBusy=false;
 const panelPages={};let layoutFrame=0;
@@ -22,14 +20,14 @@ export const isAdminPainting=()=>paintActive&&isAdminEditing();
 export const canRenameProvince=stateId=>!!user&&stateId!=null&&user.state_ids?.includes(Number(stateId));
 export const getCategories=()=>categories;
 export async function api(path,options={}) {
-  if(isGoogleBackend)return googleApi(path,options,testProfileId&&(path==='profile'||path.startsWith('profile/avatar')||path==='chat/messages'||path.startsWith('chat/messages/'))?testProfileId:'');
+  if(isGoogleBackend)return googleApi(path,options);
   const headers={'Content-Type':'application/json',...options.headers};
-  if(testProfileId&&(path==='profile'||path.startsWith('profile/avatar')||path==='chat/messages'||path.startsWith('chat/messages/')))headers['X-Fauxlore-Test-Profile']=testProfileId;
   const response=await fetch('/api/'+path,{...options,headers,credentials:'same-origin'});
   let body;try{body=await response.json();}catch{throw new Error('Сервер API недоступен. Запустите PostgreSQL и приложение через tools/start-local.ps1, затем откройте порт 8002.');}
   if(!response.ok){const detail=body.detail;throw new Error(typeof detail==='string'?detail:detail?.message||'Проверьте заполнение полей');}
   return body;
 }
+export function loadInitialMap(){return isGoogleBackend?loadGoogleInitialMap():api('map');}
 function save(){
   try{localStorage.setItem('fauxlore.map-settings',JSON.stringify(settings));}catch{}
   emit('map:settings',settings); clearTimeout(saveTimer);
@@ -38,9 +36,8 @@ function save(){
 function updateDockState(){document.querySelectorAll('.dock-button').forEach(b=>{const active=b.dataset.panel==='legend'?legendOpen:b.dataset.panel===current;b.classList.toggle('active',active);b.setAttribute('aria-expanded',String(active));});document.body.classList.toggle('legend-open',legendOpen);}
 function closeDrawer(){current=null;$('drawer').hidden=true;updateDockState();queueLayout();}
 function closeLegend(){legendOpen=false;$('legend-drawer').hidden=true;updateDockState();queueLayout();}
-function closeChat(){unmountChat($('chat-popover-content'));$('chat-popover').hidden=true;$('chat-toggle').setAttribute('aria-expanded','false');}
 function closeAllDrawers(){closeDrawer();closeLegend();}
-function openModal(title,auth=false){closeAllDrawers();closeChat();stopMenuChat();$('modal-title').textContent=title;$('modal').classList.toggle('auth-dialog',auth);if(!$('modal').open)$('modal').showModal();}
+function openModal(title,auth=false){closeAllDrawers();$('modal-title').textContent=title;$('modal').classList.toggle('auth-dialog',auth);if(!$('modal').open)$('modal').showModal();}
 const checks=(entries,values,group)=>Object.entries(entries).map(([key,label])=>`<label class="check-row"><span>${label}</span><input type="checkbox" data-group="${group}" data-key="${key}" ${values[key]?'checked':''}></label>`).join('');
 const group=(title,content)=>`<section class="panel-group" data-page-title="${title}">${content}</section>`;
 function markerCreateMarkup(){
@@ -159,7 +156,7 @@ function renderDrawer(){
     else if(['capital','city'].includes(field))valueControl=`<select id="admin-paint-value"><option value="true" ${paintValue==='true'?'selected':''}>Включить</option><option value="false" ${paintValue==='false'?'selected':''}>Выключить</option></select>`;
     else if(['courts','development'].includes(field))valueControl=`<input id="admin-paint-value" type="number" min="0" step="1" value="${escape(paintValue)}" placeholder="Целое число">`;
     else valueControl=`<input id="admin-paint-value" value="${escape(paintValue)}" maxlength="120" placeholder="${field==='state'?'Название государства':''}">`;
-    host.innerHTML=markerCreateMarkup()+`<section class="panel-group" data-page-title="Ручное редактирование"><span class="badge">ADMIN</span><h3>Провинции</h3><button id="toggle-admin-edit" aria-pressed="${adminEditing}">${adminEditing?'Завершить редактирование':'Режим редактирования'}</button><p class="hint">${adminEditing?'Выберите параметр и значение, затем включите нанесение и нажимайте на сухопутные провинции.':'В режиме редактирования доступны карточка провинции и массовое нанесение значений.'}</p>${adminEditing?`<label class="field"><span>Параметр</span><select id="admin-paint-field">${fields.map(([key,label])=>`<option value="${key}" ${field===key?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>Значение</span>${valueControl}</label><button id="toggle-admin-paint" aria-pressed="${paintActive}">${paintActive?'Завершить нанесение':'Наносить по кликам'}</button><p class="hint">${paintActive?'Нажимайте на провинции суши. Морские провинции не изменяются.':''}</p>`:''}</section>${group('Тестовые профили',`<p class="hint">Переключение влияет на сообщения, реакции и профиль в чате. Сессия администратора и его права сохраняются.</p><label class="field"><span>Активный профиль</span><select id="admin-test-profile"><option value="">Администратор</option></select></label>`)}${group('Массовое редактирование',`<p class="hint">Задайте одно или несколько правил «условие → значение». Сначала проверьте количество провинций, затем примените изменения.</p>${bulkRulesMarkup()}`)}`;
+    host.innerHTML=markerCreateMarkup()+`<section class="panel-group" data-page-title="Ручное редактирование"><span class="badge">ADMIN</span><h3>Провинции</h3><button id="toggle-admin-edit" aria-pressed="${adminEditing}">${adminEditing?'Завершить редактирование':'Режим редактирования'}</button><p class="hint">${adminEditing?'Выберите параметр и значение, затем включите нанесение и нажимайте на сухопутные провинции.':'В режиме редактирования доступны карточка провинции и массовое нанесение значений.'}</p>${adminEditing?`<label class="field"><span>Параметр</span><select id="admin-paint-field">${fields.map(([key,label])=>`<option value="${key}" ${field===key?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>Значение</span>${valueControl}</label><button id="toggle-admin-paint" aria-pressed="${paintActive}">${paintActive?'Завершить нанесение':'Наносить по кликам'}</button><p class="hint">${paintActive?'Нажимайте на провинции суши. Морские провинции не изменяются.':''}</p>`:''}</section>${group('Массовое редактирование',`<p class="hint">Задайте одно или несколько правил «условие → значение». Сначала проверьте количество провинций, затем примените изменения.</p>${bulkRulesMarkup()}`)}`;
   }
   if($('marker-create-form')){
     const form=$('marker-create-form');
@@ -172,11 +169,6 @@ function renderDrawer(){
   if($('admin-paint-field'))$('admin-paint-field').onchange=e=>{if(paintActive){paintActive=false;emit('map:admin-paint',null);}paintField=e.target.value;paintValue=({province_type:'Нейтральная',capital:'true',city:'true'}[paintField]||'');renderDrawer();};
   if($('admin-paint-value'))$('admin-paint-value').onchange=e=>{if(paintActive){paintActive=false;emit('map:admin-paint',null);const button=$('toggle-admin-paint');button.textContent='Наносить по кликам';button.setAttribute('aria-pressed','false');}paintValue=e.target.value;};
   if($('toggle-admin-paint'))$('toggle-admin-paint').onclick=()=>{const input=$('admin-paint-value');paintValue=input.value;if(['name','state','control'].includes(paintField)&&!paintValue.trim()){showStatus('Введите значение параметра',3000);return;}paintActive=!paintActive;emit('map:admin-paint',paintActive?{field:paintField,value:['courts','development'].includes(paintField)?Number(paintValue):['capital','city'].includes(paintField)?paintValue==='true':paintField==='terrain_type'?(paintValue||null):paintValue}:null);renderDrawer();};
-  if($('admin-test-profile')){
-    const select=$('admin-test-profile');select.value=testProfileId;
-    api('admin/test-profiles').then(profiles=>{if(!select.isConnected)return;select.innerHTML='<option value="">Администратор</option>'+profiles.map(p=>`<option value="${p.id}">${escape(p.nickname)}</option>`).join('');select.value=testProfileId;}).catch(error=>showStatus(error.message,4000));
-    select.onchange=()=>{testProfileId=select.value;try{if(testProfileId)localStorage.setItem('fauxlore.test-profile',testProfileId);else localStorage.removeItem('fauxlore.test-profile');}catch{}showStatus(testProfileId?'В чате активен тестовый профиль':'Возврат к профилю администратора',3000);if(!$('chat-popover').hidden)mountChatPanel($('chat-popover-content'));if(menuChatHost)mountChatPanel(menuChatHost);};
-  }
   host.querySelectorAll('[data-bulk-field]').forEach(select=>select.onchange=()=>{const index=Number(select.dataset.index),side=select.dataset.bulkField,field=select.value;bulkRules[index][`${side}_field`]=field;bulkRules[index][`${side}_value`]=field==='province_type'?'Нейтральная':['capital','city'].includes(field)?true:['courts','development'].includes(field)?0:null;bulkPreview=null;renderDrawer();});
   host.querySelectorAll('[data-bulk-value]').forEach(input=>input.onchange=()=>{const index=Number(input.dataset.index),side=input.dataset.bulkValue,field=bulkRules[index][`${side}_field`];let value=input.value;if(['courts','development'].includes(field))value=Number(value);else if(['capital','city'].includes(field))value=value==='true';else if(value==='')value=null;bulkRules[index][`${side}_value`]=value;bulkPreview=null;renderDrawer();});
   host.querySelectorAll('[data-bulk-remove]').forEach(button=>button.onclick=()=>{if(bulkRules.length===1){showStatus('Добавьте другое правило перед удалением этого',3000);return;}bulkRules.splice(Number(button.dataset.bulkRemove),1);bulkPreview=null;renderDrawer();});
@@ -218,7 +210,7 @@ function togglePanel(key){
   updateDockState();renderDrawer();
 }
 async function acceptUser(next){
-  user=next;if(user?.role!=='admin'){testProfileId='';try{localStorage.removeItem('fauxlore.test-profile');}catch{}adminEditing=false;paintActive=false;emit('map:admin-paint',null);}$('panel-admin').hidden=user?.role!=='admin';$('panel-auth').title=user?`Авторизация · ${user.nickname}`:'Авторизация';
+  user=next;if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);}$('panel-admin').hidden=user?.role!=='admin';$('panel-auth').title=user?`Авторизация · ${user.nickname}`:'Авторизация';
   if(!user&&current==='admin')closeDrawer();
   if(user){try{const stored=await api('preferences');settings={...settings,...stored,markers:{...settings.markers,...stored.markers},information:{...settings.information,...stored.information}};if(!LAYERS[settings.layer])settings.layer='states';save();}catch(e){showStatus(e.message,4000);}}
 }
@@ -244,28 +236,24 @@ function renderAuth(mode='login',token=''){
     }catch(error){$('auth-message').textContent=error.message;}finally{button.disabled=false;}
   };
 }
-function mountChatPanel(host){mountChat(host,{api,user:()=>user,notify:showStatus,onLogin:()=>renderAuth()});}
 async function renderProfile(host){
   if(!user){host.innerHTML='<h3>Профиль</h3><p class="hint">Войдите или зарегистрируйтесь, чтобы управлять профилем.</p><button id="profile-login">Войти</button>';host.querySelector('#profile-login').onclick=()=>renderAuth();return;}
   host.innerHTML='<p class="hint">Загружаю профиль…</p>';
   try{
     const profile=await api('profile');if(!host.isConnected)return;
     const avatar=profile.avatar_url?`<img class="profile-avatar" src="${escape(profile.avatar_url)}${profile.avatar_url.startsWith('data:')?'':`?v=${Date.now()}`}" alt="Аватар">`:`<span class="profile-avatar profile-avatar-fallback">${escape(profile.nickname.slice(0,1).toUpperCase())}</span>`;
-    host.innerHTML=`<div class="profile-card">${avatar}<div><h3>${escape(profile.nickname)}${profile.is_test_profile?' · тестовый профиль':''}</h3><p class="hint">${escape(profile.email||'Тестовый аккаунт')} · ${profile.role==='admin'?'Администратор':'Игрок'}</p><p>Репутация: <strong>${profile.reputation}</strong></p></div></div><div class="profile-avatar-actions"><label class="chat-attach">${profile.avatar_url?'Сменить аватар':'Загрузить аватар'}<input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>${profile.avatar_url?'<button id="profile-avatar-delete">Удалить аватар</button>':''}<span class="hint">PNG, JPEG, GIF или WebP · до 2 МБ</span></div>`;
+    host.innerHTML=`<div class="profile-card">${avatar}<div><h3>${escape(profile.nickname)}</h3><p class="hint">${escape(profile.email||'')} · ${profile.role==='admin'?'Администратор':'Игрок'}</p><p>Репутация: <strong>${profile.reputation}</strong></p></div></div><div class="profile-avatar-actions"><label class="profile-avatar-upload">${profile.avatar_url?'Сменить аватар':'Загрузить аватар'}<input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>${profile.avatar_url?'<button id="profile-avatar-delete">Удалить аватар</button>':''}<span class="hint">PNG, JPEG, GIF или WebP · до 2 МБ</span></div>`;
     const avatarImage=host.querySelector('.profile-avatar');if(avatarImage)avatarImage.onerror=()=>{const fallback=document.createElement('span');fallback.className='profile-avatar profile-avatar-fallback';fallback.textContent=profile.nickname.slice(0,1).toUpperCase();fallback.setAttribute('aria-label','Аватар недоступен');avatarImage.replaceWith(fallback);};
     host.querySelector('#profile-avatar-file').onchange=async event=>{const file=event.target.files?.[0];if(!file)return;if(file.size>2*1024*1024){showStatus('Аватар должен быть не больше 2 МБ',4000);return;}try{const image_data=await readImageData(file);await api('profile/avatar',{method:'POST',body:JSON.stringify({image_data})});showStatus('Аватар обновлён',2500);renderProfile(host);}catch(error){showStatus(error.message,5000);}};
     host.querySelector('#profile-avatar-delete')?.addEventListener('click',async()=>{try{await api('profile/avatar',{method:'POST',body:JSON.stringify({image_data:null})});showStatus('Аватар удалён',2500);renderProfile(host);}catch(error){showStatus(error.message,5000);}});
-  }catch(error){host.innerHTML=`<p class="chat-error">${escape(error.message)}</p>`;}
+  }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
 }
 function readImageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Не удалось прочитать изображение'));reader.readAsDataURL(file);});}
-function stopMenuChat(){if(menuChatHost)unmountChat(menuChatHost);menuChatHost=null;}
 function renderMenu(section){
-  stopMenuChat();
   openModal('Меню');const host=$('modal-content');host.innerHTML=`<div class="menu-layout"><nav class="menu-tabs" aria-label="Разделы сайта">${MENU.map(name=>`<button data-section="${name}" class="${name===section?'active':''}">${name}</button>`).join('')}</nav><section id="menu-section" class="placeholder"></section></div>`;
   host.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>renderMenu(b.dataset.section));
   const content=$('menu-section');
   if(section==='Профиль')renderProfile(content);
-  else if(section==='Чат'){content.classList.add('chat-menu');content.innerHTML='<div id="menu-chat-host" class="chat-body"></div>';menuChatHost=content.querySelector('#menu-chat-host');mountChatPanel(menuChatHost);}
   else if(section==='Провинции'){
     content.innerHTML='<h3>Провинции</h3><p class="hint">Найдите провинцию по ID в панели «Информация» или выберите её на карте.</p><button id="menu-provinces">Открыть информацию</button>';
     $('menu-provinces').onclick=()=>{$('modal').close();togglePanel('info');};
@@ -278,9 +266,7 @@ export function initUI(notify){
     const button=document.createElement('button');button.className='dock-button';button.id=`panel-${key}`;button.dataset.panel=key;button.title=name;button.setAttribute('aria-label',name);button.setAttribute('aria-expanded','false');button.innerHTML=`<img src="assets/icons/${icon}.svg" alt="">`;
     if(key==='admin')button.hidden=true;button.onclick=()=>togglePanel(key);$(`${side}-dock`).append(button);
   }
-  $('close-drawer').onclick=closeDrawer;$('close-legend').onclick=closeLegend;$('close-modal').onclick=()=>$('modal').close();$('chat-close').onclick=closeChat;
-  $('chat-toggle').onclick=()=>{const panel=$('chat-popover');if(!panel.hidden){closeChat();return;}panel.hidden=false;$('chat-toggle').setAttribute('aria-expanded','true');mountChatPanel($('chat-popover-content'));};
-  $('modal').addEventListener('close',stopMenuChat);
+  $('close-drawer').onclick=closeDrawer;$('close-legend').onclick=closeLegend;$('close-modal').onclick=()=>$('modal').close();
   $('modal').addEventListener('click',e=>{if(e.target===$('modal'))$('modal').close();});
   const observer=new ResizeObserver(queueLayout);observer.observe($('selection'));observer.observe($('map-scale'));
   window.addEventListener('resize',queueLayout);
@@ -288,7 +274,7 @@ export function initUI(notify){
   window.addEventListener('tools:result',e=>{lastToolResult=e.detail;if($('tool-result'))$('tool-result').textContent=e.detail;queueLayout();});
   const reset=new URLSearchParams(location.hash.slice(1)).get('reset');if(reset){history.replaceState(null,'',location.pathname);renderAuth('reset',reset);}
 }
-export async function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;try{await acceptUser((await api('auth/me')).user);}catch(e){showStatus(e.message,4000);}emit('map:settings',settings);}
+export function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;emit('map:settings',settings);api('auth/me').then(result=>acceptUser(result.user)).catch(e=>showStatus(e.message,4000));}
 window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;});
 window.addEventListener('map:marker-location-selected',async e=>{try{const marker=await api('admin/markers',{method:'POST',body:JSON.stringify({...pendingMarkerDraft,...e.detail})});emit('map:marker-created',marker);pendingMarkerDraft=null;const form=$('marker-create-form');if(form){form.reset();form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;$('marker-province').textContent='Заполните поля, затем укажите точку на карте.';}showStatus('Маркер создан в выбранной точке',2500);}catch(error){pendingMarkerDraft=null;emit('map:place-marker',null);showStatus(error.message,5000);const form=$('marker-create-form');if(form){form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;}}});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
@@ -297,6 +283,19 @@ window.addEventListener('map:refreshed',e=>{categories=e.detail.categories;allPr
 let markerPopover=null;
 function closeMarkerPopover(){markerPopover?.remove();markerPopover=null;}
 window.addEventListener('map:close-marker-popup',closeMarkerPopover);
+function positionMarkerPopover({x,y,visible}){
+  if(!markerPopover)return;
+  markerPopover.hidden=!visible;
+  if(!visible)return;
+  const rect=markerPopover.getBoundingClientRect(),gap=12,margin=8;
+  const left=x+gap+rect.width<=innerWidth-margin?x+gap:x-gap-rect.width;
+  const top=y+gap+rect.height<=innerHeight-margin?y+gap:y-gap-rect.height;
+  markerPopover.style.left=`${Math.max(margin,Math.min(innerWidth-rect.width-margin,left))}px`;
+  markerPopover.style.top=`${Math.max(margin,Math.min(innerHeight-rect.height-margin,top))}px`;
+}
+window.addEventListener('map:marker-position',event=>{
+  if(markerPopover?.dataset.markerId===String(event.detail.id))positionMarkerPopover(event.detail);
+});
 window.addEventListener('map:marker-selected',event=>{
   if(!isAdmin())return;
   closeMarkerPopover();
@@ -306,6 +305,6 @@ window.addEventListener('map:marker-selected',event=>{
   const content=document.createElement('div');content.className='marker-popover-content';
   for(const [label,value] of [['Название',marker.name],['Тип',MARKERS[marker.type]||marker.type],['Государство',marker.state_name||'—'],['ID провинции',marker.province_id],['Координаты',`${Number(marker.x).toFixed(1)}, ${Number(marker.y).toFixed(1)}`]]){const row=document.createElement('p');row.textContent=`${label}: ${value}`;content.append(row);}
   const remove=document.createElement('button');remove.type='button';remove.className='marker-popover-delete';remove.textContent='Удалить маркер';remove.onclick=async()=>{if(!window.confirm(`Удалить маркер «${marker.name}»?`))return;remove.disabled=true;try{await api(`admin/markers/${marker.id}`,{method:'DELETE'});emit('map:marker-deleted',Number(marker.id));closeMarkerPopover();showStatus('Маркер удалён',2000);}catch(error){remove.disabled=false;showStatus(error.message,5000);}};
-  box.append(content,remove);document.body.append(box);markerPopover=box;
-  const rect=box.getBoundingClientRect();box.style.left=`${Math.min(innerWidth-rect.width-8,Math.max(8,event.detail.screenX+12))}px`;box.style.top=`${Math.min(innerHeight-rect.height-8,Math.max(8,event.detail.screenY+12))}px`;
+  box.append(content,remove);box.dataset.markerId=String(marker.id);document.body.append(box);markerPopover=box;
+  positionMarkerPopover({x:event.detail.screenX,y:event.detail.screenY,visible:true});
 });

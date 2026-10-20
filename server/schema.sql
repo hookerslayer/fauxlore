@@ -84,26 +84,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS reputation integer NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS avatar_data bytea;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS avatar_type text;
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS chat_banned boolean NOT NULL DEFAULT false;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS is_test_profile boolean NOT NULL DEFAULT false;
-CREATE TABLE IF NOT EXISTS chat_messages (
-    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    account_id bigint NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    body text,
-    image_data bytea,
-    image_type text,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    deleted_at timestamptz,
-    CHECK(body IS NULL OR length(body)<=2000),
-    CHECK((image_data IS NULL)=(image_type IS NULL))
-);
-CREATE INDEX IF NOT EXISTS chat_messages_created_idx ON chat_messages(created_at DESC,id DESC);
-CREATE TABLE IF NOT EXISTS chat_reactions (
-    message_id bigint NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
-    account_id bigint NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    reaction text NOT NULL CHECK(reaction IN ('laugh','like','dislike')),
-    PRIMARY KEY(message_id,account_id)
-);
 CREATE TABLE IF NOT EXISTS account_states (
     account_id bigint NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     layer text NOT NULL DEFAULT 'states' CHECK(layer='states'),

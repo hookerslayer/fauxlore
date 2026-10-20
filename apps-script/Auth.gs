@@ -25,10 +25,9 @@ function user_(db,token){
   return session?db.rows('accounts').find(row=>row.id===session.account_id)||null:null;
 }
 function require_(db,request,admin){const user=user_(db,request.token);if(!user)fail_(401,'Войдите через Google');if(admin&&user.role!=='admin')fail_(403,'Нужна роль admin');return user;}
-function actor_(db,request){const user=require_(db,request,false);if(!request.test_profile)return user;if(user.role!=='admin')fail_(403,'Тестовые профили доступны только администратору');const actor=db.rows('accounts').find(r=>r.id===Number(request.test_profile)&&r.is_test_profile);if(!actor)fail_(403,'Тестовый профиль не найден');return actor;}
 function publicUser_(db,row){
   if(!row)return null;
-  const keys=['id','email','nickname','role','reputation','avatar_type','chat_banned','is_test_profile'];
+  const keys=['id','email','nickname','role','reputation','avatar_type'];
   const result=Object.fromEntries(keys.map(k=>[k,row[k]]));
   result.state_ids=db.rows('account_states').filter(r=>r.account_id===row.id).map(r=>r.state_id);
   result.avatar_url=row.avatar_data?'data:'+row.avatar_type+';base64,'+db.blob(row.avatar_data):null;
@@ -72,7 +71,7 @@ function authComplete_(db,body,requestOrigin){
   if(!account){
     const legacy=accounts.find(r=>String(r.email).toLowerCase()===email&&!r.is_test_profile);
     if(legacy){if(legacy.google_sub||(!email.endsWith('@gmail.com')&&!identity.hd))fail_(403,'Для привязки существующего аккаунта обратитесь к администратору');account=legacy;account.google_sub=identity.sub;}
-    else account=db.add('accounts',{id:db.nextId('accounts'),email,nickname:String(identity.name||email.split('@')[0]).slice(0,40),password_hash:'GOOGLE_ONLY',role:'player',created_at:now_(),reputation:0,avatar_data:null,avatar_type:null,chat_banned:false,is_test_profile:false,google_sub:identity.sub});
+    else account=db.add('accounts',{id:db.nextId('accounts'),email,nickname:String(identity.name||email.split('@')[0]).slice(0,40),password_hash:'GOOGLE_ONLY',role:'player',created_at:now_(),reputation:0,avatar_data:null,avatar_type:null,google_sub:identity.sub});
   }
   const token=random_();db.remove('sessions',r=>Date.parse(r.expires_at)<=Date.now());
   db.add('sessions',{token_hash:hash_(token),account_id:account.id,expires_at:new Date(Date.now()+7*86400000).toISOString()});

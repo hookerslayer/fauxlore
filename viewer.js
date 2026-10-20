@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
@@ -16,6 +16,7 @@ let regionSlots = 25;
 let colorsTexture,controlColorsTexture,terrainTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
 const thematicComponents=new Map();
 let mapMarkers=[];
+let selectedMarkerPopup=null;
 const markerIcons=Object.fromEntries(['capital','city','fortress','port'].map(type=>{const image=new Image();image.src=`assets/markers/${type}.svg`;image.onload=schedule;return[type,image];}));
 const MARKER_HEIGHT={capital:12,city:10,fortress:8,port:6};
 const status = (text, timeout = 0) => {
@@ -247,7 +248,7 @@ function tileSlotFor(key,visible){
   tileCache.set(key,{slot,last:++tileUse}); return slot;
 }
 function clearTileSlot(key,slot){const[x,y]=key.split(',').map(Number);gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,x,y,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([0]));gl.activeTexture(gl.TEXTURE0);}
-async function loadTile(tx,ty,slot){const key=`${tx},${ty}`;tileLoading.set(key,slot);try{const response=await fetch(`map-data/tiles/${key.replace(',', '_')}.png?v=${tileRevision}`);if(!response.ok)throw new Error(`Не найден тайл ${key}`);const bitmap=await createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,slot,bitmap.width,bitmap.height,1,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);bitmap.close();const current=tileCache.get(key);if(current&&current.slot===slot){gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,tx,ty,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([slot+1]));gl.activeTexture(gl.TEXTURE0);}}catch(error){console.warn(error)}finally{if(tileLoading.get(key)===slot)tileLoading.delete(key);schedule();}}
+async function loadTile(tx,ty,slot){const key=`${tx},${ty}`;tileLoading.set(key,slot);try{const response=await fetch(`map-data/tiles/${key.replace(',', '_')}.png?v=${tileRevision}`);if(!response.ok)throw new Error(`Не найден тайл ${key}`);const bitmap=await createImageBitmap(await response.blob(),{premultiplyAlpha:'none',colorSpaceConversion:'none'});gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);gl.texSubImage3D(gl.TEXTURE_2D_ARRAY,0,0,0,slot,bitmap.width,bitmap.height,1,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);bitmap.close();const current=tileCache.get(key);if(current&&current.slot===slot){gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,tileSlotsTexture);gl.texSubImage2D(gl.TEXTURE_2D,0,tx,ty,1,1,gl.RED,gl.UNSIGNED_BYTE,new Uint8Array([slot+1]));gl.activeTexture(gl.TEXTURE0);}}catch(error){console.warn(error)}finally{if(tileLoading.get(key)===slot)tileLoading.delete(key);for(const components of thematicComponents.values())for(const component of components)component.labelWaiting=false;schedule();}}
 function ensureVisibleTiles(){const visible=new Set(tileRange().map(([x,y])=>`${x},${y}`));for(const key of visible){const [tx,ty]=key.split(',').map(Number);const slot=tileSlotFor(key,visible);if(slot<0||tileLoading.has(key))continue;if(!tileCache.get(key)?.loaded){tileCache.get(key).loaded=true;loadTile(tx,ty,slot);}}}
 function updateTileCapacity(){const next=Math.min(regionSlots,view.scale>view.min*1.8?12:25);if(next!==cacheSlots)resetTileCache(next);}
 function draw() {
@@ -256,6 +257,10 @@ function draw() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0,0,canvas.width,canvas.height);
   uniforms(); gl.uniform1i(loc.Pick, 0); gl.drawArrays(gl.TRIANGLES,0,3);
   drawLabels(); drawMeasurements(); updateScale();
+  if(selectedMarkerPopup){
+    const x=selectedMarkerPopup.x*view.scale+view.x,y=selectedMarkerPopup.y*view.scale+view.y;
+    window.dispatchEvent(new CustomEvent('map:marker-position',{detail:{id:selectedMarkerPopup.id,x,y,visible:x>=0&&x<=innerWidth&&y>=0&&y<=innerHeight}}));
+  }
 }
 function getThematicComponents(layer){
   if(thematicComponents.has(layer))return thematicComponents.get(layer);
@@ -272,9 +277,73 @@ function getThematicComponents(layer){
     }
     const area=members.reduce((sum,p)=>sum+p.area,0);
     const center=members.reduce((sum,p)=>[sum[0]+p.center[0]*p.area,sum[1]+p.center[1]*p.area],[0,0]).map(value=>value/area);
-    components.push({name:category.name,members,area,center});
+    const bounds=members.reduce((b,p)=>{const r=Math.sqrt(Math.max(1,p.area)/Math.PI);return[Math.min(b[0],p.center[0]-r),Math.min(b[1],p.center[1]-r),Math.max(b[2],p.center[0]+r),Math.max(b[3],p.center[1]+r)];},[Infinity,Infinity,-Infinity,-Infinity]);
+    components.push({name:category.name,layer,categoryId:category.id,members,area,center,bounds});
   }
   components.sort((a,b)=>b.area-a.area);thematicComponents.set(layer,components);return components;
+}
+function pointOnPath(path,distance){
+  let remaining=distance;
+  for(let i=1;i<path.length;i++){
+    const a=path[i-1],b=path[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
+    if(remaining<=length||i===path.length-1){const t=length?Math.max(0,Math.min(1,remaining/length)):0;return{x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,angle:Math.atan2(b[1]-a[1],b[0]-a[0])};}
+    remaining-=length;
+  }
+  return{x:path[0][0],y:path[0][1],angle:0};
+}
+function thematicLabelPlacement(component){
+  const members=component.members;if(!members.length)return null;
+  let xx=0,xy=0,yy=0,total=0;
+  for(const p of members){const weight=Math.max(1,p.area),dx=p.center[0]-component.center[0],dy=p.center[1]-component.center[1];xx+=weight*dx*dx;xy+=weight*dx*dy;yy+=weight*dy*dy;total+=weight;}
+  const angle=.5*Math.atan2(2*xy,xx-yy),axis=[Math.cos(angle),Math.sin(angle)];
+  if(axis[0]<0){axis[0]*=-1;axis[1]*=-1;}
+  const normal=[-axis[1],axis[0]],points=members.map(p=>{
+    const dx=p.center[0]-component.center[0],dy=p.center[1]-component.center[1],radius=Math.sqrt(Math.max(1,p.area)/Math.PI);
+    return{t:dx*axis[0]+dy*axis[1],n:dx*normal[0]+dy*normal[1],radius,weight:Math.max(1,p.area)};
+  });
+  const low=Math.min(...points.map(p=>p.t-p.radius)),high=Math.max(...points.map(p=>p.t+p.radius));
+  const nLow=Math.min(...points.map(p=>p.n-p.radius)),nHigh=Math.max(...points.map(p=>p.n+p.radius));
+  const major=high-low,minor=nHigh-nLow;if(major<1||minor<1)return null;
+  const bins=Math.max(3,Math.min(9,Math.round(Math.sqrt(members.length)))),sums=Array.from({length:bins},()=>({n:0,w:0}));
+  for(const p of points){const index=Math.max(0,Math.min(bins-1,Math.floor((p.t-low)/major*bins)));sums[index].n+=p.n*p.weight;sums[index].w+=p.weight;}
+  const values=sums.map((bin,i)=>bin.w?bin.n/bin.w:null);
+  for(let i=0;i<bins;i++)if(values[i]===null){let before=i-1,after=i+1;while(before>=0&&values[before]===null)before--;while(after<bins&&values[after]===null)after++;values[i]=before>=0&&after<bins?values[before]+(values[after]-values[before])*(i-before)/(after-before):before>=0?values[before]:after<bins?values[after]:0;}
+  const smoothed=values.map((value,i)=>(values[Math.max(0,i-1)]+2*value+values[Math.min(bins-1,i+1)])/4);
+  const path=smoothed.map((n,i)=>{const t=low+major*i/(bins-1);return[component.center[0]+axis[0]*t+normal[0]*n,component.center[1]+axis[1]*t+normal[1]*n];});
+  const pathLength=path.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p[0]-path[i][0],p[1]-path[i][1]),0);
+  ctx.save();ctx.font='600 100px system-ui';const textRatio=ctx.measureText(component.name).width/100;ctx.restore();
+  let fontSize=Math.min(minor*.29,major*.34/Math.max(textRatio,.1));
+  if(fontSize*view.scale<8)return{deferred:true};
+  for(let attempt=0;attempt<4;attempt++,fontSize*=.82){
+    const textWidth=textRatio*fontSize;if(textWidth>pathLength*.9)continue;
+    const start=(pathLength-textWidth)/2,samples=5;let fits=true,waiting=false;
+    for(let i=0;i<samples&&fits;i++){
+      const point=pointOnPath(path,start+textWidth*i/(samples-1)),nx=-Math.sin(point.angle),ny=Math.cos(point.angle);
+      for(const offset of [-fontSize*.5,0,fontSize*.5]){
+        const wx=point.x+nx*offset,wy=point.y+ny*offset,tx=Math.floor(wx/tileSize),ty=Math.floor(wy/tileSize);
+        if(wx<region[0]||wy<region[1]||wx>=region[2]||wy>=region[3]){fits=false;break;}
+        const sx=wx*view.scale+view.x,sy=wy*view.scale+view.y;if(sx<0||sx>innerWidth||sy<0||sy>innerHeight)continue;
+        if(!tileCache.has(`${tx},${ty}`)){waiting=true;fits=false;break;}
+        const id=pickProvinceId(wx*view.scale+view.x,wy*view.scale+view.y),province=provinces.get(id);
+        if(!province||String(province.layers?.[component.layer]?.id)!==String(component.categoryId)){fits=false;break;}
+      }
+    }
+    if(waiting)return undefined;
+    if(fits)return{path,pathLength,fontSize,hidden:false};
+  }
+  return null;
+}
+function drawThematicLabel(component,placement,paint=true){
+  if(placement.hidden)return null;
+  const fontSize=placement.fontSize*view.scale;if(fontSize<8)return null;
+  ctx.save();ctx.font=`700 ${fontSize}px system-ui`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineJoin='round';ctx.lineWidth=Math.max(.75,fontSize*.06);ctx.strokeStyle='#13232ddd';ctx.fillStyle='#e7c667';
+  const chars=Array.from(component.name),widths=chars.map(char=>ctx.measureText(char).width),textWidth=widths.reduce((a,b)=>a+b,0),start=(placement.pathLength-textWidth/view.scale)/2;let cursor=0,minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(let i=0;i<chars.length;i++){
+    const point=pointOnPath(placement.path,start+(cursor+widths[i]/2)/view.scale);cursor+=widths[i];
+    const x=point.x*view.scale+view.x,y=point.y*view.scale+view.y,halfWidth=(widths[i]+fontSize)*.5;minX=Math.min(minX,x-halfWidth);maxX=Math.max(maxX,x+halfWidth);minY=Math.min(minY,y-fontSize);maxY=Math.max(maxY,y+fontSize);
+    if(paint){ctx.save();ctx.translate(x,y);ctx.rotate(point.angle);ctx.strokeText(chars[i],0,0);ctx.fillText(chars[i],0,0);ctx.restore();}
+  }
+  const outline=Math.max(.75,fontSize*.06);ctx.restore();return{left:minX-outline,right:maxX+outline,top:minY-outline,bottom:maxY+outline};
 }
 function drawLabels() {
   const dpr = labels.width/innerWidth;
@@ -320,22 +389,23 @@ function drawLabels() {
     if(!text)continue;
     occupied.add(key);ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';const textWidth=ctx.measureText(text).width;labelRects.push({left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9});ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
   }
+  let pendingLabelLayout=false,layoutsThisFrame=0;
   for(const layer of ['states','races','religions','resources','trade']){
     if(!activeSettings.information[layer])continue;
-    const components=getThematicComponents(layer);ctx.font='600 13px system-ui';ctx.fillStyle='#e7c667';
+    const components=getThematicComponents(layer);
     for(const component of components){
-      const candidates=[...component.members].sort((a,b)=>Math.hypot(a.center[0]-component.center[0],a.center[1]-component.center[1])-Math.hypot(b.center[0]-component.center[0],b.center[1]-component.center[1]));
-      const width=ctx.measureText(component.name).width;
-      for(const province of candidates){
-        const [wx,wy]=province.center;if(wx<region[0]||wy<region[1]||wx>=region[2]||wy>=region[3])continue;
-        const x=wx*view.scale+view.x,y=wy*view.scale+view.y;if(x<-width/2||x>innerWidth+width/2||y<10||y>innerHeight-10)continue;
-        const key=`${Math.floor(x/42)},${Math.floor(y/18)}`;if(occupied.has(key))continue;
-        const rect={left:x-width/2-4,right:x+width/2+4,top:y-10,bottom:y+10};
-        if(labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4))continue;
-        occupied.add(key);labelRects.push(rect);ctx.strokeText(component.name,x,y);ctx.fillText(component.name,x,y);break;
-      }
+      const [minX,minY,maxX,maxY]=component.bounds.map((value,index)=>value*view.scale+(index%2===0?view.x:view.y));
+      if(maxX<0||minX>innerWidth||maxY<0||minY>innerHeight)continue;
+      if(!component.labelPlacement&&!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame<2){layoutsThisFrame++;const placement=thematicLabelPlacement(component);if(placement===undefined)component.labelWaiting=true;else if(placement.deferred)component.labelDeferredScale=view.scale;else component.labelPlacement=placement||{hidden:true};}
+      if(!component.labelPlacement){if(!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame>=2)pendingLabelLayout=true;continue;}
+      const rect=drawThematicLabel(component,component.labelPlacement,false);if(!rect)continue;
+      if(rect.right<0||rect.left>innerWidth||rect.bottom<0||rect.top>innerHeight)continue;
+      const key=`${Math.floor((rect.left+rect.right)/84)},${Math.floor((rect.top+rect.bottom)/36)}`;
+      if(occupied.has(key)||labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4))continue;
+      occupied.add(key);labelRects.push(rect);drawThematicLabel(component,component.labelPlacement,true);
     }
   }
+  if(pendingLabelLayout)schedule();
 }
 function updateScale(){
   const length=niceLength(140/view.scale),pixels=length*view.scale;
@@ -369,7 +439,8 @@ function mapClick(x,y){
     status('Сохраняю маркер…',2500);return;
   }
   const marker=isAdmin()?pickMarker(x,y):null;
-  if(marker){window.dispatchEvent(new CustomEvent('map:marker-selected',{detail:{...marker,screenX:x,screenY:y}}));return;}
+  if(marker){selectedMarkerPopup=marker;window.dispatchEvent(new CustomEvent('map:marker-selected',{detail:{...marker,screenX:x,screenY:y}}));return;}
+  selectedMarkerPopup=null;
   window.dispatchEvent(new CustomEvent('map:close-marker-popup'));
   if(isAdminPainting()&&adminPaint){
     const id=pickProvinceId(x,y),province=provinces.get(id);
@@ -521,9 +592,20 @@ window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(admin
 let markerPlacement=null;
 window.addEventListener('map:place-marker',e=>{markerPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!markerPlacement);if(markerPlacement)status('Щёлкните по точке провинции для размещения маркера',0);else status('',0);});
 window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
-window.addEventListener('map:refresh',async()=>{try{const data=await api('map');const nextTileRevision=String(data.tile_revision||0);if(nextTileRevision!==tileRevision){tileRevision=nextTileRevision;resetTileCache(cacheSlots);}categoryList=data.categories;mapMarkers=data.markers||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();}catch(error){status(error.message,5000);}});
+function installMapData(data){
+  const nextTileRevision=String(data.tile_revision||0),nextRegion=data.region||region,regionChanged=JSON.stringify(nextRegion)!==JSON.stringify(region),tileChanged=nextTileRevision!==tileRevision;
+  tileRevision=nextTileRevision;region=nextRegion;
+  regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
+  if(ready&&(tileChanged||regionChanged))resetTileCache(Math.min(regionSlots,view.scale>view.min*1.8?12:25));
+  categoryList=data.categories;mapMarkers=data.markers||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();
+  window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();
+}
+window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
+window.addEventListener('map:cache-error',e=>status(e.detail?.message||'Не удалось обновить карту из Google Sheets',4000));
+window.addEventListener('map:refresh',async()=>{try{installMapData(await api('map'));}catch(error){status(error.message,5000);}});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
-window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);schedule();});
+window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;schedule();});
+window.addEventListener('map:close-marker-popup',()=>{selectedMarkerPopup=null;});
 window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});
 window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});
 window.addEventListener('map:tool',e=>{toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
@@ -537,7 +619,7 @@ window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await api('map');region=data.region;tileRevision=String(data.tile_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];provinceAdjacency=data.adjacency||{};
+  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));

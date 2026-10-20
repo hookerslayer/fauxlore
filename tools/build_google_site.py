@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-PUBLIC=('index.html','viewer.js','viewer.css','ui.js','chat.js','map-tools.js','google-api.js','oauth-return.html','oauth-return.js')
+PUBLIC=('index.html','viewer.js','viewer.css','ui.js','map-tools.js','google-api.js','oauth-return.html','oauth-return.js')
 
 def main():
     parser=argparse.ArgumentParser()
@@ -18,7 +18,7 @@ def main():
     config={'backend':'apps-script','appsScriptUrl':args.apps_script_url}
     (target/'app-config.js').write_text('window.FAUXLORE_CONFIG='+json.dumps(config)+';\n',encoding='utf-8')
     upload=ROOT/'.local/google-upload';upload.mkdir(parents=True,exist_ok=True)
-    code='\n\n'.join((ROOT/'apps-script'/name).read_text(encoding='utf-8') for name in ('Store.gs','Auth.gs','Map.gs','Chat.gs','Code.gs','Setup.gs'))
+    code='\n\n'.join((ROOT/'apps-script'/name).read_text(encoding='utf-8') for name in ('Store.gs','Auth.gs','Map.gs','Code.gs','Setup.gs'))
     (upload/'Code.txt').write_text(code,encoding='utf-8-sig')
     for source,dest in (('Bridge.html','Bridge.txt'),('appsscript.json','Manifest.txt')):
         (upload/dest).write_text((ROOT/'apps-script'/source).read_text(encoding='utf-8'),encoding='utf-8-sig')

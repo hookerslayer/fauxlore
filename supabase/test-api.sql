@@ -11,6 +11,10 @@ do $$ begin
     perform public.fauxlore_api('admin/provinces/1','PATCH','{"courts":3}',gen_random_uuid());
     raise exception 'Guest mutation permitted';
   exception when invalid_authorization_specification then null; end;
+  begin
+    perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#112233"}',gen_random_uuid());
+    raise exception 'Guest color mutation permitted';
+  exception when invalid_authorization_specification then null; end;
   begin perform 1 from fauxlore.accounts; raise exception 'Account disclosure';
   exception when insufficient_privilege then null; end;
 end $$;
@@ -31,6 +35,23 @@ set local role authenticated;
 do $$ declare p jsonb; pid integer; result jsonb; repeated jsonb; request uuid:=gen_random_uuid(); marker jsonb;
 begin
   if public.fauxlore_api('auth/me')->'user'->>'role'<>'admin' then raise exception 'Legacy administrator lost'; end if;
+  marker:=public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#123ABC"}',request);
+  if marker->>'color'<>'#123abc' then raise exception 'Color update'; end if;
+  if marker<>public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#123ABC"}',request) then raise exception 'Color idempotency'; end if;
+  request:=gen_random_uuid();
+  if not exists(select 1 from jsonb_array_elements(public.fauxlore_api('map')->'categories') c where c->>'layer'='resources' and c->>'id'='2' and c->>'color'='#123abc') then raise exception 'Map color not updated'; end if;
+  begin
+    perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"red"}',gen_random_uuid());
+    raise exception 'Invalid color accepted';
+  exception when invalid_parameter_value then null; end;
+  begin
+    perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#112233","name":"Renamed"}',gen_random_uuid());
+    raise exception 'Unexpected category field accepted';
+  exception when invalid_parameter_value then null; end;
+  begin
+    perform public.fauxlore_api('admin/categories/resources/999999','PATCH','{"color":"#112233"}',gen_random_uuid());
+    raise exception 'Missing category accepted';
+  exception when no_data_found then null; end;
   select value into p from jsonb_array_elements(public.fauxlore_api('map')->'provinces') where value->>'kind'='land' limit 1;
   pid:=(p->>'id')::integer;
   result:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"courts":999,"terrain_type":"forest"}',request);
@@ -67,6 +88,8 @@ select set_config('request.jwt.claims','{"sub":"a7f00a00-0000-4000-8000-00000000
 set local role authenticated;
 do $$ begin
   if public.fauxlore_api('auth/me')->'user'->>'role'<>'player' then raise exception 'Metadata privilege escalation'; end if;
+  begin perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#112233"}',gen_random_uuid()); raise exception 'Player color mutation permitted';
+  exception when insufficient_privilege then null; end;
   begin perform public.fauxlore_api('admin/provinces/1','PATCH','{"courts":3}',gen_random_uuid()); raise exception 'Player mutation permitted';
   exception when insufficient_privilege then null; end;
 end $$;

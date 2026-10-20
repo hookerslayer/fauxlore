@@ -338,6 +338,14 @@ begin
     end if;
     update fauxlore.accounts set avatar_base64=avatar,avatar_type=mime_value where id=a.id;
     result:='{"ok":true}';
+  elsif path~'^admin/categories/(states|races|religions|resources|trade|climate)/[0-9]+$' and method='PATCH' then
+    if body-'color'<>'{}' or jsonb_typeof(body->'color') is distinct from 'string' or
+      (body->>'color')!~'^#[0-9a-fA-F]{6}$' then
+      raise sqlstate '22023' using message='Укажите цвет в формате #RRGGBB'; end if;
+    update fauxlore.map_categories set color=lower(body->>'color')
+      where layer=split_part(path,'/',3) and id=split_part(path,'/',4)::integer
+      returning to_jsonb(map_categories.*) into result;
+    if not found then raise sqlstate 'P0002' using message='Значение параметра не найдено'; end if;
   elsif path in ('admin/provinces/bulk-preview','admin/provinces/bulk-edit') and method='POST' then
     result:=fauxlore.bulk_edit(body,path='admin/provinces/bulk-edit');
   elsif path~'^admin/provinces/\d+$' and method='PATCH' then
@@ -369,7 +377,7 @@ begin
     result:=jsonb_build_object('id',marker_id,'deleted',true);
   else raise sqlstate 'P0002' using message='Метод API не найден';
   end if;
-  if path like 'admin/provinces/%' and path<>'admin/provinces/bulk-preview' or path like 'admin/markers%' or path like 'provinces/%' then
+  if path like 'admin/provinces/%' and path<>'admin/provinces/bulk-preview' or path like 'admin/markers%' or path like 'admin/categories/%' or path like 'provinces/%' then
     update fauxlore._settings set value_json=to_jsonb((value_json#>>'{}')::bigint+1) where key='data_revision';
   end if;
   insert into fauxlore.operations(account_id,request_id,fingerprint,result) values(a.id,api.request_id,fingerprint,result);

@@ -11,6 +11,14 @@ let current=null,user=null,categories=[],allProvinces=[],mapMarkers=[],selectedP
 const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','Государство'],['province_type','Тип провинции'],['courts','Дворы'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
 let bulkRules=[{condition_field:'climate',condition_value:'Холодный',target_field:'courts',target_value:800},{condition_field:'climate',condition_value:'Умеренный',target_field:'courts',target_value:1000},{condition_field:'climate',condition_value:'Тропический',target_field:'courts',target_value:1200}],bulkPreview=null,bulkBusy=false;
 const panelPages={};let layoutFrame=0;
+let adminTool='manual',colorLayer='resources',colorCategoryId=null;
+const ADMIN_TOOLS={manual:'Ручное редактирование',bulk:'Массовое редактирование',markers:'Создать маркер',colors:'Цвета параметров'};
+function categoryColorsMarkup(){
+  const entries=categories.filter(c=>c.layer===colorLayer);
+  const selected=entries.find(c=>c.id===Number(colorCategoryId))||entries[0];
+  colorCategoryId=selected?.id??null;
+  return group('Цвета параметров',`<form id="category-color-form" class="stack"><label class="field"><span>Параметр</span><select id="category-color-layer">${Object.entries(LAYERS).filter(([key])=>!['population','development'].includes(key)).map(([key,label])=>`<option value="${key}" ${key===colorLayer?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>Значение</span><select id="category-color-value" ${selected?'':'disabled'}>${entries.map(c=>`<option value="${c.id}" ${c.id===colorCategoryId?'selected':''}>${escape(c.name)}</option>`).join('')}</select></label>${selected?`<label class="field"><span>Цвет</span><input id="category-color" type="color" value="${/^#[0-9a-f]{6}$/i.test(selected.color)?selected.color:'#888888'}"><output id="category-color-code">${escape(selected.color)}</output></label><button type="submit" class="primary">Сохранить цвет</button><p class="hint">Цвет изменится во всех провинциях с этим значением.</p>`:'<p class="hint">Значения этого параметра ещё не созданы.</p>'}</form>`);
+}
 export let settings={layer:'states',showIds:false,markers:{names:true,...Object.fromEntries(Object.keys(MARKERS).map(k=>[k,true]))},information:Object.fromEntries(Object.keys(INFO).map(k=>[k,false]))};
 try{const saved=JSON.parse(localStorage.getItem('fauxlore.map-settings')||'{}');settings={...settings,...saved,markers:{...settings.markers,...saved.markers},information:{...settings.information,...saved.information}};}catch{}
 if(!LAYERS[settings.layer])settings.layer='states';
@@ -126,7 +134,7 @@ function layoutPanels(){
   const best=candidates.sort((a,b)=>b.space-a.space||b.width-a.width)[0];
   drawer.style.width=`${best.width}px`;drawer.classList.toggle('wide',best.width>=340);available();
   // On short/mobile viewports use pages, never a clipped or scrolling panel.
-  if(sections.length>1){
+  if(sections.length>1&&current!=='admin'){
     drawer.classList.add('paged');
     const chosen=Math.min(panelPages[current]||0,sections.length-1);
     sections.forEach((section,i)=>section.hidden=i!==chosen);
@@ -157,6 +165,31 @@ function renderDrawer(){
     else if(['courts','development'].includes(field))valueControl=`<input id="admin-paint-value" type="number" min="0" step="1" value="${escape(paintValue)}" placeholder="Целое число">`;
     else valueControl=`<input id="admin-paint-value" value="${escape(paintValue)}" maxlength="120" placeholder="${field==='state'?'Название государства':''}">`;
     host.innerHTML=markerCreateMarkup()+`<section class="panel-group" data-page-title="Ручное редактирование"><span class="badge">ADMIN</span><h3>Провинции</h3><button id="toggle-admin-edit" aria-pressed="${adminEditing}">${adminEditing?'Завершить редактирование':'Режим редактирования'}</button><p class="hint">${adminEditing?'Выберите параметр и значение, затем включите нанесение и нажимайте на сухопутные провинции.':'В режиме редактирования доступны карточка провинции и массовое нанесение значений.'}</p>${adminEditing?`<label class="field"><span>Параметр</span><select id="admin-paint-field">${fields.map(([key,label])=>`<option value="${key}" ${field===key?'selected':''}>${label}</option>`).join('')}</select></label><label class="field"><span>Значение</span>${valueControl}</label><button id="toggle-admin-paint" aria-pressed="${paintActive}">${paintActive?'Завершить нанесение':'Наносить по кликам'}</button><p class="hint">${paintActive?'Нажимайте на провинции суши. Морские провинции не изменяются.':''}</p>`:''}</section>${group('Массовое редактирование',`<p class="hint">Задайте одно или несколько правил «условие → значение». Сначала проверьте количество провинций, затем примените изменения.</p>${bulkRulesMarkup()}`)}`;
+  }
+  if(current==='admin'){
+    const title=ADMIN_TOOLS[adminTool];
+    const content=adminTool==='colors'?null:[...host.children].find(section=>section.dataset.pageTitle===title);
+    if(adminTool==='colors')host.innerHTML=categoryColorsMarkup();
+    else host.replaceChildren(content);
+    const wrapper=document.createElement('div');wrapper.className='admin-tool-content';
+    wrapper.append(...host.childNodes);
+    host.innerHTML=`<label class="field"><span>Инструмент администратора</span><select id="admin-tool">${Object.entries(ADMIN_TOOLS).map(([key,label])=>`<option value="${key}" ${adminTool===key?'selected':''}>${label}</option>`).join('')}</select></label>`;
+    host.append(wrapper);
+    $('admin-tool').onchange=e=>{
+      adminTool=e.target.value;paintActive=false;adminEditing=false;pendingMarkerDraft=null;
+      emit('map:admin-paint',null);emit('admin:editing',{enabled:false});emit('map:place-marker',null);
+      renderDrawer();
+    };
+    if($('category-color-layer'))$('category-color-layer').onchange=e=>{colorLayer=e.target.value;colorCategoryId=null;renderDrawer();};
+    if($('category-color-value'))$('category-color-value').onchange=e=>{colorCategoryId=Number(e.target.value);renderDrawer();};
+    if($('category-color'))$('category-color').oninput=e=>{$('category-color-code').textContent=e.target.value;};
+    if($('category-color-form'))$('category-color-form').onsubmit=async e=>{
+      e.preventDefault();const button=e.target.querySelector('[type="submit"]');if(!button)return;
+      const layer=colorLayer,id=colorCategoryId,color=$('category-color').value;
+      button.disabled=true;
+      try{await api(`admin/categories/${layer}/${id}`,{method:'PATCH',body:JSON.stringify({color})});emit('map:refresh');showStatus('Цвет сохранён',2500);}
+      catch(error){showStatus(error.message,5000);}finally{if(button.isConnected)button.disabled=false;}
+    };
   }
   if($('marker-create-form')){
     const form=$('marker-create-form');

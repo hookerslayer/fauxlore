@@ -601,7 +601,7 @@ function installMapData(data){
   window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();
 }
 window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
-window.addEventListener('map:cache-error',e=>status(e.detail?.message||'Не удалось обновить карту из Google Sheets',4000));
+window.addEventListener('map:cache-error',e=>status(e.detail?.message||'Не удалось обновить карту с сервера',4000));
 window.addEventListener('map:refresh',async()=>{try{installMapData(await api('map'));}catch(error){status(error.message,5000);}});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;schedule();});

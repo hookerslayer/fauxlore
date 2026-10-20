@@ -1,4 +1,4 @@
-import {isGoogleBackend,googleApi,googleLogin,loadInitialMap as loadGoogleInitialMap} from './google-api.js';
+import {isSupabaseBackend,supabaseApi,supabaseLogin,loadSupabaseInitialMap} from './supabase-api.js';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -20,14 +20,14 @@ export const isAdminPainting=()=>paintActive&&isAdminEditing();
 export const canRenameProvince=stateId=>!!user&&stateId!=null&&user.state_ids?.includes(Number(stateId));
 export const getCategories=()=>categories;
 export async function api(path,options={}) {
-  if(isGoogleBackend)return googleApi(path,options);
+  if(isSupabaseBackend)return supabaseApi(path,options);
   const headers={'Content-Type':'application/json',...options.headers};
   const response=await fetch('/api/'+path,{...options,headers,credentials:'same-origin'});
   let body;try{body=await response.json();}catch{throw new Error('Сервер API недоступен. Запустите PostgreSQL и приложение через tools/start-local.ps1, затем откройте порт 8002.');}
   if(!response.ok){const detail=body.detail;throw new Error(typeof detail==='string'?detail:detail?.message||'Проверьте заполнение полей');}
   return body;
 }
-export function loadInitialMap(){return isGoogleBackend?loadGoogleInitialMap():api('map');}
+export function loadInitialMap(){return isSupabaseBackend?loadSupabaseInitialMap():api('map');}
 function save(){
   try{localStorage.setItem('fauxlore.map-settings',JSON.stringify(settings));}catch{}
   emit('map:settings',settings); clearTimeout(saveTimer);
@@ -220,9 +220,9 @@ function renderAuth(mode='login',token=''){
     host.innerHTML=`<div class="stack"><h3>${escape(user.nickname)}</h3><p>${escape(user.email)}</p><p class="hint">Роль: ${escape(user.role)}</p><button id="logout">Выйти</button></div>`;
     $('logout').onclick=async()=>{try{await api('auth/logout',{method:'POST',body:'{}'});await acceptUser(null);renderAuth();}catch(e){showStatus(e.message,4000);}};return;
   }
-  if(isGoogleBackend){
+  if(isSupabaseBackend){
     host.innerHTML='<div class="stack"><button id="google-login" class="primary">Войти через Google</button><p class="hint">При первом входе игровой аккаунт создаётся автоматически.</p><p id="auth-message" class="hint" role="status"></p></div>';
-    $('google-login').onclick=async()=>{const button=$('google-login');button.disabled=true;try{const result=await googleLogin();await acceptUser(result.user);$("modal").close();showStatus(`Вы вошли как ${result.user.nickname}`,3000);}catch(error){$('auth-message').textContent=error.message;}finally{button.disabled=false;}};return;
+    $('google-login').onclick=async()=>{const button=$('google-login');button.disabled=true;try{const result=await supabaseLogin();await acceptUser(result.user);$("modal").close();showStatus(`Вы вошли как ${result.user.nickname}`,3000);}catch(error){$('auth-message').textContent=error.message;}finally{button.disabled=false;}};return;
   }
   host.innerHTML=`<div class="auth-tabs">${[['login','Вход'],['register','Регистрация'],['request','Сброс пароля']].map(([key,label])=>`<button data-auth="${key}" class="${mode===key?'active':''}">${label}</button>`).join('')}</div><form id="auth-form" class="stack">${mode==='register'?'<label class="field"><span>Имя</span><input name="nickname" minlength="2" maxlength="40" autocomplete="nickname" required></label>':''}${mode!=='reset'?'<label class="field"><span>Электронная почта</span><input name="email" type="email" maxlength="254" autocomplete="email" required></label>':''}${mode!=='request'?`<label class="field"><span>${mode==='reset'?'Новый пароль':'Пароль'}</span><input name="password" type="password" minlength="${mode==='login'?1:10}" maxlength="128" autocomplete="${mode==='login'?'current-password':'new-password'}" required></label>`:''}<button class="primary" type="submit">${{login:'Войти',register:'Создать аккаунт',request:'Отправить инструкцию',reset:'Сохранить пароль'}[mode]}</button><p id="auth-message" class="form-message hint" role="status">${mode==='register'?'Не менее 10 символов в пароле.':mode==='request'?'В локальном режиме письмо появится в папке .local/mail на сервере.':''}</p></form>`;
   host.querySelectorAll('[data-auth]').forEach(b=>b.onclick=()=>renderAuth(b.dataset.auth));

@@ -8,3 +8,5 @@ node_modules/
 *.local.tmp
 .local/
 .pytest_cache/
+supabase/.temp/
+supabase/.branches/

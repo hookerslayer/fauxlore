@@ -659,7 +659,7 @@ def public_file(path: str):
     if not target.is_relative_to(ROOT):
         raise HTTPException(404)
     canonical=target.relative_to(ROOT).as_posix()
-    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','map-tools.js','app-config.js','google-api.js','oauth-return.html','oauth-return.js') or canonical.startswith(roots)
+    allowed = canonical in ('index.html','viewer.css','viewer.js','ui.js','map-tools.js','app-config.js','supabase-api.js','supabase-return.html','supabase-return.js') or canonical.startswith(roots)
     if not allowed or not target.is_file():
         raise HTTPException(404)
     return FileResponse(target)

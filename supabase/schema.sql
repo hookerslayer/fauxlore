@@ -727,7 +727,8 @@ begin
     if length(coalesce(body->>'history','')) not between 1500 and 4000 then raise sqlstate '22023' using message='История должна содержать от 1500 до 4000 символов'; end if;
     if jsonb_typeof(body->'principles') is distinct from 'object' or
       (body->'principles')-array['authority','structure','economy','military','ephemeral']<>'{}'::jsonb or
-      jsonb_object_length(body->'principles')<>5 then raise sqlstate '22023' using message='Заполните все пять принципов государства'; end if;
+      (select count(*) from jsonb_object_keys(case when jsonb_typeof(body->'principles')='object' then body->'principles' else '{}'::jsonb end))<>5 then
+      raise sqlstate '22023' using message='Заполните все пять принципов государства'; end if;
     form_value:=fauxlore.government_form(body->'principles');
     race_value:=(body->>'race_id')::integer; religion_value:=(body->>'religion_id')::integer;
     if not exists(select 1 from fauxlore.map_categories where layer='races' and id=race_value) or

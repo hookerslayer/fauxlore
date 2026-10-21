@@ -173,6 +173,8 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .danger-button{color:#f0a092;border-color:#8e493e}
 .application-panel{display:grid;gap:8px;padding:10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-bg)}
 .application-form{max-width:680px;margin-inline:auto}
+.government-preview{margin:0;font-weight:700;color:var(--ui-accent,#e7c667)}
+.government-preview.invalid{color:#ff8b7d}
 .application-form textarea,.application-review textarea{width:100%;min-height:74px;resize:vertical;color:inherit;background:rgba(0,0,0,.35);border:1px solid var(--ui-border);border-radius:var(--ui-radius);padding:8px}
 .application-emblem-preview{display:block;max-width:min(260px,100%);max-height:180px;object-fit:contain;border:1px solid var(--ui-border);border-radius:6px;background:#0004}
 .application-actions{display:flex;gap:8px;flex-wrap:wrap}

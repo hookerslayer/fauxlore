@@ -16,7 +16,7 @@ let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
 let regionSlots = 25;
 let colorsTexture,occupationColorsTexture,terrainTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
 const thematicComponents=new Map();
-let mapMarkers=[],applicationPlacement=null;
+let mapMarkers=[],applicationPlacement=null,applicationSelectedIds=new Set();
 let selectedMarkerPopup=null;
 let mapRoads=[],roadDraft=null,roadWorker=null,roadSequence=0,roadPending=new Map(),roadGeneration=0,roadBusy=false,roadSaving=false;
 function roadProgress(){window.dispatchEvent(new CustomEvent('roads:progress',{detail:{active:!!roadDraft,busy:roadBusy,saving:roadSaving,anchors:roadDraft?.anchors||[],segments:roadDraft?.segments||[]}}));schedule();}
@@ -258,7 +258,8 @@ function updateLayerColors(){
   for(const p of provinces.values()){
     let rgb;
     const category=p.layers?.[layer];
-    if(category&&/^#[0-9a-f]{6}$/i.test(category.color))rgb=category.color.slice(1).match(/../g).map(x=>parseInt(x,16));
+    if(applicationSelectedIds.has(Number(p.id)))rgb=[238,190,82];
+    else if(category&&/^#[0-9a-f]{6}$/i.test(category.color))rgb=category.color.slice(1).match(/../g).map(x=>parseInt(x,16));
     else if(numbers.length&&numeric(p)!==null){const t=max===min?.5:(numeric(p)-min)/(max-min);rgb=[Math.round(55+177*t),Math.round(65+133*t),Math.round(62+41*t)];}
     if(rgb)colors.set([...rgb,255],p.id*4);
     if(p.occupation_color){const occupationRgb=p.occupation_color.slice(1).match(/../g).map(x=>parseInt(x,16));occupations.set([...occupationRgb,255],p.id*4);}
@@ -653,7 +654,9 @@ window.addEventListener('admin:editing',()=>{if(selected)select(selected);});
 window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(adminPaint)status('Нанесение включено: нажимайте на сухопутные провинции',3000);});
 let markerPlacement=null;
 window.addEventListener('map:place-marker',e=>{markerPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!markerPlacement);if(markerPlacement)status('Щёлкните по точке провинции для размещения маркера',0);else status('',0);});
-window.addEventListener('application:pick',e=>{applicationPlacement=e.detail||null;status(applicationPlacement?.mode==='provinces'?'Выберите пять свободных сухопутных провинций':applicationPlacement?.mode==='capital'?'Выберите провинцию столицы':'',0);});
+window.addEventListener('application:pick',e=>{applicationPlacement=e.detail||null;status(applicationPlacement?.mode==='provinces'?'Выберите пять свободных сухопутных провинций':applicationPlacement?.mode==='capital'?'Выберите провинцию столицы':'',0);if(e.detail?.mode==='provinces'){applicationSelectedIds=new Set((e.detail.ids||[]).map(Number));if(ready)updateLayerColors();schedule();}});
+window.addEventListener('application:selection-updated',e=>{applicationSelectedIds=new Set((e.detail?.ids||[]).map(Number));if(ready)updateLayerColors();schedule();});
+window.addEventListener('application:clear-selection',()=>{applicationSelectedIds.clear();if(ready)updateLayerColors();schedule();});
 window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
 function installMapData(data){
   const nextTileRevision=String(data.tile_revision||0),nextRegion=data.region||region,regionChanged=JSON.stringify(nextRegion)!==JSON.stringify(region),tileChanged=nextTileRevision!==tileRevision;

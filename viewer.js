@@ -450,7 +450,7 @@ function drawLabels() {
     for(const component of components){
       const [minX,minY,maxX,maxY]=component.bounds.map((value,index)=>value*view.scale+(index%2===0?view.x:view.y));
       if(maxX<0||minX>innerWidth||maxY<0||minY>innerHeight)continue;
-      if(!component.labelPlacement&&!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame<2){layoutsThisFrame++;const placement=thematicLabelPlacement(component);if(placement===undefined)component.labelWaiting=true;else if(placement.deferred)component.labelDeferredScale=view.scale;else component.labelPlacement=placement||{hidden:true};}
+      if(!component.labelPlacement&&!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame<2){layoutsThisFrame++;const placement=thematicLabelPlacement(component);if(placement===undefined)component.labelWaiting=true;else if(placement?.deferred)component.labelDeferredScale=view.scale;else component.labelPlacement=placement||{hidden:true};}
       if(!component.labelPlacement){if(!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame>=2)pendingLabelLayout=true;continue;}
       const rect=drawThematicLabel(component,component.labelPlacement,false);if(!rect)continue;
       if(rect.right<0||rect.left>innerWidth||rect.bottom<0||rect.top>innerHeight)continue;
@@ -490,6 +490,7 @@ function mapClick(x,y){
     const id=pickProvinceId(x,y),province=provinces.get(id);
     if(!province||province.kind!=='land'){status('Выберите сухопутную провинцию',2500);return;}
     if(applicationPlacement.mode==='capital'&&!applicationPlacement.ids.includes(id)){status('Столица должна находиться в выбранной провинции',3000);return;}
+    if(applicationPlacement.mode==='provinces'&&!province.layers?.trade){status('Нельзя выбрать провинцию без назначенной торговой зоны',3500);return;}
     if(applicationPlacement.mode==='provinces'&&(province.layers?.states||province.application_pending)){status('Провинция занята или зарезервирована',3000);return;}
     window.dispatchEvent(new CustomEvent('application:province-picked',{detail:province}));return;
   }

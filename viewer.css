@@ -101,12 +101,15 @@ dialog.auth-dialog .modal-shell{max-height:none}dialog.auth-dialog #modal-conten
   dialog.auth-dialog #modal-content{padding:10px}
 }
 .profile-card{display:flex;align-items:center;gap:14px}.profile-avatar{width:80px;height:80px;border-radius:50%;object-fit:cover;border:1px solid var(--ui-border)}.profile-avatar-fallback{display:grid;place-items:center;background:#2b3435;color:var(--ui-accent);font-size:26px;font-weight:700}.profile-avatar-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px}.profile-avatar-actions .hint{flex-basis:100%}.profile-avatar-upload{display:inline-flex;align-items:center;min-height:30px;padding:5px 8px;border:1px solid var(--ui-border);border-radius:8px;cursor:pointer;background:#0005;font-size:11px}
+.profile-avatar-actions>button,.profile-avatar-actions>.profile-avatar-upload{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:34px;min-height:34px;padding:5px 10px;font-size:11px;line-height:1;white-space:nowrap}
 #legend-content .terrain-swatch{display:inline-block;width:32px;height:20px;flex:none;border:1px solid #ffffff35;border-radius:3px;background-color:#d8ddce}
 #legend-content .terrain-swatch.forest{background-color:#ffe7d6;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Cpath fill='%23927768' d='M0 0h2v2H0zM4 1h2v2H4zM1 5h2v2H1zM5 5h2v2H5z'/%3E%3C/svg%3E");background-size:8px 8px}
 #legend-content .terrain-swatch.marsh{background-color:#ffe7d6;background-image:linear-gradient(#927768,#927768),linear-gradient(#927768,#927768),linear-gradient(#927768,#927768),linear-gradient(#927768,#927768),linear-gradient(#927768,#927768),linear-gradient(#927768,#927768);background-size:4px 1px,3px 1px,4px 1px,3px 1px,4px 1px,3px 1px;background-position:1px 3px,10px 6px,19px 3px,5px 13px,15px 16px,25px 12px;background-repeat:no-repeat}
 
 /* The menu frame is the only permanent surface behind navigation items. */
 dialog.menu-dialog .menu-tabs button{background:transparent;border:1px solid transparent;box-shadow:none}
+dialog.menu-dialog .menu-tabs button[data-section="Уведомления"]{position:relative;padding-right:30px}
+.notification-indicator{position:absolute;right:7px;top:50%;display:grid;place-items:center;width:16px;height:16px;transform:translateY(-50%);border:1px solid #f0c84b;border-radius:50%;background:#f0c84b;color:#30270b;font-size:12px;font-weight:900;line-height:1}
 dialog.menu-dialog .menu-tabs button.active{color:var(--ui-accent);border-color:transparent;background:transparent}
 dialog.menu-dialog .menu-tabs button:hover:not(:disabled){background:rgba(231,198,103,.1);border-color:var(--ui-accent)}
 dialog.menu-dialog .menu-mobile-picker{display:none}
@@ -135,6 +138,9 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-emblem-menu button{min-height:30px;padding:5px 8px;text-align:left;font-size:11px}
 .state-identity-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:14px}
 .state-identity-facts>div{display:grid;gap:5px;min-width:0}
+.state-identity-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+.state-identity-facts>div{grid-template-columns:1fr;align-content:start}
+.state-identity-facts>div small:nth-of-type(2){margin-top:7px}
 .state-identity-facts small{color:var(--ui-muted);font-size:11px}
 .state-identity-facts strong{font-size:15px;overflow-wrap:anywhere}
 .state-province-list{display:grid;gap:4px;max-height:45dvh;overflow-y:auto}
@@ -159,6 +165,31 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-data-table th,.state-data-table td{padding:6px 8px;text-align:left;border-bottom:1px solid #ffffff14}
 .state-data-table th{position:sticky;top:0;background:#141b1e;color:var(--ui-muted);font-weight:600}
 .state-data-table tbody tr:last-child td{border-bottom:0}
+.family-character-table .family-character-dead{opacity:.55}
+.family-character-table td{vertical-align:top}
+.state-power-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,320px);gap:14px;align-items:start}
+.state-power-grid.admin{grid-template-columns:1fr}
+.state-power-grid.admin>[data-succession-panel]{display:none}
+.state-power-overview{display:grid;gap:8px;min-width:0}
+.state-power-overview .government-card{margin:0}
+.state-power-grid>.succession-panel,.state-power-grid>[data-succession-panel]{min-width:0}
+.succession-panel{padding:9px;gap:7px}
+.succession-panel h4{margin:0}
+.succession-panel .marriage-candidates{grid-template-columns:1fr;max-height:45vh;overflow:auto}
+.succession-panel .field{gap:4px}
+.succession-panel .field span,.succession-panel p{font-size:11px}
+.succession-panel button{min-height:30px;padding:5px 8px;font-size:11px}
+.succession-panel>[data-abdicate]{width:fit-content;justify-self:start}
+.state-power-content{display:grid;gap:14px;margin-top:14px}
+.family-registry{display:grid;gap:8px;min-width:0}
+.family-registry h4{margin:0}
+.marriage-warning{padding:9px 10px;border:1px solid #e7c66766;border-radius:var(--ui-radius);background:#e7c66712;font-size:12px;line-height:1.5}
+.birth-naming-form{margin:8px 0}
+.marriage-candidates{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}
+.marriage-candidate{display:grid;gap:6px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#0003}
+.marriage-candidate>span{font-size:11px}
+.marriage-candidate button{min-height:30px;padding:5px 8px;font-size:11px}
+.inline-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .state-data-table .hint{white-space:normal}
 .state-data-table .resource-category-row th{position:static;padding-top:9px;background:#ffffff0a;color:var(--ui-accent);font-size:10px;letter-spacing:.04em;text-transform:uppercase}
 .state-data-table .balance-positive{color:#83d39a;font-weight:650}
@@ -166,10 +197,10 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .province-sort-button{display:inline-flex;align-items:center;gap:2px;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;text-align:left;white-space:inherit;cursor:pointer}
 .province-sort-button:hover{color:var(--ui-accent);background:transparent;border-color:transparent}
 .province-sort-button span{color:var(--ui-muted);font-size:.9em}
-.provinces-data-table{min-width:1500px;font-size:11px;table-layout:auto}
+.provinces-data-table{min-width:1500px;font-size:13px;table-layout:auto}
 .provinces-data-table th,.provinces-data-table td{padding:4px 5px}
 .provinces-data-table th,.provinces-data-table td{white-space:normal;overflow-wrap:normal;word-break:normal;hyphens:none}
-@media(min-width:1700px){.provinces-data-table{min-width:0;font-size:10px}.provinces-data-table th,.provinces-data-table td{padding:3px 4px}}
+@media(min-width:1700px){.provinces-data-table{min-width:0;font-size:12px}.provinces-data-table th,.provinces-data-table td{padding:4px 5px}}
 .danger-button{color:#f0a092;border-color:#8e493e}
 .application-panel{display:grid;gap:8px;padding:10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-bg)}
 .application-form{max-width:680px;margin-inline:auto}
@@ -188,6 +219,7 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 dialog.menu-dialog .placeholder :is(section,.profile-card,.state-list-row,.table-scroll,.tool-result,#state-create-form){
   background-color:rgba(5,8,9,.6);
 }
+dialog.menu-dialog .placeholder .profile-card{background:transparent;border:0;border-radius:0;padding:0}
 dialog.menu-dialog .placeholder .state-identity,
 dialog.menu-dialog .placeholder .state-dashboard-card,
 dialog.menu-dialog .placeholder .state-summary-grid>div,
@@ -205,8 +237,9 @@ dialog.menu-dialog .placeholder .state-data-table .resource-category-row th{back
   .state-identity-facts>div{min-width:0}
   .state-identity-facts strong{font-size:13px}
   .provinces-table-scroll{overflow-x:auto}
-  .provinces-data-table{min-width:1500px;font-size:11px}
+  .provinces-data-table{min-width:1500px;font-size:13px}
   .provinces-data-table th,.provinces-data-table td{white-space:nowrap;overflow-wrap:normal;padding:5px 6px}
+  .state-power-grid{grid-template-columns:1fr}
   dialog.menu-dialog .modal-shell{height:100%}
   dialog.menu-dialog .modal-shell>header{position:sticky;top:0;z-index:2;background:#090c0dea;backdrop-filter:blur(12px)}
   dialog.menu-dialog .menu-mobile-picker{display:block;min-width:0;max-width:55%;margin-left:auto;min-height:32px;padding:5px 8px}

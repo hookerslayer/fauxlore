@@ -6,7 +6,7 @@ if (-not (Test-Path -LiteralPath $pythonPath)) { $pythonPath = (Get-Command pyth
 Push-Location $projectRoot
 try {
     & $pythonPath tools/build_supabase_site.py
-    if ($LASTEXITCODE -ne 0) { throw 'Сборка карты завершилась с ошибкой' }
+    if ($LASTEXITCODE -ne 0) { throw 'Map build failed' }
     Write-Host "Fauxlore (Supabase): http://127.0.0.1:$Port/"
     & $pythonPath -m http.server $Port --bind 127.0.0.1 --directory .local/supabase-site
 } finally { Pop-Location }

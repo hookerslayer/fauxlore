@@ -17,6 +17,10 @@ do $$ begin
     perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#112233"}',gen_random_uuid());
     raise exception 'Guest color mutation permitted';
   exception when invalid_authorization_specification then null; end;
+  begin
+    perform public.fauxlore_api('my/states/3/characters');
+    raise exception 'Guest character data permitted';
+  exception when insufficient_privilege then null; end;
   begin perform 1 from fauxlore.accounts; raise exception 'Account disclosure';
   exception when insufficient_privilege then null; end;
 end $$;
@@ -37,6 +41,9 @@ set local role authenticated;
 do $$ declare p jsonb; pid integer; result jsonb; repeated jsonb; request uuid:=gen_random_uuid(); marker jsonb; map_row jsonb;
 begin
   if public.fauxlore_api('auth/me')->'user'->>'role'<>'admin' then raise exception 'Legacy administrator lost'; end if;
+  result:=public.fauxlore_api('admin/states/3/characters');
+  if jsonb_array_length(result)<1 or not exists(select 1 from jsonb_array_elements(result) ch where ch->>'is_current_ruler'='true') then
+    raise exception 'Current ruler character payload'; end if;
   marker:=public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#123ABC"}',request);
   if marker->>'color'<>'#123abc' then raise exception 'Color update'; end if;
   if marker<>public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#123ABC"}',request) then raise exception 'Color idempotency'; end if;
@@ -124,6 +131,14 @@ do $$ begin
   begin perform public.fauxlore_api('admin/categories/resources/2','PATCH','{"color":"#112233"}',gen_random_uuid()); raise exception 'Player color mutation permitted';
   exception when insufficient_privilege then null; end;
   begin perform public.fauxlore_api('admin/provinces/1','PATCH','{"population":3}',gen_random_uuid()); raise exception 'Player mutation permitted';
+  exception when insufficient_privilege then null; end;
+  begin perform public.fauxlore_api('admin/states/3/characters'); raise exception 'Player accessed admin character route';
+  exception when insufficient_privilege then null; end;
+  begin perform public.fauxlore_api('my/states/3/characters'); raise exception 'Player accessed unassigned state characters';
+  exception when insufficient_privilege then null; end;
+  begin perform public.fauxlore_api('my/states/3/marriage-candidates'); raise exception 'Player accessed unassigned marriage candidates';
+  exception when insufficient_privilege then null; end;
+  begin perform public.fauxlore_api('my/states/3/birth-events/1/name','POST','{"names":["Test"]}',gen_random_uuid()); raise exception 'Player named a child in an unassigned state';
   exception when insufficient_privilege then null; end;
 end $$;
 rollback;

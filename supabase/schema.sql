@@ -3272,6 +3272,11 @@ begin
   if path ~ '^(my|admin)/states/[0-9]+/trade-duty$' then return fauxlore.state_trade_duty_api(path,method,body,request_id);
   elsif path in ('my/economy/treasuries','admin/economy/treasuries') or path ~ '^(my|admin)/states/[0-9]+/tax-rates$' then
     return fauxlore.state_tax_rates_api(path,method,body,request_id);
+  elsif path='my/trade-agreements' or path ~ '^(my|admin)/trade-agreements/[0-9]+/(accept|decline|cancel)$' then return fauxlore.trade_api(path,method,body,request_id);
+  elsif path='my/trade-settlements' then return fauxlore.trade_api(path,method,body,request_id);
+  elsif path='my/trade-market' then return fauxlore.trade_market_api(path,method,body,request_id);
+  elsif path='my/trade-interzone' then return fauxlore.trade_interzone_api(path,method,body,request_id);
+  elsif path ~ '^my/trade-availability/[0-9]+$' then return fauxlore.trade_availability_api(path,method,body,request_id);
   elsif path='admin/turn/test' or path like 'admin/turn/test/%' then return fauxlore.test_turn_api(path,method,body,request_id);
   elsif path='map/revision' and method='GET' then return fauxlore.map_revision();
   elsif path ~ '^my/states/[0-9]+/(birth-events|birth-events/[0-9]+/name|marriage-candidates|marriages/local)$' then return fauxlore.character_lifecycle_api(path,method,body,request_id);

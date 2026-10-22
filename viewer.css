@@ -144,6 +144,29 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-color{display:inline-block;width:14px;height:14px;flex:none;border:1px solid #fff7;border-radius:3px}
 .state-subtabs{display:flex;flex-wrap:wrap;gap:4px}
 .state-subtabs button{min-height:30px;padding:5px 8px;font-size:11px}
+.economy-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+.economy-source-card{min-width:0;margin:0}
+.economy-source-card .state-data-table{white-space:normal}
+.economy-source-card .state-data-table th:first-child,.economy-source-card .state-data-table td:first-child{width:34%;min-width:145px}
+.economy-source-card .state-data-table td{vertical-align:top}
+.trade-distance-card{display:flex;flex-direction:column;gap:3px;width:max-content;max-width:100%;padding:8px 12px;margin:0 0 8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:rgba(0,0,0,.6)}
+.trade-top-cards{display:flex;align-items:stretch;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+.trade-top-cards .trade-distance-card{margin:0}
+.trade-duty-form{display:grid;grid-template-columns:minmax(180px,240px) minmax(220px,1fr) auto;align-items:center;gap:6px 12px;width:max-content;max-width:100%;padding:8px 12px;margin:0}
+.trade-duty-form h4{grid-column:1/-1;margin:0}
+.trade-duty-form .field{margin:0}
+.trade-duty-form .hint{max-width:540px;margin:0;font-size:11px}
+.trade-duty-form button{width:max-content;max-width:100%;white-space:nowrap}
+@media(max-width:720px){.trade-duty-form{grid-template-columns:1fr;width:100%}.trade-duty-form h4,.trade-duty-form .hint{grid-column:auto}.trade-duty-form button{justify-self:start}}
+.state-detail>[data-state-trade],.state-detail>[data-state-diplomacy],.state-detail>[data-state-economy]{display:grid;gap:12px;min-width:0}
+.application-panel+.application-panel{margin-top:12px}
+.state-detail button:not(.province-sort-button),.state-menu button:not(.state-list-row),dialog.menu-dialog #menu-section button:not(.state-list-row):not(.province-sort-button){width:fit-content;max-width:100%;justify-self:start}
+.state-detail .trade-distance-card{margin:0}
+.state-detail .inline-actions{display:flex;gap:8px;flex-wrap:wrap}
+.state-detail .tax-rate-inline{width:96px;min-height:30px;padding:4px 7px;font-size:11px}
+.state-detail [data-province-name]{width:150px;max-width:100%;min-height:30px;padding:4px 7px;font-size:11px}
+.trade-distance-card small,.trade-distance-card span{color:var(--ui-muted)}
+.trade-distance-card strong{color:var(--ui-accent);font-size:16px}
 .trade-agreement-form{max-width:100%}
 .trade-route-controls{display:grid;gap:6px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#0002}
 .trade-route-controls>span,.trade-route-preview{font-size:12px;color:var(--ui-muted);line-height:1.5}
@@ -267,7 +290,7 @@ dialog.menu-dialog .placeholder .table-scroll{background-color:rgba(5,8,9,.6)}
 dialog.menu-dialog .placeholder .state-data-table th{background-color:rgba(5,8,9,.6)}
 dialog.menu-dialog .placeholder .state-data-table .resource-category-row th{background-color:rgba(5,8,9,.6)}
 @media(max-width:760px){
-  .state-dashboard-top,.state-dashboard-finances{grid-template-columns:1fr}
+  .state-dashboard-top,.state-dashboard-finances,.economy-source-grid{grid-template-columns:1fr}
   .state-identity{grid-template-columns:minmax(110px,34%) minmax(0,1fr);gap:10px;padding:7px}
   .state-emblem-frame{width:100%}
   .state-identity-facts{grid-template-columns:1fr;gap:8px}

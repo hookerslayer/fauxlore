@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022202500';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022214928';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261022250001';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -10,7 +10,7 @@ const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[];
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
@@ -98,7 +98,7 @@ function setupGL() {
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
-  uniform int uTileSize,uColumns,uSelected;
+  uniform int uTileSize,uColumns,uSelected,uRouteIds[10],uRouteCount;
   uniform bool uPick,uShowOccupation;
   out vec4 color;
   ivec4 bytesAt(ivec2 p){
@@ -142,6 +142,9 @@ function setupGL() {
       vec3 selectedFill=kind==1?vec3(1.,.94902,.55):vec3(.55,.82,.92);
       base=mix(base,selectedFill,.5);
     }
+    bool routeSelected=false;
+    for(int i=0;i<10;i++)if(i<uRouteCount&&id==uRouteIds[i])routeSelected=true;
+    if(routeSelected)base=mix(base,vec3(1.,.86,.38),.64);
 
     vec4 occupation=texelFetch(uOccupationColors,ivec2(id%256,id/256),0);
     if(uShowOccupation&&occupation.a>.5&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
@@ -195,7 +198,8 @@ function setupGL() {
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','Terrain','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','Terrain','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation','RouteCount'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc.RouteIds=gl.getUniformLocation(program,'uRouteIds[0]');
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
   gl.uniform1i(loc.Colors,4);
@@ -277,6 +281,8 @@ function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
   gl.uniform2f(loc.Offset, view.x, view.y); gl.uniform1f(loc.Scale, view.scale);
   gl.uniform1f(loc.Dpr, canvas.width/innerWidth); gl.uniform1i(loc.Selected, selected);
+  gl.uniform1iv(loc.RouteIds,Int32Array.from(Array.from({length:10},(_,i)=>Number(tradeRouteIds[i])||0)));
+  gl.uniform1i(loc.RouteCount,Math.min(10,tradeRouteIds.length));
 }
 function resetTileCache(nextSlots) {
   cacheSlots=nextSlots; tileCache.clear(); tileLoading.clear(); tileUse=0;
@@ -530,8 +536,8 @@ function mapClick(x,y){
   }
   schedule();
 }
-window.addEventListener('trade:route-pick',e=>{tradeRouteMode=Boolean(e.detail?.active);if(tradeRouteMode)status('Выбор маршрута торговли: кликайте соседние провинции.',0);schedule();});
-window.addEventListener('trade:route-progress',e=>{if(e.detail?.ids?.length)schedule();});
+window.addEventListener('trade:route-pick',e=>{tradeRouteMode=Boolean(e.detail?.active);if(tradeRouteMode||e.detail?.clear)tradeRouteIds=[];if(tradeRouteMode)status('Выбор маршрута торговли: кликайте соседние провинции.',0);schedule();});
+window.addEventListener('trade:route-progress',e=>{tradeRouteIds=(e.detail?.ids||[]).slice(0,10).map(Number);schedule();});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&tradeRouteMode){tradeRouteMode=false;window.dispatchEvent(new CustomEvent('trade:route-cancelled'));schedule();}});
 function resize() {
   const oldW = canvas.width/(canvas.dataset.dpr || 1), oldH = canvas.height/(canvas.dataset.dpr || 1);

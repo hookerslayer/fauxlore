@@ -1,4 +1,4 @@
-import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession} from './supabase-api.js?v=20261022190000';
+import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession} from './supabase-api.js?v=20261022210000';
 import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js';
 import {calculateProvinceEconomy,calculateProvinceValue,calculateStateProduction,buildTurnEconomyReport,RACE_TAX_RATES,RELIGION_TAX_RATES} from './economy.js?v=20261021155200';
 const $=id=>document.getElementById(id);

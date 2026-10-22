@@ -1,6 +1,6 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022210000';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022202500';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
-import {calculateProvinceEconomy} from './economy.js?v=20261021155200';
+import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261022250001';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
 const html = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -10,7 +10,7 @@ const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
@@ -487,6 +487,7 @@ function mapClick(x,y){
   if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
   lastPoint=p;
   if(roadDraft&&isAdmin()){void addRoadAnchor(x,y);return;}
+  if(tradeRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри провинции маршрута.',2500);return;}window.dispatchEvent(new CustomEvent('trade:route-province-picked',{detail:province}));return;}
   if(applicationPlacement){
     const id=pickProvinceId(x,y),province=provinces.get(id);
     if(!province||province.kind!=='land'){status('Выберите сухопутную провинцию',2500);return;}
@@ -529,6 +530,9 @@ function mapClick(x,y){
   }
   schedule();
 }
+window.addEventListener('trade:route-pick',e=>{tradeRouteMode=Boolean(e.detail?.active);if(tradeRouteMode)status('Выбор маршрута торговли: кликайте соседние провинции.',0);schedule();});
+window.addEventListener('trade:route-progress',e=>{if(e.detail?.ids?.length)schedule();});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&tradeRouteMode){tradeRouteMode=false;window.dispatchEvent(new CustomEvent('trade:route-cancelled'));schedule();}});
 function resize() {
   const oldW = canvas.width/(canvas.dataset.dpr || 1), oldH = canvas.height/(canvas.dataset.dpr || 1);
   const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -561,7 +565,7 @@ function select(id, focus=false) {
   const details=$('selection-details');details.replaceChildren();
   const val=value=>value===null||value===undefined||value===''?'—':value;
   const economy=calculateProvinceEconomy(p);
-  const entries=p.kind==='sea'?[['ID',id],['Название',p.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`],['Тип объекта','Море']]:[['ID',id],['Тип объекта',p.kind==='lake'?'Озеро':'Суша'],['Название',p.name],['Раса',p.layers?.races?.name],['Религия',p.layers?.religions?.name],['Государство',p.layers?.states?.name],['Оккупация',p.occupation],['Тип провинции',p.province_type],['Население',Number(p.population??0).toLocaleString('ru-RU')],['Прирост населения (расчёт)',economy.populationGrowth?.toLocaleString('ru-RU')],['Принадлежность',p.belonging],['Торговый статус',p.trade_status],['Ресурс',p.layers?.resources?.name],['Торговая зона',p.layers?.trade?.name],['Развитие',p.development],['Контроль',`${p.control??100}%`],['Налоги (расчёт)',economy.taxes],['Производство (расчёт)',economy.production],['Торговое влияние (расчёт)',economy.tradeInfluence],['Климат',p.layers?.climate?.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`]];
+  const entries=p.kind==='sea'?[['ID',id],['Название',p.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`],['Тип объекта','Море']]:[['ID',id],['Тип объекта',p.kind==='lake'?'Озеро':'Суша'],['Название',p.name],['Раса',p.layers?.races?.name],['Религия',p.layers?.religions?.name],['Государство',p.layers?.states?.name],['Оккупация',p.occupation],['Тип провинции',p.province_type],['Население',Number(p.population??0).toLocaleString('ru-RU')],['Прирост населения (расчёт)',economy.populationGrowth?.toLocaleString('ru-RU')],['Принадлежность',p.belonging],['Торговый статус',p.trade_status],['Ресурс',p.layers?.resources?.name],['Торговая зона',p.layers?.trade?.name],['Развитие',p.development],['Контроль',`${p.control??100}%`],['Налоги (расчёт)',economy.taxes],['Производство (расчёт)',economy.production],['Торговое влияние (расчёт)',economy.tradeInfluence],['Прирост рекрутов (расчёт)',economy.recruitGrowth],['Лимит рекрутов (расчёт)',economy.recruitLimit],['Ценность (расчёт)',calculateProvinceValue(p)],['Климат',p.layers?.climate?.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`]];
   if(p.kind==='land')entries.splice(entries.length-1,0,['Местность',({forest:'Лес',marsh:'Болото'})[p.terrain_type]]);
   for(const[label,value]of entries){const div=document.createElement('div');div.className='province-field';const name=document.createElement('span');name.textContent=`${label}: `;const content=document.createElement('strong');content.textContent=val(value);div.append(name,content);details.append(div);}
   if(p.kind==='land'&&isAdminEditing())renderAdminEditor(p,details);
@@ -661,6 +665,7 @@ window.addEventListener('application:selection-updated',e=>{applicationSelectedI
 window.addEventListener('application:clear-selection',()=>{applicationSelectedIds.clear();if(ready)updateLayerColors();schedule();});
 window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
 function installMapData(data){
+  if(data.economy_config)setEconomyConfig(data.economy_config);
   const nextTileRevision=String(data.tile_revision||0),nextRegion=data.region||region,regionChanged=JSON.stringify(nextRegion)!==JSON.stringify(region),tileChanged=nextTileRevision!==tileRevision;
   tileRevision=nextTileRevision;dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||liveRevision);region=nextRegion;
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));

@@ -80,6 +80,12 @@ dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-w
 .province-editor input,.province-editor select{min-height:30px;padding:5px 7px;font-size:11px}
 .bulk-rules{display:flex;flex-direction:column;gap:8px}.bulk-rule{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#0003}.bulk-rule label{display:flex;flex-direction:column;gap:3px;min-width:0}.bulk-rule label span{font-size:10px;color:var(--ui-muted)}.bulk-rule select,.bulk-rule input{min-height:30px;padding:4px 6px;font-size:11px}.bulk-remove{grid-column:1/-1;min-height:28px;padding:4px 8px;font-size:11px}.bulk-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}.bulk-actions button{min-height:32px;padding:5px;font-size:11px}.bulk-actions #bulk-apply{grid-column:1/-1}
 .province-editor .check-row{gap:5px;padding:4px 0}
+.economy-config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px;min-width:0}
+.economy-config-grid .field{min-width:0;gap:3px}
+.economy-config-grid .field span{font-size:10px;line-height:1.3;color:var(--ui-muted)}
+.economy-config-grid input{min-width:0;min-height:30px;padding:5px 7px;font-size:11px}
+.economy-config-row{grid-column:1/-1;display:grid;grid-template-columns:1fr repeat(3,minmax(0,1fr));gap:6px;align-items:end;padding:7px;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}
+.economy-config-row>strong{grid-column:1/-1;font-size:11px}
 .province-editor button{min-height:32px;padding:6px 8px;font-size:12px}
 .province-editor .hint{font-size:10px;line-height:1.4}
 .stack textarea{width:100%;resize:vertical;min-height:62px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:rgba(0,0,0,.35);color:inherit;font:inherit}
@@ -87,6 +93,14 @@ dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-w
 .marker-admin-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);font-size:11px}
 .marker-admin-row span{min-width:0;overflow-wrap:anywhere}
 .marker-admin-row button{min-height:26px;padding:2px 8px;color:#e2aa9b}
+.army-unit-labels,.army-unit-row{display:grid;grid-template-columns:minmax(96px,1.6fr) minmax(66px,.8fr) minmax(90px,1fr) 30px;gap:5px;align-items:center}
+.army-unit-labels{padding:0 4px;color:var(--ui-muted);font-size:10px}
+.army-unit-row input{min-width:0;width:100%;padding:6px;font-size:11px}
+.army-unit-row button{min-height:30px;padding:2px;color:#e2aa9b}
+.army-unit-list{display:flex;flex-direction:column;gap:5px;max-height:30vh;overflow:auto}
+.army-report{display:flex;flex-direction:column;gap:6px;max-height:32vh;overflow:auto;padding-top:8px;border-top:1px solid var(--ui-border);font-size:11px}
+.army-report-row{display:flex;flex-direction:column;gap:3px;padding:6px;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}
+.army-report-row span{color:var(--ui-muted);line-height:1.45}
 .marker-popover{position:fixed;z-index:20;width:min(280px,calc(100vw - 16px));max-height:calc(100dvh - 16px);padding:0;overflow:auto}
 .marker-popover header{padding:8px 10px}
 .marker-popover h2{font-size:12px;overflow-wrap:anywhere}
@@ -109,6 +123,11 @@ dialog.auth-dialog .modal-shell{max-height:none}dialog.auth-dialog #modal-conten
 /* The menu frame is the only permanent surface behind navigation items. */
 dialog.menu-dialog .menu-tabs button{background:transparent;border:1px solid transparent;box-shadow:none}
 dialog.menu-dialog .menu-tabs button[data-section="Уведомления"]{position:relative;padding-right:30px}
+.tax-rate-input{width:120px;min-width:85px;padding:7px}
+.economy-balance-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.economy-balance-cards>div{display:grid;gap:5px;padding:12px;border:1px solid var(--ui-border);border-radius:8px;background:#080b0d88}
+.economy-balance-cards small{color:var(--ui-muted)}
+.economy-balance-cards strong{color:var(--ui-accent)}
 .notification-indicator{position:absolute;right:7px;top:50%;display:grid;place-items:center;width:16px;height:16px;transform:translateY(-50%);border:1px solid #f0c84b;border-radius:50%;background:#f0c84b;color:#30270b;font-size:12px;font-weight:900;line-height:1}
 dialog.menu-dialog .menu-tabs button.active{color:var(--ui-accent);border-color:transparent;background:transparent}
 dialog.menu-dialog .menu-tabs button:hover:not(:disabled){background:rgba(231,198,103,.1);border-color:var(--ui-accent)}
@@ -125,6 +144,21 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-color{display:inline-block;width:14px;height:14px;flex:none;border:1px solid #fff7;border-radius:3px}
 .state-subtabs{display:flex;flex-wrap:wrap;gap:4px}
 .state-subtabs button{min-height:30px;padding:5px 8px;font-size:11px}
+.trade-agreement-form{max-width:100%}
+.trade-route-controls{display:grid;gap:6px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#0002}
+.trade-route-controls>span,.trade-route-preview{font-size:12px;color:var(--ui-muted);line-height:1.5}
+.trade-route-preview{margin:0;color:var(--ui-text,#eee);overflow-wrap:anywhere}
+.trade-offer-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.trade-offer-side{display:grid;align-content:start;gap:7px;min-width:0;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#ffffff04}
+.trade-offer-side h4{margin:0;font-size:12px}
+.trade-goods-list{display:grid;gap:6px}
+.trade-good-row{display:grid;grid-template-columns:minmax(90px,1fr) minmax(82px,.65fr) auto 28px;gap:5px;align-items:center;min-width:0}
+.trade-good-row select,.trade-good-row input{min-width:0;width:100%;min-height:32px;padding:5px;font-size:11px}
+.trade-good-row small{grid-column:1/3;color:var(--ui-muted);font-size:10px}
+.trade-good-row [data-trade-remove]{grid-column:4;grid-row:1/3;min-height:28px;padding:2px}
+.trade-add-resource{width:32px;min-height:28px;padding:2px;font-size:18px;line-height:1}
+.trade-agreement-form>[type=submit]{justify-self:start}
+@media(max-width:620px){.trade-offer-grid{grid-template-columns:1fr}.trade-good-row{grid-template-columns:minmax(0,1fr) minmax(82px,.65fr) 28px}.trade-good-row small{grid-column:1/3}.trade-good-row [data-trade-remove]{grid-column:3;grid-row:1/3}}
 .state-detail,.state-facts{display:grid;gap:6px}
 .state-detail{padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}
 .state-identity{display:grid;grid-template-columns:180px minmax(0,1fr);gap:18px;align-items:center;margin-bottom:8px;padding:10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#ffffff06}
@@ -147,6 +181,9 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-province-list>div{padding:4px 0;border-bottom:1px solid #ffffff14}
 .state-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px}
 .state-dashboard-top{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:start}
+.state-dashboard-finances{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:start;margin-top:8px}
+.state-finance-total{display:block;margin:4px 0 10px;color:var(--ui-accent);font-size:20px}
+.state-tax-editor-panel{margin-top:14px}
 .state-dashboard-card{min-width:0;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#ffffff06}
 .state-dashboard-card h4{margin:0 0 6px}
 .state-condition-list{display:grid;gap:4px}
@@ -230,7 +267,7 @@ dialog.menu-dialog .placeholder .table-scroll{background-color:rgba(5,8,9,.6)}
 dialog.menu-dialog .placeholder .state-data-table th{background-color:rgba(5,8,9,.6)}
 dialog.menu-dialog .placeholder .state-data-table .resource-category-row th{background-color:rgba(5,8,9,.6)}
 @media(max-width:760px){
-  .state-dashboard-top{grid-template-columns:1fr}
+  .state-dashboard-top,.state-dashboard-finances{grid-template-columns:1fr}
   .state-identity{grid-template-columns:minmax(110px,34%) minmax(0,1fr);gap:10px;padding:7px}
   .state-emblem-frame{width:100%}
   .state-identity-facts{grid-template-columns:1fr;gap:8px}
@@ -249,3 +286,4 @@ dialog.menu-dialog .placeholder .state-data-table .resource-category-row th{back
   dialog.menu-dialog .placeholder{display:block;overflow:visible;padding:4px;min-height:0}
   dialog.menu-dialog .state-menu{gap:8px}
 }
+@media(max-width:600px){.economy-balance-cards{grid-template-columns:1fr}.tax-rate-input{width:90px}}

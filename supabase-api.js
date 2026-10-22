@@ -24,6 +24,15 @@ async function client() {
 
 async function request(path, options) {
   const db = await client();
+  if (path === 'map/revision') {
+    const { data, error } = await db.rpc('map_revision_api');
+    if (error) {
+      const failure = new Error(error.message || 'Не удалось проверить версию карты');
+      failure.code = error.code;
+      throw failure;
+    }
+    return data;
+  }
   if (path === 'auth/logout') {
     const { error } = await db.auth.signOut({ scope: 'local' });
     if (error) throw error;
@@ -56,6 +65,13 @@ export function supabaseApi(path, options = {}) {
   if ((options.method || 'GET') !== 'GET') return request(path, options);
   if (!inflight.has(path)) inflight.set(path, request(path, options).finally(() => inflight.delete(path)));
   return inflight.get(path);
+}
+
+export async function hasAuthenticatedSession() {
+  const db = await client();
+  const { data, error } = await db.auth.getSession();
+  if (error) throw error;
+  return Boolean(data.session?.user);
 }
 
 function mapCache(mode, value) {

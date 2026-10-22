@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261021204500';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022190000';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy} from './economy.js?v=20261021155200';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -9,6 +9,7 @@ const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserv
 const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
+let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
 let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
@@ -661,7 +662,7 @@ window.addEventListener('application:clear-selection',()=>{applicationSelectedId
 window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
 function installMapData(data){
   const nextTileRevision=String(data.tile_revision||0),nextRegion=data.region||region,regionChanged=JSON.stringify(nextRegion)!==JSON.stringify(region),tileChanged=nextTileRevision!==tileRevision;
-  tileRevision=nextTileRevision;region=nextRegion;
+  tileRevision=nextTileRevision;dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||liveRevision);region=nextRegion;
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   if(ready&&(tileChanged||regionChanged))resetTileCache(Math.min(regionSlots,view.scale>view.min*1.8?12:25));
   categoryList=data.categories;mapMarkers=data.markers||[];mapRoads=data.roads||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();
@@ -670,6 +671,25 @@ function installMapData(data){
 window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
 window.addEventListener('map:cache-error',e=>status(e.detail?.message||'Не удалось обновить карту с сервера',4000));
 window.addEventListener('map:refresh',async()=>{try{installMapData(await api('map'));}catch(error){status(error.message,5000);}});
+async function syncMapInBackground(){
+  clearTimeout(syncTimer);
+  if(!ready||document.hidden||syncInProgress||window.FAUXLORE_CONFIG?.backend!=='supabase'){
+    if(ready&&window.FAUXLORE_CONFIG?.backend==='supabase')syncTimer=setTimeout(syncMapInBackground,60000);
+    return;
+  }
+  syncInProgress=true;
+  try{
+    const revision=await api('map/revision'),nextData=String(revision.data_revision||0),nextLive=String(revision.live_revision||0),nextTiles=String(revision.tile_revision||'');
+    if(nextData!==dataRevision||nextLive!==liveRevision||nextTiles!==tileRevision){
+      const data=await api('map');
+      liveRevision=nextLive;
+      installMapData(data);
+    }
+  }catch(error){console.debug('Фоновое обновление карты не выполнено:',error.message);}
+  finally{syncInProgress=false;if(ready&&window.FAUXLORE_CONFIG?.backend==='supabase')syncTimer=setTimeout(syncMapInBackground,60000);}
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(syncTimer);else void syncMapInBackground();});
+window.addEventListener('focus',()=>{if(!document.hidden)void syncMapInBackground();});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;schedule();});
 window.addEventListener('map:close-marker-popup',()=>{selectedMarkerPopup=null;});
@@ -686,7 +706,7 @@ window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapRoads=data.roads||[];provinceAdjacency=data.adjacency||{};
+  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);dataRevision=String(data.data_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapRoads=data.roads||[];provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
@@ -697,5 +717,7 @@ async function init() {
   ready=true;resize();fit();
   await hydrateUI(data);
   status('',0);
+  void api('map/revision').then(revision=>{if(String(revision.data_revision||0)!==dataRevision||String(revision.live_revision||0)!==liveRevision||String(revision.tile_revision||'')!==tileRevision)void syncMapInBackground();}).catch(error=>console.debug('Не удалось проверить версию карты:',error.message));
+  syncTimer=setTimeout(syncMapInBackground,60000);
 }
 init().catch(error=>{console.error(error);status(error.message);});

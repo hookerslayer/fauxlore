@@ -1,4 +1,4 @@
-import {supabaseApi,supabaseLogin,loadSupabaseInitialMap} from './supabase-api.js';
+import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession} from './supabase-api.js?v=20261022190000';
 import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js';
 import {calculateProvinceEconomy,calculateProvinceValue,calculateStateProduction,buildTurnEconomyReport,RACE_TAX_RATES,RELIGION_TAX_RATES} from './economy.js?v=20261021155200';
 const $=id=>document.getElementById(id);
@@ -11,7 +11,7 @@ const STATE_SECTIONS=['Статистика','Власть и династия',
 const PANELS={auth:['Авторизация','user-round','left'],menu:['Меню','menu','left'],legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emit=(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail}));
-let current=null,user=null,categories=[],allProvinces=[],provinceAdjacency={},mapMarkers=[],selectedProvince=null,pendingMarkerDraft=null,toolMode='',lastToolResult='',saveTimer,showStatus=()=>{},adminEditing=false,paintField='climate',paintValue='',paintActive=false,legendOpen=false,stateRows=[],applicationDraft=null,applicationPickMode=null,unreadNotificationCount=0,notificationFetchToken=0;
+let current=null,user=null,categories=[],allProvinces=[],provinceAdjacency={},mapMarkers=[],selectedProvince=null,pendingMarkerDraft=null,toolMode='',lastToolResult='',saveTimer,showStatus=()=>{},adminEditing=false,paintField='climate',paintValue='',paintActive=false,legendOpen=false,stateRows=[],applicationDraft=null,applicationPickMode=null,unreadNotificationCount=0,notificationFetchToken=0,activeMenuSection='Профиль';
 const BELONGING_VALUES=['Корона','Знать','Духовенство','Горожане','Крестьяне','Отсутствует'];
 const TRADE_STATUS_VALUES=['Отсутствует','Устье реки','Природный порт','Центр торговли I','Центр торговли II','Центр торговли III'];
 const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','Государство'],['occupation','Оккупация'],['population','Население'],['belonging','Принадлежность'],['trade_status','Торговый статус'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль, %'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
@@ -384,6 +384,7 @@ function renderMenu(section='Профиль'){
   openModal('Меню');
   if(user)void refreshUnreadNotificationCount();
   const sections=menuSections();if(!sections.includes(section))section='Профиль';
+  activeMenuSection=section;
   const header=$('modal-title').parentElement;
   header.querySelector('.menu-mobile-picker')?.remove();
   const picker=document.createElement('select');picker.className='menu-mobile-picker';picker.setAttribute('aria-label','Раздел меню');
@@ -406,6 +407,10 @@ function renderMenu(section='Профиль'){
 async function renderDynasticDiplomacy(host){
   host.innerHTML='<h3>Династические браки</h3><p class="hint">Загружаю дипломатические предложения…</p>';
   try{
+    if(!await hasAuthenticatedSession()){
+      if(host.isConnected)host.innerHTML='<h3>Династические браки</h3><p class="hint">Войдите через Google, чтобы открыть дипломатические предложения.</p>';
+      return;
+    }
     const data=await api('my/marriage-offers');
     if(!host.isConnected)return;
     const participantLabel=person=>`${person.name} ${person.surname||''} · ${person.age} лет · ${person.gender} · ${person.race}`.trim();
@@ -449,9 +454,9 @@ async function renderDynasticDiplomacy(host){
   }catch(error){if(host.isConnected)host.innerHTML=`<h3>Династические браки</h3><p class="form-message">${escape(error.message)}</p>`;}
 }
 
-function renderPlayerStateSection(host,tab){
+function renderPlayerStateSection(host,tab,quiet=false){
   if(!user){host.innerHTML='<h3>Государство</h3><p class="hint">Войдите, чтобы открыть государственные данные.</p>';return;}
-  host.innerHTML='<p class="hint">Загружаю государство…</p>';
+  if(!quiet)host.innerHTML='<p class="hint">Загружаю государство…</p>';
   api('my/states').then(states=>{
     if(!host.isConnected)return;
     if(!states.length){host.innerHTML='<h3>Государство</h3><p class="hint">За вашим аккаунтом пока не закреплено государство. Администратор должен назначить его игроку.</p>';return;}
@@ -717,7 +722,7 @@ window.addEventListener('application:province-picked',e=>{
 window.addEventListener('map:marker-location-selected',async e=>{try{const marker=await api('admin/markers',{method:'POST',body:JSON.stringify({...pendingMarkerDraft,...e.detail})});emit('map:marker-created',marker);pendingMarkerDraft=null;const form=$('marker-create-form');if(form){form.reset();form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;$('marker-province').textContent='Заполните поля, затем укажите точку на карте.';}showStatus('Маркер создан в выбранной точке',2500);}catch(error){pendingMarkerDraft=null;emit('map:place-marker',null);showStatus(error.message,5000);const form=$('marker-create-form');if(form){form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;}}});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(m=>m.id!==e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
-window.addEventListener('map:refreshed',e=>{categories=e.detail.categories;allProvinces=e.detail.provinces;provinceAdjacency=e.detail.adjacency||provinceAdjacency;mapMarkers=e.detail.markers||[];roadsList=e.detail.roads||[];if(current==='admin')renderDrawer();if(legendOpen)renderLegend();});
+window.addEventListener('map:refreshed',e=>{categories=e.detail.categories;allProvinces=e.detail.provinces;provinceAdjacency=e.detail.adjacency||provinceAdjacency;mapMarkers=e.detail.markers||[];roadsList=e.detail.roads||[];if(current==='admin')renderDrawer();if(legendOpen)renderLegend();const host=$('menu-section');if(host?.isConnected&&STATE_SECTIONS.includes(activeMenuSection)&&!host.querySelector('input:focus,select:focus,textarea:focus'))renderPlayerStateSection(host,activeMenuSection,true);});
 window.addEventListener('roads:progress',e=>{roadInfo=e.detail;if(current==='admin'&&adminTool==='roads')renderDrawer();});
 window.addEventListener('roads:saved',e=>{roadsList.push(e.detail);if(current==='admin'&&adminTool==='roads')renderDrawer();});
 let markerPopover=null;

@@ -1,13 +1,25 @@
 import assert from 'node:assert/strict';
-import {calculateProvinceEconomy,calculateProvinceValue,calculateProvinceShare,calculateStateProduction,calculateStatePolitics,DEFAULT_ECONOMY_CONFIG,setEconomyConfig} from '../economy.js';
+import {calculateProvinceEconomy,calculateProvinceValue,calculateProvinceShare,calculateStateProduction,calculateStatePolitics,DEFAULT_ECONOMY_CONFIG,distributeTradeZoneIncome,setEconomyConfig} from '../economy.js';
+
+const zoneIncomeSplit=distributeTradeZoneIncome(28);
+assert.deepEqual(zoneIncomeSplit,{Корона:4.2,Знать:2.8,Духовенство:1.4,Горожане:18.2,Крестьяне:1.4});
+assert.equal(Math.round(Object.values(distributeTradeZoneIncome(123.47)).reduce((sum,value)=>sum+value,0)*100),12347);
 
 const province=(overrides={})=>({kind:'land',province_type:'Столичная',population:10000,belonging:'Корона',trade_status:'Центр торговли I',layers:{races:{name:'Зверолюди'},religions:{name:'Жизнелизм'},resources:{name:'Зерно'}},...overrides});
 const capital=calculateProvinceEconomy(province());
 assert.equal(capital.taxes,400);
 assert.equal(capital.production,8000);
 assert.equal(capital.tradeInfluence,28.13);
-assert.equal(capital.populationGrowth,180);
-for(const [multiplier,expected] of [[1,300],[.95,285],[.825,248],[.5,150]]){
+assert.equal(capital.populationGrowth,90);
+const statusEffectsProvince=province({layers:{states:{id:10,name:'Альфа',crime:0,corruption:0,official_race_id:1,official_religion_id:2,
+  race_statuses:{1:'Ассимиляция'},religion_statuses:{2:'Истребление'}},races:{id:1,name:'Люди'},religions:{id:2,name:'Атомизм'},resources:{name:'Зерно'}}});
+const statusEffectsEconomy=calculateProvinceEconomy(statusEffectsProvince,'Альфа');
+assert.equal(statusEffectsEconomy.taxes,260);
+assert.equal(statusEffectsEconomy.production,2800);
+assert.equal(statusEffectsEconomy.populationGrowth,0);
+assert.equal(statusEffectsEconomy.recruitGrowth,0);
+assert.equal(statusEffectsEconomy.recruitLimit,0);
+for(const [multiplier,expected] of [[1,150],[.95,143],[.825,124],[.5,75]]){
   const p=province({layers:{states:{name:'Альфа',crime:0,corruption:0,urbanization_growth_multiplier:multiplier},races:{name:'Люди'},religions:{name:'Жизнелизм'},resources:{name:'Зерно'}}});
   assert.equal(calculateProvinceEconomy(p,'Альфа').populationGrowth,expected);
 }
@@ -30,7 +42,7 @@ assert.equal(calculateProvinceEconomy(occupiedRateProvince,'Бета').taxes,90)
 const regionalRecruitment=calculateProvinceEconomy(province({province_type:'Регион',population:2500,belonging:'Крестьяне'}));
 assert.equal(regionalRecruitment.recruitGrowth,1);
 assert.equal(regionalRecruitment.recruitLimit,1);
-assert.equal(calculateProvinceEconomy(province({belonging:'Отсутствует'})).recruitLimit,0);
+assert.equal(calculateProvinceEconomy(province({belonging:'Отсутствует'})).recruitLimit,null);
 setEconomyConfig({...DEFAULT_ECONOMY_CONFIG,provinceModifiers:{...DEFAULT_ECONOMY_CONFIG.provinceModifiers,Регион:{...DEFAULT_ECONOMY_CONFIG.provinceModifiers.Регион,trade:900}}});
 assert.equal(calculateProvinceEconomy(province({province_type:'Регион',population:2500,belonging:'Крестьяне'})).tradeInfluence,2250);
 assert.equal(calculateProvinceEconomy(province({province_type:'Регион',population:2500,belonging:'Крестьяне'})).recruitGrowth,1);
@@ -74,7 +86,7 @@ const politics=calculateStatePolitics([politicsProvince('Корона'),politics
 assert.equal(politics.estateInfluence['Корона'],.5);
 assert.equal(politics.estateLoyalty['Корона'],.75);
 assert.equal(politics.estateLoyalty['Знать'],.75);
-assert.ok(Math.abs(politics.stateStability-(0+.2+.95)/3)<1e-12);
+assert.ok(Math.abs(politics.stateStability-(.2+.3+.95)/3)<1e-12);
 setEconomyConfig({...DEFAULT_ECONOMY_CONFIG,raceTaxRates:{...DEFAULT_ECONOMY_CONFIG.raceTaxRates,Люди:.08}});
 const belowBasePolitics=calculateStatePolitics([politicsProvince('Корона'),politicsProvince('Знать')],[
   {group_type:'estate',group_key:'Корона',status:'Ключевое',loyalty:.8},
@@ -102,7 +114,7 @@ assert.equal(effects.grossTaxes,400);
 assert.equal(effects.corruptionTaxLoss,80);
 assert.equal(effects.crimeTaxLoss,16);
 assert.equal(effects.taxes,304);
-assert.equal(effects.populationGrowth,257);
+assert.equal(effects.populationGrowth,128);
 assert.equal(effects.recruitGrowth,17);
 assert.equal(effects.recruitLimit,225);
 assert.equal(effects.production,6400);

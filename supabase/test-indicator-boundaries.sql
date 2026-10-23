@@ -47,7 +47,7 @@ begin
   update fauxlore.province_values rv set category_id=(select id from fauxlore.map_categories where layer='races' and name='Люди')
     where rv.layer='races' and exists(select 1 from fauxlore.province_values ov where ov.province_id=rv.province_id and ov.layer='states' and ov.category_id=sid);
   metrics:=fauxlore.state_indicators(sid);
-  if (metrics->>'urbanization_growth_multiplier')::numeric<>.946875 or (metrics->>'population_growth')::numeric<>410 then raise exception 'Urbanization growth mismatch'; end if;
+  if (metrics->>'urbanization_growth_multiplier')::numeric<>.946875 or (metrics->>'population_growth')::numeric<>225 then raise exception 'Urbanization growth mismatch'; end if;
   update fauxlore.provinces p set population=0 from fauxlore.province_values v
     where p.id=v.province_id and v.layer='states' and v.category_id=sid and p.kind='land';
   metrics:=fauxlore.state_indicators(sid);

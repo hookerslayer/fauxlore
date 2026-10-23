@@ -11,12 +11,18 @@ select jsonb_build_object(
   'provinces',(select jsonb_agg(jsonb_build_object('id',p.id,'kind',p.kind,'name',p.name,'province_type',p.province_type,
     'population',p.population,'development',p.development,'belonging',p.belonging,'trade_status',p.trade_status,'control',p.control,'occupation',p.occupation,
     'occupation_crime',occ.crime,'occupation_corruption',occ.corruption,
+    'occupation_race_statuses',(select jsonb_object_agg(group_key,status) from fauxlore.state_group_politics where state_id=oc.id and group_type='race'),
+    'occupation_religion_statuses',(select jsonb_object_agg(group_key,status) from fauxlore.state_group_politics where state_id=oc.id and group_type='religion'),
     'occupation_race_tax_rates',(select jsonb_object_agg(c.name,t.rate) from fauxlore.state_tax_rates t join fauxlore.map_categories c on c.layer=t.layer and c.id=t.category_id where t.state_id=oc.id and t.layer='races'),
     'occupation_religion_tax_rates',(select jsonb_object_agg(c.name,t.rate) from fauxlore.state_tax_rates t join fauxlore.map_categories c on c.layer=t.layer and c.id=t.category_id where t.state_id=oc.id and t.layer='religions'),
     'layers',(select jsonb_object_agg(v.layer,jsonb_build_object('id',c.id,'name',c.name)||case when v.layer='states' then
       fauxlore.state_population_growth(c.id)||jsonb_build_object(
         'race_tax_rates',(select jsonb_object_agg(mc.name,t.rate) from fauxlore.state_tax_rates t join fauxlore.map_categories mc on mc.layer=t.layer and mc.id=t.category_id where t.state_id=c.id and t.layer='races'),
-        'religion_tax_rates',(select jsonb_object_agg(mc.name,t.rate) from fauxlore.state_tax_rates t join fauxlore.map_categories mc on mc.layer=t.layer and mc.id=t.category_id where t.state_id=c.id and t.layer='religions')) else '{}'::jsonb end)
+        'religion_tax_rates',(select jsonb_object_agg(mc.name,t.rate) from fauxlore.state_tax_rates t join fauxlore.map_categories mc on mc.layer=t.layer and mc.id=t.category_id where t.state_id=c.id and t.layer='religions'),
+        'race_statuses',(select jsonb_object_agg(group_key,status) from fauxlore.state_group_politics where state_id=c.id and group_type='race'),
+        'religion_statuses',(select jsonb_object_agg(group_key,status) from fauxlore.state_group_politics where state_id=c.id and group_type='religion'),
+        'official_race_id',(select official_race_id from fauxlore.state_profiles where state_id=c.id),
+        'official_religion_id',(select official_religion_id from fauxlore.state_profiles where state_id=c.id)) else '{}'::jsonb end)
       from fauxlore.province_values v join fauxlore.map_categories c on c.layer=v.layer and c.id=v.category_id where v.province_id=p.id)))
     from fauxlore.provinces p left join fauxlore.map_categories oc on oc.layer='states' and lower(oc.name)=lower(p.occupation)
     left join fauxlore.state_profiles occ on occ.state_id=oc.id

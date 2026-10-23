@@ -318,3 +318,12 @@ dialog.menu-dialog .placeholder .state-data-table .resource-category-row th{back
   dialog.menu-dialog .state-menu{gap:8px}
 }
 @media(max-width:600px){.economy-balance-cards{grid-template-columns:1fr}.tax-rate-input{width:90px}}
+.trade-subtabs{display:flex;gap:.35rem;overflow-x:auto;border-bottom:1px solid var(--line,#8d8579);margin:0 0 1rem;padding:.25rem 0 0}
+.trade-subtabs button{flex:none;border:1px solid var(--line,#8d8579);border-bottom:0;border-radius:.65rem .65rem 0 0;padding:.55rem .9rem;background:transparent;cursor:pointer;white-space:nowrap}
+.trade-subtabs button[aria-selected="true"]{background:transparent;color:var(--ui-text);border-color:var(--ui-accent);font-weight:700}
+.trade-dashboard .state-data-table{white-space:normal;table-layout:auto}
+.trade-dashboard .state-data-table th,.trade-dashboard .state-data-table td{padding:5px 6px}
+.trade-dashboard .state-data-table th{max-width:125px;white-space:normal;line-height:1.2}
+.trade-dashboard [data-trade-view][hidden]{display:none}
+.trade-dashboard [data-trade-view]>h4{margin:1.25rem 0 .55rem}
+.trade-dashboard .table-scroll{margin-bottom:1rem}

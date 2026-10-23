@@ -128,6 +128,10 @@ dialog.menu-dialog .menu-tabs button[data-section="Уведомления"]{posi
 .economy-balance-cards>div{display:grid;gap:5px;padding:12px;border:1px solid var(--ui-border);border-radius:8px;background:#080b0d88}
 .economy-balance-cards small{color:var(--ui-muted)}
 .economy-balance-cards strong{color:var(--ui-accent)}
+.economy-balance-cards+.application-panel{margin-top:8px}
+.estate-loan-borrow{display:grid;justify-items:start;gap:8px;max-width:420px}
+.estate-loan-borrow .field{width:100%;margin:0}
+.estate-loan-borrow button{margin-top:4px}
 .notification-indicator{position:absolute;right:7px;top:50%;display:grid;place-items:center;width:16px;height:16px;transform:translateY(-50%);border:1px solid #f0c84b;border-radius:50%;background:#f0c84b;color:#30270b;font-size:12px;font-weight:900;line-height:1}
 dialog.menu-dialog .menu-tabs button.active{color:var(--ui-accent);border-color:transparent;background:transparent}
 dialog.menu-dialog .menu-tabs button:hover:not(:disabled){background:rgba(231,198,103,.1);border-color:var(--ui-accent)}
@@ -212,6 +216,8 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-condition-list{display:grid;gap:4px}
 .state-condition-list>div{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #ffffff12}
 .state-condition-list>div:last-child{border-bottom:0}
+.state-condition-list>.state-condition-percent{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.state-condition-list>.state-condition-percent small:last-child{grid-column:1/-1;text-align:right}
 .state-condition-list small{color:var(--ui-muted)}
 .state-condition-list strong{font-size:12px;text-align:right}
 .state-condition-report{table-layout:fixed;width:100%}

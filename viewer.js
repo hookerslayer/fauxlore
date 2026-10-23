@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261022214928';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince} from './ui.js?v=20261023141000';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261022250001';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.

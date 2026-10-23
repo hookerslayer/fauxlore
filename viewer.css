@@ -214,6 +214,14 @@ dialog.menu-dialog .placeholder{align-content:start;overflow-y:auto;overscroll-b
 .state-condition-list>div:last-child{border-bottom:0}
 .state-condition-list small{color:var(--ui-muted)}
 .state-condition-list strong{font-size:12px;text-align:right}
+.state-condition-report{table-layout:fixed;width:100%}
+.state-condition-report td{white-space:normal;overflow-wrap:anywhere}
+.state-condition-report td:first-child{width:55%}
+.state-population-table{table-layout:fixed;width:100%}
+.state-population-table td{white-space:normal;overflow-wrap:anywhere}
+.state-population-table td:first-child{width:65%}
+.state-condition-list strong[role="button"]{cursor:pointer}
+.state-condition-list strong[role="button"]:focus-visible{outline:1px solid var(--ui-accent);outline-offset:2px}
 .state-summary-grid>div,.government-card{display:grid;gap:4px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#ffffff06}
 .state-summary-grid small,.government-card small{color:var(--ui-muted);font-size:10px}
 .state-summary-grid strong,.government-card strong{font-size:13px;overflow-wrap:anywhere}

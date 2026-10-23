@@ -31,10 +31,11 @@ export const ESTATE_NAMES=['Корона','Знать','Духовенство',
 export const ESTATE_AMBITIONS={'Господствующее':0,'Ключевое':.5,'Значимое':.35,'Бесправное':0};
 export const DEFAULT_ECONOMY_CONFIG={resources:ECONOMY_RESOURCES,raceTaxRates:RACE_TAX_RATES,religionTaxRates:RELIGION_TAX_RATES,provinceModifiers:PROVINCE_MODIFIERS,tradeStatusModifiers:TRADE_STATUS_MODIFIERS,raceGrowthModifiers:{Люди:1,Дварфы:.8,Полуэльфы:.75,Эльфы:.35,Зверолюди:.6},recruitGrowthModifiers:RECRUIT_GROWTH_MODIFIERS,recruitLimitModifiers:RECRUIT_LIMIT_MODIFIERS,estateRecruitModifiers:ESTATE_RECRUIT_MODIFIERS,provinceValueWeights:PROVINCE_VALUE_WEIGHTS,estateTaxGreed:{'Господствующее|Корона':0,'Господствующее|Знать':.6,'Господствующее|Духовенство':.5,'Господствующее|Горожане':.5,'Господствующее|Крестьяне':.4,'Ключевое|Корона':0,'Ключевое|Знать':.35,'Ключевое|Духовенство':.3,'Ключевое|Горожане':.3,'Ключевое|Крестьяне':.2,'Значимое|Корона':0,'Значимое|Знать':.2,'Значимое|Духовенство':.15,'Значимое|Горожане':.15,'Значимое|Крестьяне':.1,'Бесправное|Корона':0,'Бесправное|Знать':.05,'Бесправное|Духовенство':.05,'Бесправное|Горожане':.05,'Бесправное|Крестьяне':0},taxLoyaltySensitivity:.5,occupationMultiplier:.5};
 let activeConfig=DEFAULT_ECONOMY_CONFIG;
-export function setEconomyConfig(config){if(config&&typeof config==='object')activeConfig={...DEFAULT_ECONOMY_CONFIG,...config};}
+export const DEFAULT_STATE_EFFECTS={crimeTaxPenalty:.25,crimePopulationPenalty:.5,crimeRecruitBonus:.5,corruptionTaxPenalty:1,corruptionLoyaltyDivisor:6,corruptionLoyaltyCap:.15,overloadCorruptionPerRatio:1,overloadCorruptionCapPP:3,corruptionRecoveryCapPP:1,corruptionGrowthCapPP:3,urbanizationThreshold:.15,urbanizationPenaltySlope:.5,urbanizationPenaltyCap:.5};
+export function setEconomyConfig(config){if(config&&typeof config==='object')activeConfig={...DEFAULT_ECONOMY_CONFIG,...config,stateEffects:{...DEFAULT_STATE_EFFECTS,...config.stateEffects}};}
 export function getEconomyConfig(){return activeConfig;}
 
-const roundTo=(value,places)=>Math.round(value*10**places+Number.EPSILON)/10**places;
+const roundTo=(value,places)=>Math.round((value+Number.EPSILON)*10**places)/10**places;
 const resourceFor=(province,config=activeConfig)=>(config.resources||ECONOMY_RESOURCES).find(item=>item.name===province?.layers?.resources?.name);
 export const calculateProvinceShare=(province,beneficiary)=>{const occupation=province?.occupation,owner=province?.layers?.states?.name;if(!occupation||occupation===owner)return owner===beneficiary?1:beneficiary?0:1;return occupation===beneficiary?Number(activeConfig.occupationMultiplier??.5):0;};
 
@@ -57,9 +58,15 @@ export function calculateProvinceEconomy(province, beneficiary=province?.layers?
   const religionRate=occupationRates?province.occupation_religion_tax_rates?.[province.layers?.religions?.name]??activeConfig.religionTaxRates?.[province.layers?.religions?.name]
     :stateLayer?.religion_tax_rates?.[province.layers?.religions?.name]??activeConfig.religionTaxRates?.[province.layers?.religions?.name];
   if(raceRate===undefined||religionRate===undefined)missing.push('tax-rate');
-  const taxes=type&&control!==null&&raceRate!==undefined&&religionRate!==undefined
+  const effects={...DEFAULT_STATE_EFFECTS,...activeConfig.stateEffects};
+  const recipientCrime=Number(occupationRates?province.occupation_crime??.2:stateLayer?.crime??(stateLayer ? .2 : 0));
+  const recipientCorruption=Number(occupationRates?province.occupation_corruption??.2:stateLayer?.corruption??(stateLayer ? .2 : 0));
+  const grossTaxes=type&&control!==null&&raceRate!==undefined&&religionRate!==undefined
     ?roundTo(population/10*(raceRate+religionRate)*type.tax*control*share,2):null;
-  const rawCrime=stateLayer?Number(stateLayer.crime??.2):0;
+  const corruptionTaxLoss=grossTaxes===null?null:roundTo(grossTaxes*recipientCorruption*effects.corruptionTaxPenalty,2);
+  const crimeTaxLoss=grossTaxes===null?null:roundTo((grossTaxes-corruptionTaxLoss)*recipientCrime*effects.crimeTaxPenalty,2);
+  const taxes=grossTaxes===null?null:roundTo(grossTaxes-corruptionTaxLoss-crimeTaxLoss,2);
+  const rawCrime=stateLayer||province.occupation?Number(stateLayer?.crime??.2):0;
   const crime=Number.isFinite(rawCrime)&&rawCrime>=0&&rawCrime<=1?rawCrime:null;
   if(crime===null)missing.push('crime-rate');
   const production=type&&resource&&control!==null&&crime!==null
@@ -69,7 +76,8 @@ export function calculateProvinceEconomy(province, beneficiary=province?.layers?
   if(tradeModifier===undefined)missing.push('trade-status-modifier');
   const tradeInfluence=type&&tradeModifier!==undefined?roundTo(type.tradeBase*type.trade*tradeModifier*share,2):null;
   const growthModifier=activeConfig.raceGrowthModifiers?.[province.layers?.races?.name];
-  const populationGrowth=growthModifier===undefined?null:province.layers?.states?.name===beneficiary?Math.round(population*.03*growthModifier):0;
+  const urbanizationGrowthMultiplier=Number(stateLayer?.urbanization_growth_multiplier??1);
+  const populationGrowth=growthModifier===undefined?null:province.layers?.states?.name===beneficiary?Math.round(population*.03*growthModifier*urbanizationGrowthMultiplier*(1-(crime??0)*effects.crimePopulationPenalty)):0;
   if(populationGrowth===null)missing.push('race-growth-coefficient');
   const recruitGrowthModifier=activeConfig.recruitGrowthModifiers?.[province.province_type];
   const recruitLimitModifier=activeConfig.recruitLimitModifiers?.[province.province_type];
@@ -77,9 +85,9 @@ export function calculateProvinceEconomy(province, beneficiary=province?.layers?
   if(recruitGrowthModifier===undefined)missing.push('recruit-growth-modifier');
   if(recruitLimitModifier===undefined)missing.push('recruit-limit-modifier');
   if(estateRecruitModifier===undefined)missing.push('estate-recruit-modifier');
-  const recruitGrowth=recruitGrowthModifier===undefined||control===null?null:Math.round(population/1000*recruitGrowthModifier*control*share);
+  const recruitGrowth=recruitGrowthModifier===undefined||control===null?null:Math.round(population/1000*recruitGrowthModifier*control*share*(1+recipientCrime*effects.crimeRecruitBonus));
   const recruitLimit=recruitLimitModifier===undefined||estateRecruitModifier===undefined||control===null?null:Math.round(population/100*recruitLimitModifier*estateRecruitModifier*control*share);
-  return {taxes,production,tradeInfluence,populationGrowth,recruitGrowth,recruitLimit,crime,missing};
+  return {taxes,grossTaxes,corruptionTaxLoss,crimeTaxLoss,production,tradeInfluence,populationGrowth,recruitGrowth,recruitLimit,crime,missing};
 }
 
 // Province value uses the workbook's weighted components. Recruitment limits
@@ -100,7 +108,11 @@ export function calculateProvinceValue(province, beneficiary=province?.layers?.s
 }
 
 const clamp01=value=>Math.max(0,Math.min(1,value));
-export function calculateStatePolitics(provinces,politicsRows,stateName) {
+export function calculateStatePolitics(provinces,politicsRows,stateName,stateContext=null) {
+  const effects={...DEFAULT_STATE_EFFECTS,...activeConfig.stateEffects};
+  const state=provinces.find(p=>p.layers?.states?.name===stateName)?.layers?.states;
+  const occupied=provinces.find(p=>p.occupation===stateName);
+  const corruption=Number(stateContext?.corruption??state?.corruption??occupied?.occupation_corruption??(state ? .2 : 0));
   const rowsByKey=new Map((politicsRows||[]).map(row=>[`${row.group_type}:${row.group_key}`,row]));
   const estateWeights=Object.fromEntries(ESTATE_NAMES.map(name=>[name,0]));
   const estatePopulations=Object.fromEntries(ESTATE_NAMES.map(name=>[name,0]));
@@ -140,7 +152,8 @@ export function calculateStatePolitics(provinces,politicsRows,stateName) {
     const burden=taxBurden[name];
     const rateRatio=burden.baseline?burden.actual/burden.baseline:1;
     const taxAdjustment=(rateRatio-1)*Number(activeConfig.taxLoyaltySensitivity??.5);
-    const loyalty=clamp01(Number(row?.loyalty??.5)+influence-ambition-taxAdjustment);
+    const bonus=['Знать','Духовенство'].includes(name)?Math.min(effects.corruptionLoyaltyCap,corruption/effects.corruptionLoyaltyDivisor):0;
+    const loyalty=clamp01(Number(row?.loyalty??.5)+influence-ambition-taxAdjustment+bonus);
     estateInfluence[name]=influence;
     estateLoyalty[name]=loyalty;
     const factor=estateStatusFactors[row?.status];

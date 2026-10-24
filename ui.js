@@ -5,13 +5,14 @@ const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
 const INFO={roads:'Дороги',routes:'Торговые пути',provinces:'Названия провинций',states:'Названия государств',races:'Названия рас',religions:'Названия религий',resources:'Названия ресурсов',trade:'Названия торговых зон'};
-const MENU=['Профиль','Стена','Статистика','Уведомления','Дипломатия','Власть и династия','Провинции','Города','Экономика','Торговля','Военное дело','Шпионаж','Правила и механики','Сообщество VK','Константы'];
-const ADMIN_MENU=['Профиль','Стена','Государства','Уведомления','Правила и механики','Константы'];
-const STATE_SECTIONS=['Статистика','Власть и династия','Дипломатия','Провинции','Экономика','Торговля'];
-const PANELS={auth:['Авторизация','user-round','left'],menu:['Меню','menu','left'],legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
+const STATE_SECTIONS=['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия','Военное дело','Шпионаж'];
+const PANELS={legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emit=(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail}));
 let current=null,user=null,categories=[],allProvinces=[],provinceAdjacency={},mapMarkers=[],selectedProvince=null,pendingMarkerDraft=null,toolMode='',lastToolResult='',saveTimer,showStatus=()=>{},adminEditing=false,paintField='climate',paintValue='',paintActive=false,legendOpen=false,stateRows=[],applicationDraft=null,applicationPickMode=null,unreadNotificationCount=0,notificationFetchToken=0,activeMenuSection='Профиль',tradeRoutePick=null,pendingStateNavigation=null,activeContractType='dynastic_marriage',tradeAvailability={},tradeProposalDraft={fromStateId:null,toStateId:null,route:[],fromGoods:[{name:'',quantity:0}],toGoods:[{name:'',quantity:0}],fromGold:0,toGold:0};
+let lastStateSection='Статистика',lastAdminStateId=null,lastAdminStateTab='Статистика',pendingProvinceId=null;
+let provinceColumnPreset='Основное',provinceSearchQuery='';
+let headerResourceToken=0;
 const BELONGING_VALUES=['Корона','Знать','Духовенство','Горожане','Крестьяне'];
 const TRADE_STATUS_VALUES=['Отсутствует','Устье реки','Природный порт','Центр торговли I','Центр торговли II','Центр торговли III'];
 const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','Государство'],['occupation','Оккупация'],['population','Население'],['belonging','Принадлежность'],['trade_status','Торговый статус'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль, %'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
@@ -109,7 +110,7 @@ function updateDockState(){document.querySelectorAll('.dock-button').forEach(b=>
 function closeDrawer(){current=null;$('drawer').hidden=true;updateDockState();queueLayout();}
 function closeLegend(){legendOpen=false;$('legend-drawer').hidden=true;updateDockState();queueLayout();}
 function closeAllDrawers(){closeDrawer();closeLegend();}
-function openModal(title,auth=false){closeAllDrawers();$('modal-title').textContent=title;$('modal').classList.toggle('auth-dialog',auth);$('modal').classList.toggle('menu-dialog',title==='Меню');if(!$('modal').open)$('modal').showModal();}
+function openModal(title,auth=false){closeDrawer();$('modal-title').textContent=title;$('modal').classList.toggle('auth-dialog',auth);if(!$('modal').open)$('modal').showModal();}
 const checks=(entries,values,group)=>Object.entries(entries).map(([key,label])=>`<label class="check-row"><span>${label}</span><input type="checkbox" data-group="${group}" data-key="${key}" ${values[key]?'checked':''}></label>`).join('');
 const group=(title,content)=>`<section class="panel-group" data-page-title="${title}">${content}</section>`;
 function markerCreateMarkup(){
@@ -130,7 +131,7 @@ const searchForm=()=>`<form id="search-form" class="stack"><label for="province-
 const bulkCategoryLayer={race:'races',religion:'religions',state:'states',resource:'resources',trade:'trade',climate:'climate'};
 function bulkValueControl(field,value,side,index){
   const id=`bulk-${side}-${index}`;
-  if(field==='terrain_type')return `<select data-bulk-value="${side}" data-index="${index}"><option value="" ${value==null?'selected':''}>Не задано</option><option value="forest" ${value==='forest'?'selected':''}>Лес</option><option value="marsh" ${value==='marsh'?'selected':''}>Болото</option></select>`;
+  if(field==='terrain_type')return `<select data-bulk-value="${side}" data-index="${index}"><option value="" ${value==null?'selected':''}>Не задано</option>${[['forest','Лес'],['marsh','Болото'],['plains','Равнины'],['hills','Холмы'],['mountains','Горы'],['high_mountains','Высокие горы']].map(([code,label])=>`<option value="${code}" ${value===code?'selected':''}>${label}</option>`).join('')}</select>`;
   if(field==='occupation')return `<select data-bulk-value="${side}" data-index="${index}"><option value="" ${value==null?'selected':''}>Не оккупирована</option>${categories.filter(c=>c.layer==='states').map(c=>`<option value="${escape(c.name)}" ${value===c.name?'selected':''}>${escape(c.name)}</option>`).join('')}</select>`;
   if(field==='belonging'||field==='trade_status')return `<select data-bulk-value="${side}" data-index="${index}">${(field==='belonging'?BELONGING_VALUES:TRADE_STATUS_VALUES).map(v=>`<option value="${v}" ${value===v?'selected':''}>${v}</option>`).join('')}</select>`;
   if(bulkCategoryLayer[field]&&!(field==='state'&&side==='target')){
@@ -151,6 +152,7 @@ function bulkRulesMarkup(){
 function queueLayout(){if(!layoutFrame)layoutFrame=requestAnimationFrame(()=>{layoutFrame=0;layoutPanels();});}
 function layoutPanels(){
   const card=$('selection'),scale=$('map-scale');
+  const shellTop=$('app-brand').closest('.app-header').getBoundingClientRect().bottom+12;
   // Anchor to the corner. Only lift the card on narrow screens if it would
   // physically intersect the scale bar; desktop always uses 12px at both edges.
   card.style.bottom='12px';card.style.width='';
@@ -165,9 +167,7 @@ function layoutPanels(){
   const drawer=$('drawer');
   const legend=$('legend-drawer');
   if(!legend.hidden){
-    const calendar=document.querySelector('.turn-badge').getBoundingClientRect();
-    const overlapsCalendar=64<calendar.right+8&&64+legend.getBoundingClientRect().width>calendar.left-8;
-    const top=overlapsCalendar?calendar.bottom+8:12;
+    const top=shellTop;
     let bottom=innerHeight-12;
     const rect=legend.getBoundingClientRect(),overlaps=r=>rect.left<r.right+8&&rect.right>r.left-8;
     if(!card.hidden&&overlaps(card.getBoundingClientRect()))bottom=Math.min(bottom,card.getBoundingClientRect().top-8);
@@ -180,9 +180,9 @@ function layoutPanels(){
   drawer.classList.toggle('compact',innerHeight<650);
   const maxWidth=Math.max(180,innerWidth-128);
   const available=()=>{
-    const d=drawer.getBoundingClientRect(),c=card.getBoundingClientRect(),s=scale.getBoundingClientRect(),calendar=document.querySelector('.turn-badge').getBoundingClientRect();
+    const d=drawer.getBoundingClientRect(),c=card.getBoundingClientRect(),s=scale.getBoundingClientRect();
     const overlaps=r=>d.left<r.right+8&&d.right>r.left-8;
-    const top=overlaps(calendar)?calendar.bottom+8:12;
+    const top=shellTop;
     let bottom=innerHeight-12;
     if(!card.hidden&&overlaps(c))bottom=Math.min(bottom,c.top-8);
     if(overlaps(s))bottom=Math.min(bottom,s.top-8);
@@ -226,7 +226,7 @@ function renderDrawer(){
       const layer={race:'races',religion:'religions',resource:'resources',trade:'trade',climate:'climate'}[field];
       valueControl=`<select id="admin-paint-value"><option value="">— очистить значение —</option>${categories.filter(c=>c.layer===layer).map(c=>`<option value="${escape(c.name)}" ${paintValue===c.name?'selected':''}>${escape(c.name)}</option>`).join('')}</select>`;
     }else if(field==='occupation')valueControl=`<select id="admin-paint-value"><option value="">— снять оккупацию —</option>${categories.filter(c=>c.layer==='states').map(c=>`<option value="${escape(c.name)}" ${paintValue===c.name?'selected':''}>${escape(c.name)}</option>`).join('')}</select>`;
-    else if(field==='terrain_type')valueControl=`<select id="admin-paint-value"><option value="">— убрать тип местности —</option><option value="forest" ${paintValue==='forest'?'selected':''}>Лес</option><option value="marsh" ${paintValue==='marsh'?'selected':''}>Болото</option></select>`;
+    else if(field==='terrain_type')valueControl=`<select id="admin-paint-value"><option value="">— убрать тип местности —</option>${[['forest','Лес'],['marsh','Болото'],['plains','Равнины'],['hills','Холмы'],['mountains','Горы'],['high_mountains','Высокие горы']].map(([code,label])=>`<option value="${code}" ${paintValue===code?'selected':''}>${label}</option>`).join('')}</select>`;
     else if(['capital','city'].includes(field))valueControl=`<select id="admin-paint-value"><option value="true" ${paintValue==='true'?'selected':''}>Включить</option><option value="false" ${paintValue==='false'?'selected':''}>Выключить</option></select>`;
     else if(field==='belonging'||field==='trade_status')valueControl=`<select id="admin-paint-value">${(field==='belonging'?BELONGING_VALUES:TRADE_STATUS_VALUES).map(v=>`<option value="${v}" ${paintValue===v?'selected':''}>${v}</option>`).join('')}</select>`;
     else if(field==='control')valueControl=`<input id="admin-paint-value" type="number" min="0" max="100" step="1" value="${escape(paintValue||'100')}" placeholder="0–100%">`;
@@ -337,8 +337,6 @@ function renderLegend(){
   queueLayout();
 }
 function togglePanel(key){
-  if(key==='auth'){renderAuth();return;}
-  if(key==='menu'){renderMenu('Профиль');return;}
   if(key==='admin'&&user?.role!=='admin')return;
   if(key==='legend'){
     legendOpen=!legendOpen;$('legend-drawer').hidden=!legendOpen;
@@ -348,10 +346,30 @@ function togglePanel(key){
   current=key;$('drawer-title').textContent=PANELS[key][0];$('drawer').className=`surface drawer ${PANELS[key][2]}`;$('drawer').hidden=false;
   updateDockState();renderDrawer();
 }
+async function refreshHeaderResources(){
+  const token=++headerResourceToken,stateId=Number(user?.state_ids?.[0]);
+  const bar=$('header-resources');bar.hidden=!stateId;document.body.classList.toggle('has-state-resources',!!stateId);
+  if(!stateId)return;
+  for(const id of ['header-treasury','header-prestige','header-recruits'])$(id).textContent='—';
+  const owned=allProvinces.filter(province=>province.kind==='land'&&Number(province.layers?.states?.id)===stateId);
+  const recruits=owned.map(province=>calculateProvinceEconomy(province,province.layers.states.name));
+  if(recruits.length&&recruits.every(item=>item.recruitGrowth!=null&&item.recruitLimit!=null)){
+    const growth=recruits.reduce((sum,item)=>sum+item.recruitGrowth,0),limit=recruits.reduce((sum,item)=>sum+item.recruitLimit,0);
+    $('header-recruits').textContent=`+${growth.toLocaleString('ru-RU')} / ${limit.toLocaleString('ru-RU')}`;
+  }else if(!owned.length)$('header-recruits').textContent='+0 / 0';
+  try{
+    const data=await api(`${user?.role==='admin'?'admin':'my'}/states/${stateId}/tax-rates`);
+    if(token!==headerResourceToken||Number(user?.state_ids?.[0])!==stateId)return;
+    $('header-treasury').textContent=Number(data.buckets?.Корона||0).toLocaleString('ru-RU');
+    $('header-prestige').textContent=Number(data.prestige||0).toLocaleString('ru-RU');
+  }catch{/* The header keeps placeholders while state data is unavailable. */}
+}
 async function acceptUser(next){
-  user=next;notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);emit('roads:cancel');}$('panel-admin').hidden=user?.role!=='admin';$('panel-auth').title=user?`Авторизация · ${user.nickname}`:'Авторизация';
+  user=next;notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);emit('roads:cancel');}$('panel-admin').hidden=user?.role!=='admin';
+  void refreshHeaderResources();
   if(!user&&current==='admin')closeDrawer();
   if(user){void refreshUnreadNotificationCount();try{const stored=await api('preferences');settings={...settings,...stored,markers:{...settings.markers,...stored.markers},information:{...settings.information,...stored.information}};if(!LAYERS[settings.layer])settings.layer='states';save();}catch(e){showStatus(e.message,4000);}}
+  if(!$('app-page').hidden)renderMenu(activeMenuSection,true);
 }
 function renderAuth(){
   openModal('Авторизация',true);const host=$('modal-content');
@@ -408,8 +426,8 @@ function renderApplicationForm(host){
   form.querySelector('[name=history]').oninput=e=>{d.history=e.target.value;host.querySelector('#history-count').value=e.target.value.length;};
   form.querySelectorAll('input,select').forEach(el=>el.addEventListener('change',()=>{if(el.name)d[el.name]=el.type==='checkbox'?el.checked:el.value;if(el.name in PRINCIPLES)d.principles[el.name]=el.value;if(el.name==='state_color')d.state_color=el.value;}));
   emblemInput.onchange=async e=>{const file=e.target.files?.[0];if(!file)return;if(file.size>2097152||!['image/jpeg','image/png','image/webp'].includes(file.type)){host.querySelector('#application-form-message').textContent='Нужен JPG, PNG или WebP до 2 МБ.';e.target.value='';return;}d.emblem_data=await readImageData(file);d.emblem_file_name=file.name;renderApplicationForm(host);};
-  form.querySelector('#pick-application-provinces').onclick=()=>{applicationPickMode='provinces';emit('application:pick',{mode:'provinces',ids:d.province_ids});$('modal').close();showStatus('Выберите пять свободных сухопутных провинций. Повторный щелчок снимает выбор.',0);};
-  form.querySelector('#pick-application-capital').onclick=()=>{applicationPickMode='capital';emit('application:pick',{mode:'capital',ids:d.province_ids});$('modal').close();showStatus('Выберите одну из пяти выбранных провинций для столицы.',0);};
+  form.querySelector('#pick-application-provinces').onclick=()=>{applicationPickMode='provinces';emit('application:pick',{mode:'provinces',ids:d.province_ids});showMap();showStatus('Выберите пять свободных сухопутных провинций. Повторный щелчок снимает выбор.',0);};
+  form.querySelector('#pick-application-capital').onclick=()=>{applicationPickMode='capital';emit('application:pick',{mode:'capital',ids:d.province_ids});showMap();showStatus('Выберите одну из пяти выбранных провинций для столицы.',0);};
   form.querySelector('#cancel-application').onclick=()=>{applicationDraft=null;applicationPickMode=null;emit('application:pick',null);emit('application:clear-selection');renderProfile(host);};
   form.onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(form));Object.assign(d,data,{principles:Object.fromEntries(Object.keys(PRINCIPLES).map(key=>[key,data[key]]))});
     const hasTradeZone=d.province_ids.every(id=>!!allProvinces.find(province=>Number(province.id)===Number(id))?.layers?.trade);
@@ -447,11 +465,11 @@ async function renderNotifications(host){
 }
 function readImageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Не удалось прочитать изображение'));reader.readAsDataURL(file);});}
 function updateNotificationBadge(){
-  document.querySelectorAll('.menu-tabs [data-section="Уведомления"]').forEach(button=>{
-    let badge=button.querySelector('.notification-indicator');
-    if(unreadNotificationCount>0){if(!badge){badge=document.createElement('span');badge.className='notification-indicator';badge.textContent='!';badge.setAttribute('aria-hidden','true');button.append(badge);}button.setAttribute('aria-label',`Уведомления: ${unreadNotificationCount} непрочитанных`);}
-    else{badge?.remove();button.removeAttribute('aria-label');}
-  });
+  const badge=$('header-notification-count'),button=$('header-notifications');
+  if(!badge||!button)return;
+  badge.hidden=unreadNotificationCount===0;
+  badge.textContent=unreadNotificationCount>99?'99+':String(unreadNotificationCount);
+  button.setAttribute('aria-label',unreadNotificationCount?`Уведомления: ${unreadNotificationCount} непрочитанных`:'Уведомления');
 }
 function setUnreadNotificationCount(rows){unreadNotificationCount=rows.filter(item=>!item.read).length;updateNotificationBadge();}
 async function refreshUnreadNotificationCount(){
@@ -461,34 +479,96 @@ async function refreshUnreadNotificationCount(){
 }
 window.addEventListener('focus',()=>{if(user)void refreshUnreadNotificationCount();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&user)void refreshUnreadNotificationCount();});
-const menuSections=()=>user?.role==='admin'
-  ? [...ADMIN_MENU]
-  : MENU.filter(name=>name!=='Города'&&name!=='Константы');
-
-function renderMenu(section='Профиль'){
-  openModal('Меню');
-  if(user)void refreshUnreadNotificationCount();
-  const sections=menuSections();if(!sections.includes(section))section='Профиль';
+const sectionView=section=>section==='Стена'?'wall':section==='Правила и механики'?'rules':STATE_SECTIONS.includes(section)||section==='Государства'?'state':'utility';
+function confirmLeaveEdits(){
+  const host=$('menu-section');
+  if(!host||$('app-page').hidden)return true;
+  const edited=[...host.querySelectorAll('[data-province-name],[data-tax-layer],[data-group-status]')].some(input=>!input.disabled&&input.dataset.originalValue!==undefined&&input.value.trim()!==input.dataset.originalValue);
+  return !edited||window.confirm('Есть несохранённые изменения. Перейти в другой раздел без сохранения?');
+}
+const routeHash=(section,stateId=null,tab='Статистика')=>`#view=${encodeURIComponent(section)}${section==='Государства'&&stateId?`&state=${Number(stateId)}&tab=${encodeURIComponent(tab)}`:''}`;
+function sectionFromLocation(){
+  const params=new URLSearchParams(location.hash.slice(1)),section=params.get('view')||'map';
+  if(section==='Города'){history.replaceState({section:'Статистика'},'',routeHash('Статистика'));return 'Статистика';}
+  if(section==='Государства'){
+    const stateId=Number(params.get('state'))||null,tab=params.get('tab')||'Статистика';
+    lastAdminStateId=stateId;lastAdminStateTab=STATE_SECTIONS.includes(tab)?tab:'Статистика';
+    pendingStateNavigation=stateId?{stateId,tab:lastAdminStateTab}:null;
+  }
+  return section;
+}
+function updateTopNavigation(view){
+  document.querySelectorAll('[data-top-view]').forEach(button=>{
+    const active=button.dataset.topView===view;
+    button.classList.toggle('active',active);
+    if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  });
+}
+function closeUtilityPopover(){
+  const popover=$('utility-popover');if(!popover)return;
+  popover.hidden=true;popover.dataset.kind='';
+  for(const id of ['header-notifications','header-profile'])$(id)?.setAttribute('aria-expanded','false');
+}
+function showUtilityPopover(kind){
+  const popover=$('utility-popover');
+  if(!popover.hidden&&popover.dataset.kind===kind){closeUtilityPopover();return;}
+  popover.hidden=false;popover.dataset.kind=kind;
+  $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
+  $('header-notifications').setAttribute('aria-expanded',String(kind==='notifications'));
+  $('header-profile').setAttribute('aria-expanded',String(kind==='profile'));
+  if(kind==='profile'){
+    popover.innerHTML=`<div class="utility-menu"><strong>${escape(user?.nickname||'Профиль')}</strong><span class="hint">${user?.role==='admin'?'Администратор':user?'Игрок':'Гость'}</span><button type="button" data-open-profile>${user?'Открыть профиль':'Войти'}</button></div>`;
+    popover.querySelector('[data-open-profile]').onclick=()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();if(user)renderMenu('Профиль');else renderAuth();};
+  }else if(user){
+    void renderNotifications(popover).then(()=>{if(popover.hidden||popover.dataset.kind!=='notifications')return;const button=document.createElement('button');button.type='button';button.className='utility-all';button.textContent='Все уведомления';button.onclick=()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();renderMenu('Уведомления');};popover.append(button);});
+  }else{
+    popover.innerHTML='<p class="hint">Войдите, чтобы увидеть уведомления.</p><button type="button" data-notification-login>Войти</button>';
+    popover.querySelector('[data-notification-login]').onclick=()=>{closeUtilityPopover();renderAuth();};
+  }
+}
+function showMap(fromHistory=false){
+  $('app-page').hidden=true;document.body.dataset.view='map';closeDrawer();closeUtilityPopover();updateTopNavigation('map');
+  $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
+  if(!fromHistory&&location.hash!=='#view=map')history.pushState({section:'map'},'',routeHash('map'));
+  document.title='Fauxlore — карта';
+  queueLayout();
+}
+function renderMenu(section='Статистика',fromHistory=false){
+  if(section==='Города')section='Статистика';
+  if(section==='Карта'){showMap(fromHistory);return;}
+  if(user?.role==='admin'&&STATE_SECTIONS.includes(section)){pendingStateNavigation={stateId:lastAdminStateId,tab:section};section='Государства';}
+  const view=sectionView(section);
+  if(view==='state'&&user?.role!=='admin'&&section==='Государства')section=lastStateSection;
+  if(view==='state'&&section!=='Государства')lastStateSection=section;
   activeMenuSection=section;
-  const header=$('modal-title').parentElement;
-  header.querySelector('.menu-mobile-picker')?.remove();
-  const picker=document.createElement('select');picker.className='menu-mobile-picker';picker.setAttribute('aria-label','Раздел меню');
-  picker.innerHTML=sections.map(name=>`<option value="${escape(name)}" ${name===section?'selected':''}>${escape(name)}</option>`).join('');
-  picker.onchange=()=>renderMenu(picker.value);header.insertBefore(picker,$('close-modal'));
-  const host=$('modal-content');
-  host.innerHTML=`<div class="menu-layout"><nav class="menu-tabs" aria-label="Разделы сайта">${sections.map(name=>`<button type="button" data-section="${escape(name)}" class="${name===section?'active':''}">${escape(name)}</button>`).join('')}</nav><section id="menu-section" class="placeholder"></section></div>`;
-  host.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>renderMenu(b.dataset.section));
-  updateNotificationBadge();
-  const content=$('menu-section');
+  closeDrawer();
+  closeUtilityPopover();
+  $('app-page').hidden=false;document.body.dataset.view=view;updateTopNavigation(view);
+  $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
+  const tabs=$('page-tabs'),picker=$('page-tab-picker'),tabSelect=$('page-tab-select'),heading=$('page-heading'),content=$('menu-section');
+  const isState=view==='state';
+  heading.innerHTML=`<div><span class="page-eyebrow">${isState?'УПРАВЛЕНИЕ ГОСУДАРСТВОМ':'FAUXLORE'}</span><h1>${escape(isState?'Государство':section)}</h1></div>`;
+  tabs.hidden=!isState||user?.role==='admin';
+  picker.hidden=tabs.hidden;
+  if(!tabs.hidden){
+    tabs.innerHTML=STATE_SECTIONS.map(name=>`<button type="button" data-state-section="${escape(name)}" class="${name===section?'active':''}" ${name===section?'aria-current="page"':''}>${name==='Статистика'?'Обзор':escape(name)}</button>`).join('');
+    tabs.querySelectorAll('[data-state-section]').forEach(button=>button.onclick=()=>{if(confirmLeaveEdits())renderMenu(button.dataset.stateSection);});
+    tabSelect.innerHTML=STATE_SECTIONS.map(name=>`<option value="${escape(name)}" ${name===section?'selected':''}>${name==='Статистика'?'Обзор':escape(name)}</option>`).join('');
+    tabSelect.onchange=()=>{if(confirmLeaveEdits())renderMenu(tabSelect.value);else tabSelect.value=section;};
+  }else{tabs.replaceChildren();tabSelect.replaceChildren();}
+  content.replaceChildren();
+  $('app-page').scrollTop=0;
+  const nextHash=routeHash(section,section==='Государства'?(pendingStateNavigation?.stateId||lastAdminStateId):null,pendingStateNavigation?.tab||lastAdminStateTab);
+  if(!fromHistory&&location.hash!==nextHash)history.pushState({section},'',nextHash);
+  document.title=`${isState?(section==='Статистика'?'Обзор':section):section} — Fauxlore`;
   if(section==='Профиль')renderProfile(content);
   else if(section==='Государства'&&user?.role==='admin')renderStatesMenu(content);
   else if(section==='Уведомления'&&user)renderNotifications(content);
-  else if(section==='Дипломатия'&&user?.role!=='admin')renderDynasticDiplomacy(content);
   else if(section==='Константы'&&user?.role==='admin')renderEconomyConstants(content);
-  else if(section==='Экономика'&&user)renderEconomyMenu(content);
-  else if(['Статистика','Власть и династия','Провинции','Производство','Торговля'].includes(section))renderPlayerStateSection(content,section);
-  else content.innerHTML=`<span class="badge">ЗАПЛАНИРОВАНО</span><h3>${escape(section)}</h3><p class="hint">${section==='Сообщество VK'?'Ссылка на сообщество Fauxlore ещё не задана.':'Раздел оформлен как заготовка. Содержание и игровые правила требуют уточнения.'}</p>`;
-  if($('profile-login'))$('profile-login').onclick=()=>renderAuth();
+  else if(STATE_SECTIONS.includes(section)&&user&&['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия'].includes(section))renderPlayerStateSection(content,section);
+  else if(isState&&!user){content.innerHTML='<div class="empty-page"><h2>Государство</h2><p>Войдите, чтобы открыть игровые данные.</p><button type="button" id="state-login">Войти</button></div>';content.querySelector('#state-login').onclick=renderAuth;}
+  else if(section==='Правила и механики')content.innerHTML='<div class="reading-page"><p class="hint">Справочник игровых правил</p><h2>Правила и механики</h2><p>Здесь будут опубликованы действующие правила игры. Пока раздел находится в разработке.</p></div>';
+  else content.innerHTML=`<div class="empty-page"><span class="badge">В РАЗРАБОТКЕ</span><h2>${escape(section)}</h2><p>Содержание раздела пока не опубликовано.</p></div>`;
 }
 
 async function renderEconomyMenu(host){
@@ -621,6 +701,7 @@ async function loadStateFinances(host,stateId,isAdmin){
   try{
     const data=await api(`${isAdmin?'admin':'my'}/states/${stateId}/tax-rates`);if(!target.isConnected)return;
     target.innerHTML=`<section class="state-dashboard-card"><h4>Казна Короны</h4><strong class="state-finance-total">${Number(data.buckets?.Корона||0).toLocaleString('ru-RU')} G</strong></section><section class="state-dashboard-card"><h4>Престиж</h4><strong class="state-finance-total">${Number(data.prestige||0).toLocaleString('ru-RU')} ОП</strong></section>`;
+    if(Number(user?.state_ids?.[0])===Number(stateId)){$('header-treasury').textContent=Number(data.buckets?.Корона||0).toLocaleString('ru-RU');$('header-prestige').textContent=Number(data.prestige||0).toLocaleString('ru-RU');}
   }catch(error){if(target.isConnected)target.innerHTML=`<section class="state-dashboard-card"><h4>Казна и престиж</h4><p class="form-message">${escape(error.message)}</p></section>`;}
 }
 
@@ -639,14 +720,25 @@ async function renderDynasticDiplomacy(host,options={}){
       if(host.isConnected)host.innerHTML='<h3>Династические браки</h3><p class="hint">Войдите через Google, чтобы открыть дипломатические предложения.</p>';
       return;
     }
-    const data=await api('my/marriage-offers');
+    const [data,tradeData]=await Promise.all([api('my/marriage-offers'),api('my/trade-agreements')]);
     if(!host.isConnected)return;
     const participantLabel=person=>`${person.name} ${person.surname||''} · ${person.age} лет · ${person.gender} · ${person.race}`.trim();
     const sendForm=!isAdminState&&data.states.length&&data.targets.length?`<form class="dynastic-offer-form stack"><label class="field"><span>От имени государства</span><select name="from_state" required>${data.states.map(state=>`<option value="${Number(state.id)}">${escape(state.name)} · ${escape(state.authority||'Форма власти не задана')}</option>`).join('')}</select></label><label class="field"><span>Государство-получатель</span><select name="to_state" required></select></label><label class="field"><span>Персонаж вашего государства</span><select name="from_character" required></select></label><label class="field"><span>Персонаж государства-получателя (противоположный пол)</span><select name="to_character" required></select></label><div class="marriage-warning" data-marriage-warning role="status">Выберите персонажей, чтобы увидеть последствия договора.</div><button class="primary" type="submit">Отправить предложение</button></form>`:'<p class="hint">Предложения династического брака создаются игроками государств.</p>';
-    const proposalCard=(proposal,incoming)=>`<article class="application-panel marriage-candidate"><strong>${escape(proposal.from_state)} → ${escape(proposal.to_state)}</strong><span>${escape(proposal.from_ruler)} ↔ ${escape(proposal.to_ruler)}</span><p class="hint">Законность детей: ${proposal.lawful_for_children?'дети будут законными наследниками в государстве матери-Династии и войдут в её семейный реестр':'брак не даёт детям законного права на наследование'}. Зачатие: ${proposal.child_race&&Number(proposal.from_age)<(proposal.from_gender==='Мужской'?60:45)&&Number(proposal.to_age)<(proposal.to_gender==='Мужской'?60:45)?`возможно, раса ребёнка — ${escape(proposal.child_race)}`:'невозможно по возрасту или сочетаемости рас'}.</p><small>${new Date(proposal.created_at).toLocaleDateString('ru-RU')}</small>${incoming?`<div class="inline-actions"><button type="button" data-marriage-decision="accept" data-proposal-id="${Number(proposal.id)}">Принять</button><button type="button" class="danger-button" data-marriage-decision="reject" data-proposal-id="${Number(proposal.id)}">Отклонить</button></div>`:'<span class="hint">Ожидает ответа</span>'}</article>`;
+    const statusLabel=status=>({pending:'Ожидает ответа',accepted:'Заключён',declined:'Отклонён',cancelled:'Отозван'}[status]||status||'Статус неизвестен');
+    const proposalCard=(proposal,incoming)=>`<article class="application-panel marriage-candidate"><strong>Династический брак · ${escape(proposal.from_state)} → ${escape(proposal.to_state)}</strong><span>${escape(statusLabel(proposal.status))}</span><span>${escape(proposal.from_ruler)} ↔ ${escape(proposal.to_ruler)}</span><p class="hint">Законность детей: ${proposal.lawful_for_children?'дети будут законными наследниками в государстве матери-Династии и войдут в её семейный реестр':'брак не даёт детям законного права на наследование'}. Зачатие: ${proposal.child_race&&Number(proposal.from_age)<(proposal.from_gender==='Мужской'?60:45)&&Number(proposal.to_age)<(proposal.to_gender==='Мужской'?60:45)?`возможно, раса ребёнка — ${escape(proposal.child_race)}`:'невозможно по возрасту или сочетаемости рас'}.</p><small>${new Date(proposal.created_at).toLocaleDateString('ru-RU')}</small>${incoming&&proposal.status==='pending'?`<div class="inline-actions"><button type="button" data-marriage-decision="accept" data-proposal-id="${Number(proposal.id)}">Принять</button><button type="button" class="danger-button" data-marriage-decision="reject" data-proposal-id="${Number(proposal.id)}">Отклонить</button></div>`:''}</article>`;
     const relevant=item=>!stateId||Number(item.from_state_id)===stateId||Number(item.to_state_id)===stateId;
-    const incoming=(data.incoming||[]).filter(relevant),outgoing=(data.outgoing||[]).filter(relevant);
-    host.innerHTML=`<div class="state-menu stack"><h3>Дипломатия</h3><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal><p class="hint">Загружаю торговые договоры…</p></div></div></section><section class="application-panel"><h4>Входящие предложения династического брака</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>proposalCard(item,true)).join('')}</div>`:'<p class="hint">Входящих предложений нет.</p>'}</section><section class="application-panel"><h4>Отправленные предложения династического брака</h4>${outgoing.length?`<div class="marriage-candidates">${outgoing.map(item=>proposalCard(item,false)).join('')}</div>`:'<p class="hint">Ожидающих ответов нет.</p>'}</section></div>`;
+    const marriageRecords=(data.incoming||[]).map(item=>({...item,contractType:'marriage',incoming:Number(item.to_state_id)===stateId||(!stateId&&user.role!=='admin')}));
+    const marriageIncoming=isAdminState?marriageRecords.filter(item=>Number(item.to_state_id)===stateId):((data.incoming||[]).map(item=>({...item,contractType:'marriage',incoming:true})));
+    const marriageOutgoing=isAdminState?marriageRecords.filter(item=>Number(item.from_state_id)===stateId):((data.outgoing||[]).map(item=>({...item,contractType:'marriage',incoming:false})));
+    const tradeRecords=(tradeData.agreements||[]).filter(relevant).map(item=>({...item,contractType:'trade'}));
+    const tradeIncoming=tradeRecords.filter(item=>Number(item.to_state_id)===stateId||(!stateId&&item.incoming));
+    const tradeOutgoing=tradeRecords.filter(item=>Number(item.from_state_id)===stateId||(!stateId&&!item.incoming));
+    const tradeCard=(item,incoming)=>`<article class="application-panel marriage-candidate"><strong>Торговый договор · ${escape(item.from_state)} → ${escape(item.to_state)}</strong><span>${escape(statusLabel(item.status))}</span><p>Маршрут: ${tradeRouteNames(item.route_province_ids||[])}</p><p>Отправитель: ${tradeTermsText(item.terms?.from_goods,item.terms?.from_gold)}</p><p>Получатель: ${tradeTermsText(item.terms?.to_goods,item.terms?.to_gold)}</p><small>${Number(item.created_year)} год · ${Number(item.created_turn)} ход</small>${item.status==='pending'&&incoming?`<div class="inline-actions"><button type="button" data-trade-action="accept" data-trade-id="${Number(item.id)}">Принять</button><button type="button" class="danger-button" data-trade-action="decline" data-trade-id="${Number(item.id)}">Отклонить</button></div>`:''}${['pending','accepted'].includes(item.status)&&(!incoming||user.role==='admin')?`<div class="inline-actions"><button type="button" class="danger-button" data-trade-action="cancel" data-trade-id="${Number(item.id)}">Отозвать / расторгнуть</button></div>`:''}</article>`;
+    const incoming=[...marriageIncoming,...tradeIncoming].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    const outgoing=[...marriageOutgoing,...tradeOutgoing].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    host.innerHTML=`<div class="state-menu stack"><h3>Дипломатия</h3><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal></div></div></section><section class="application-panel"><h4>Входящие договоры</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>item.contractType==='marriage'?proposalCard(item,true):tradeCard(item,true)).join('')}</div>`:'<p class="hint">Входящих договоров нет.</p>'}</section><section class="application-panel"><h4>Отправленные договоры</h4>${outgoing.length?`<div class="marriage-candidates">${outgoing.map(item=>item.contractType==='marriage'?proposalCard(item,false):tradeCard(item,false)).join('')}</div>`:'<p class="hint">Отправленных договоров нет.</p>'}</section></div>`;
+    const diplomacyPanels=[...host.querySelector('.state-menu').children].filter(node=>node.classList.contains('application-panel'));
+    if(diplomacyPanels.length===3)diplomacyPanels[2].after(diplomacyPanels[0]);
     const tradeHost=host.querySelector('[data-trade-proposal]');
     void renderTradeProposal(tradeHost,{stateId});
     host.querySelector('[data-contract-type]')?.addEventListener('change',event=>{
@@ -687,6 +779,7 @@ async function renderDynasticDiplomacy(host,options={}){
       form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('[type="submit"]');if(!fromCharacter.value||!toCharacter.value){showStatus('Выберите допустимую пару персонажей',3500);return;}button.disabled=true;try{await api('my/marriage-offers',{method:'POST',body:JSON.stringify({from_state_id:Number(fromState.value),to_state_id:Number(toState.value),from_character_id:Number(fromCharacter.value),to_character_id:Number(toCharacter.value)})});showStatus('Предложение отправлено',3500);renderDynasticDiplomacy(host,options);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
     }
     host.querySelectorAll('[data-marriage-decision]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const prefix=user.role==='admin'?'admin':'my';await api(`${prefix}/marriage-offers/${Number(button.dataset.proposalId)}/${button.dataset.marriageDecision}`,{method:'POST',body:'{}'});showStatus(button.dataset.marriageDecision==='accept'?'Брак заключён; обе стороны получили по 10 ОП':'Предложение отклонено',4000);renderDynasticDiplomacy(host,options);}catch(error){button.disabled=false;showStatus(error.message,5000);}}));
+    host.querySelectorAll('[data-trade-action]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const prefix=user.role==='admin'?'admin':'my';const result=await api(`${prefix}/trade-agreements/${Number(button.dataset.tradeId)}/${button.dataset.tradeAction}`,{method:'POST',body:'{}'});showStatus(result.status==='accepted'?'Договор согласован':'Статус договора обновлён',4000);renderDynasticDiplomacy(host,options);}catch(error){button.disabled=false;showStatus(error.message,5000);}}));
   }catch(error){if(host.isConnected){host.innerHTML=`<div class="state-menu stack"><h3>Дипломатия</h3><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage">Династический брак</option><option value="trade">Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage"><p class="form-message">Предложения брака не загрузились: ${escape(error.message)}</p></div><div data-contract-panel="trade" hidden><div data-trade-proposal></div></div></section></div>`;void renderTradeProposal(host.querySelector('[data-trade-proposal]'));host.querySelector('[data-contract-type]')?.addEventListener('change',event=>{activeContractType=event.target.value;host.querySelectorAll('[data-contract-panel]').forEach(panel=>{panel.hidden=panel.dataset.contractPanel!==event.target.value;});});}}
 }
 
@@ -726,7 +819,7 @@ async function renderTradeProposal(host,options={}){
     const form=own.length&&eligible.length?`<form class="application-panel trade-agreement-form stack"><h4>Предложить торговый договор</h4><div class="editor-grid"><label class="field"><span>От имени государства</span><select name="from_state" required>${own.map(s=>`<option value="${Number(s.id)}" ${Number(s.id)===Number(tradeProposalDraft.fromStateId)?'selected':''}>${escape(s.name)}</option>`).join('')}</select></label><label class="field"><span>Государство-получатель</span><select name="to_state" required>${eligible.map(s=>`<option value="${Number(s.id)}" ${Number(s.id)===Number(tradeProposalDraft.toStateId)?'selected':''}>${escape(s.name)}</option>`).join('')}</select></label></div><div class="trade-route-controls"><button type="button" data-trade-pick-route>Выбрать маршрут на карте</button><span data-trade-route-status>${tradeRoutePick?'Выберите начальный город на карте':tradeProposalDraft.route.length?'Маршрут выбран':'Выберите города и промежуточные провинции кликами на карте.'}</span>${route}</div><div class="trade-offer-grid"><section class="trade-offer-side"><h4>Ресурсы от вашего государства</h4>${tradeGoodRows(data.resources||[],'from',tradeProposalDraft.fromStateId,tradeProposalDraft.fromGoods)}</section><section class="trade-offer-side"><h4>Ресурсы от получателя</h4>${tradeGoodRows(data.resources||[],'to',tradeProposalDraft.toStateId,tradeProposalDraft.toGoods)}</section><label class="field"><span>G от вашего государства</span><input name="from_gold" type="number" min="0" step="0.01" value="${Number(tradeProposalDraft.fromGold)||0}"></label><label class="field"><span>G от получателя</span><input name="to_gold" type="number" min="0" step="0.01" value="${Number(tradeProposalDraft.toGold)||0}"></label></div><button class="primary" type="submit">Отправить предложение · 3 ОП</button></form>`:'<p class="hint">Для предложения нужны закреплённое за вами государство и другое государство-получатель.</p>';
     const agreements=(data.agreements||[]).filter(item=>!stateId||Number(item.from_state_id)===stateId||Number(item.to_state_id)===stateId);
     const cards=agreements.map(item=>`<article class="application-panel marriage-candidate"><strong>${escape(item.from_state)} → ${escape(item.to_state)}</strong><span>${escape(item.status==='pending'?'Ожидает ответа':item.status==='accepted'?'Исполняется каждый ход':item.status)}</span><p>Маршрут: ${tradeRouteNames(item.route_province_ids||[])}</p><p>Отправитель: ${tradeTermsText(item.terms?.from_goods,item.terms?.from_gold)}</p><p>Получатель: ${tradeTermsText(item.terms?.to_goods,item.terms?.to_gold)}</p><small>${Number(item.created_year)} год · ${Number(item.created_turn)} ход</small>${item.status==='pending'&&item.incoming?`<div class="inline-actions"><button type="button" data-trade-action="accept" data-trade-id="${Number(item.id)}">Принять</button><button type="button" class="danger-button" data-trade-action="decline" data-trade-id="${Number(item.id)}">Отклонить</button></div>`:''}${['pending','accepted'].includes(item.status)&&(!item.incoming||user.role==='admin')?`<div class="inline-actions"><button type="button" class="danger-button" data-trade-action="cancel" data-trade-id="${Number(item.id)}">Расторгнуть / отозвать</button></div>`:''}</article>`).join('');
-    host.innerHTML=`${form}<section class="application-panel"><h4>Предложения торговых договоров</h4>${cards||'<p class="hint">Предложений пока нет.</p>'}</section>`;
+    host.innerHTML=form;
     const tradeForm=host.querySelector('.trade-agreement-form');if(!tradeForm)return;
     const refreshAvailability=async side=>{const stateId=Number(tradeForm.elements[side==='from'?'from_state':'to_state'].value);try{await loadTradeAvailability(stateId);}catch(error){showStatus(error.message,5000);}if(!tradeForm.isConnected)return;for(const row of tradeForm.querySelectorAll(`[data-trade-side="${side}"] .trade-good-row`)){const name=row.querySelector('select').value,note=row.querySelector('[data-available-note]'),input=row.querySelector('input');const qty=name?tradeAvailable(data,stateId,name):0;note.textContent=name?`Доступно: ${qty.toLocaleString('ru-RU')}`:'Выберите ресурс';input.max=String(qty);}};
     tradeForm.addEventListener('change',event=>{if(event.target.name==='from_state'||event.target.name==='to_state'){tradeProposalDraft.route=[];window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:false,clear:true}}));tradeForm.querySelector('.trade-route-preview')?.remove();const placeholder=tradeForm.querySelector('[data-trade-route-placeholder]');if(!placeholder){const note=document.createElement('p');note.className='hint';note.dataset.tradeRoutePlaceholder='';note.textContent='Маршрут ещё не выбран.';tradeForm.querySelector('.trade-route-controls')?.append(note);}const status=tradeForm.querySelector('[data-trade-route-status]');if(status)status.textContent='Выберите города и промежуточные провинции кликами на карте.';void refreshAvailability(event.target.name==='from_state'?'from':'to');}else if(event.target.matches('.trade-good-row select')){const row=event.target.closest('.trade-good-row'),name=event.target.value,side=row.closest('.trade-goods-list').dataset.tradeSide,stateId=Number(tradeForm.elements[side==='from'?'from_state':'to_state'].value);const duplicates=[...row.closest('.trade-goods-list').querySelectorAll('.trade-good-row select')].filter(select=>select.value===name);if(name&&duplicates.length>1){event.target.value='';showStatus('Каждый ресурс можно добавить только один раз на сторону договора.',3500);}const selectedName=event.target.value;row.querySelector('[data-available-note]').textContent=selectedName?`Доступно: ${tradeAvailable(data,stateId,selectedName).toLocaleString('ru-RU')}`:'Выберите ресурс';row.querySelector('input').max=String(tradeAvailable(data,stateId,selectedName));}syncTradeDraft(tradeForm);});
@@ -734,7 +827,7 @@ async function renderTradeProposal(host,options={}){
     tradeForm.querySelectorAll('[data-trade-add]').forEach(button=>button.onclick=()=>{syncTradeDraft(tradeForm);tradeProposalDraft[`${button.dataset.tradeAdd}Goods`].push({name:'',quantity:0});void renderTradeProposal(host,options);});
     tradeForm.querySelectorAll('[data-trade-remove]').forEach(button=>button.onclick=()=>{const side=button.closest('.trade-goods-list').dataset.tradeSide;syncTradeDraft(tradeForm);tradeProposalDraft[`${side}Goods`].splice([...button.closest('.trade-goods-list').querySelectorAll('.trade-good-row')].indexOf(button.closest('.trade-good-row')),1);void renderTradeProposal(host,options);});
     void refreshAvailability('from');void refreshAvailability('to');
-    tradeForm.querySelector('[data-trade-pick-route]').onclick=()=>{syncTradeDraft(tradeForm);tradeProposalDraft.route=[];activeContractType='trade';tradeRoutePick={fromStateId:Number(tradeForm.elements.from_state.value),toStateId:Number(tradeForm.elements.to_state.value),adminStateId:stateId,ids:[]};$('modal')?.close();window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:true}}));showStatus('Выберите на карте начальный город, маршрут по соседним провинциям и город получателя. Esc — отмена.',0);};
+    tradeForm.querySelector('[data-trade-pick-route]').onclick=()=>{syncTradeDraft(tradeForm);tradeProposalDraft.route=[];activeContractType='trade';tradeRoutePick={fromStateId:Number(tradeForm.elements.from_state.value),toStateId:Number(tradeForm.elements.to_state.value),adminStateId:stateId,ids:[]};showMap();window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:true}}));showStatus('Выберите на карте начальный город, маршрут по соседним провинциям и город получателя. Esc — отмена.',0);};
     tradeForm.addEventListener('submit',async event=>{event.preventDefault();syncTradeDraft(tradeForm);const button=tradeForm.querySelector('[type="submit"]');try{
       const route=tradeProposalDraft.route.map(Number);if(route.length<2)throw new Error('Сначала выберите маршрут на карте');
       await Promise.all([loadTradeAvailability(tradeProposalDraft.fromStateId),loadTradeAvailability(tradeProposalDraft.toStateId)]);
@@ -836,11 +929,11 @@ function renderPlayerStateSection(host,tab,quiet=false){
   if(!user){host.innerHTML='<h3>Государство</h3><p class="hint">Войдите, чтобы открыть государственные данные.</p>';return;}
   if(!quiet)host.innerHTML='<p class="hint">Загружаю государство…</p>';
   api('my/states').then(async states=>{
-    if(!host.isConnected)return;
+    if(!host.isConnected||activeMenuSection!==tab)return;
     if(!states.length){host.innerHTML='<h3>Государство</h3><p class="hint">За вашим аккаунтом пока не закреплено государство. Администратор должен назначить его игроку.</p>';return;}
     const chosen=states.find(state=>user.state_ids?.includes(Number(state.id)))||states[0];
     const indicators=await api(`my/states/${Number(chosen.id)}/indicators`);
-    if(!host.isConnected)return;
+    if(!host.isConnected||activeMenuSection!==tab)return;
     const stateCategory=categories.find(category=>category.layer==='states'&&category.id===Number(chosen.id));
     const crime=Number(indicators.crime??chosen.crime??stateCategory?.crime??.2);
     const category=(layer,name)=>name?{name,id:categories.find(c=>c.layer===layer&&c.name===name)?.id}:null;
@@ -851,8 +944,8 @@ function renderPlayerStateSection(host,tab,quiet=false){
       chosen.tax_rates={races:Object.fromEntries(rates.groups.filter(row=>row.layer==='races').map(row=>[row.name,Number(row.rate)])),religions:Object.fromEntries(rates.groups.filter(row=>row.layer==='religions').map(row=>[row.name,Number(row.rate)]))};
       provinces.forEach(province=>{if(Number(province.layers?.states?.id)===Number(chosen.id)){province.layers.states.race_tax_rates=chosen.tax_rates.races;province.layers.states.religion_tax_rates=chosen.tax_rates.religions;}});
     }catch{/* Other player sections remain available if tax data is temporarily unavailable. */}
-    renderStateDetails(host,{...chosen,crime,corruption:indicators.corruption},tab,provinces,false);
-  }).catch(error=>{if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;});
+    if(activeMenuSection===tab)renderStateDetails(host,{...chosen,crime,corruption:indicators.corruption},tab,provinces,false);
+  }).catch(error=>{if(host.isConnected&&activeMenuSection===tab)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;});
 }
 
 async function renderProductionTradeBalance(host,stateId,productionRows){
@@ -954,11 +1047,11 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
       :'<div class="table-scroll"><table class="state-data-table"><tbody><tr><td class="hint">В провинциях не назначены сословия.</td></tr></tbody></table></div>';
     const advisors=[['Административный','Казначей'],['Глашатай','Купец'],['Стратег','Штабист']];
     const advisorsTable=`<div class="table-scroll"><table class="state-data-table"><thead><tr><th>Советник</th><th>Имя советника</th><th>Уровень</th><th>Тип советника</th><th>Бонус</th><th>Содержание ОП/ход</th></tr></thead><tbody>${advisors.map(([type,specialty])=>`<tr><td>${type}</td><td>—</td><td>1</td><td>${specialty}</td><td>—</td><td>1</td></tr>`).join('')}</tbody></table></div>`;
-    detail=`<div class="state-identity"><div class="state-emblem-frame"><div class="state-emblem-placeholder" data-emblem-placeholder>Символика<br>не загружена</div><img class="state-emblem-image" data-state-emblem alt="Символика государства" hidden>${isAdmin?`<button type="button" class="state-emblem-edit" data-emblem-toggle aria-label="Редактировать символику" title="Редактировать символику"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16.5V20h3.5L18 6 4 16.5Z"/><path d="m12.5 8 3.5 3.5M14 4l2-2 6 6-2 2"/></svg></button><div class="state-emblem-menu" data-emblem-menu hidden><button type="button" data-emblem-change>Загрузить / сменить</button><button type="button" class="danger-button" data-emblem-delete hidden>Удалить символику</button></div><input type="file" data-emblem-file accept="image/jpeg,image/png,image/webp" hidden>`:''}</div><div class="state-identity-facts"><div><small>Текущий правитель</small><strong data-current-ruler>Загружаю…</strong><small>Форма правления</small><strong>${escape(state.form_name||'Не задана')}</strong></div><div><small>Официальная раса</small><strong>${escape(state.official_race||'—')}</strong><small>Официальная религия</small><strong>${escape(state.official_religion||'—')}</strong></div></div></div><div class="state-dashboard-top"><section class="state-dashboard-card"><h4>Состояние государства</h4><div class="state-condition-list"><div><small>Лимит развития</small><strong data-indicator="development_limit">…</strong></div><div><small>Совокупное развитие</small><strong data-indicator="total_development">…</strong></div><div><small>Нагрузка на управление</small><strong data-management-overload>…</strong></div><div><small>Стабильность государства</small><strong data-state-stability>—</strong></div><div><small>Коррупция</small><strong data-indicator-percent="corruption">…</strong><small data-corruption-last-change></small></div><div><small>Преступность</small><strong data-indicator-percent="crime">…</strong><small data-crime-last-change></small></div></div><p class="hint" data-indicator-warning></p><details><summary>Как считаются показатели</summary><p class="hint">Население и развитие — собственные сухопутные провинции, включая оккупированные. Городские доли: столица 35%, город 20%. Стабильность — среднее ограниченных блоков рас, религий и пяти сословий. Нагрузка — развитие сверх лимита; при базовых коэффициентах за 100% перегрузки коррупция получает +1 п.п. за ход, максимум +3; стабильность даёт поправку −1/0/+1/+2 п.п. Итоговый шаг ограничен −1…+3 п.п. Бонус лояльности Знати и Духовенства: <span data-corruption-loyalty-bonus>…</span>. Коэффициенты можно посмотреть в «Константах».</p></details>${isAdmin?`<form data-development-limit-form class="inline-actions"><label>Лимит развития <input name="development_limit" type="number" min="0" max="2147483647" step="1" required style="width:8em"></label><button type="submit">Сохранить</button><span class="form-message" role="status"></span></form>`:''}</section><section class="state-dashboard-card"><h4>Население</h4><div class="table-scroll"><table class="state-data-table state-population-table"><thead><tr><th>Показатель</th><th>Численность</th></tr></thead><tbody><tr><td>Городское</td><td><span data-indicator="urban_population">…</span></td></tr><tr><td>Сельское</td><td><span data-indicator="rural_population">…</span></td></tr><tr><td>Общее</td><td data-indicator="population">…</td></tr><tr><td>Урбанизация</td><td data-indicator-percent="urbanization">…</td></tr><tr><td>Влияние на прирост (порог <span data-urbanization-threshold>15</span>%)</td><td data-urbanization-effect>…</td></tr><tr><td>Влияние преступности на прирост</td><td data-crime-population-effect>…</td></tr><tr><td>Расчётный прирост</td><td data-indicator="population_growth">…</td></tr></tbody></table></div></section></div><div class="state-dashboard-finances" data-state-finances><section class="state-dashboard-card"><h4>Казна</h4><div class="hint">Загружаю…</div></section><section class="state-dashboard-card"><h4>Престиж</h4><div class="hint">Загружаю…</div></section></div><h4>Советники правителя</h4>${advisorsTable}<h4>Сословия</h4>${estatesTable}${groupTable('Расы',groupStats('races',state.official_race),'race')}${groupTable('Религии',groupStats('religions',state.official_religion),'religion')}<p class="hint">Вес сословия суммирует ценность принадлежащих ему провинций; оккупант получает 50% веса. Влияние считается по всем пяти сословиям. Лояльность учитывает влияние, амбиции статуса и отклонение налоговой нагрузки от базовой. ${unresolvedTaxes?`Не рассчитано провинций по налогам: ${unresolvedTaxes}.`:''}</p><p class="hint">Каждую ставку можно менять раз в ход: 3 ОП за изменённую группу; администратору бесплатно.</p><div class="inline-actions"><button type="button" class="primary" data-tax-save-all disabled>Сохранить</button></div><p class="form-message" data-tax-save-message role="status"></p>`;
+    detail=`<div class="state-identity"><div class="state-emblem-frame"><div class="state-emblem-placeholder" data-emblem-placeholder>Символика<br>не загружена</div><img class="state-emblem-image" data-state-emblem alt="Символика государства" hidden>${isAdmin?`<button type="button" class="state-emblem-edit" data-emblem-toggle aria-label="Редактировать символику" title="Редактировать символику"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16.5V20h3.5L18 6 4 16.5Z"/><path d="m12.5 8 3.5 3.5M14 4l2-2 6 6-2 2"/></svg></button><div class="state-emblem-menu" data-emblem-menu hidden><button type="button" data-emblem-change>Загрузить / сменить</button><button type="button" class="danger-button" data-emblem-delete hidden>Удалить символику</button></div><input type="file" data-emblem-file accept="image/jpeg,image/png,image/webp" hidden>`:''}</div><div class="state-identity-facts"><div><small>Текущий правитель</small><strong data-current-ruler>Загружаю…</strong><small>Форма правления</small><strong>${escape(state.form_name||'Не задана')}</strong></div><div><small>Официальная раса</small><strong>${escape(state.official_race||'—')}</strong><small>Официальная религия</small><strong>${escape(state.official_religion||'—')}</strong></div></div></div><div class="state-dashboard-top"><section class="state-dashboard-card"><h4>Состояние государства</h4><div class="state-condition-list"><div><small>Лимит развития</small><strong data-indicator="development_limit">…</strong></div><div><small>Совокупное развитие</small><strong data-indicator="total_development">…</strong></div><div><small>Нагрузка на управление</small><strong data-management-overload>…</strong></div><div><small>Стабильность государства</small><strong data-state-stability>—</strong></div><div class="state-condition-percent"><small>Коррупция</small><strong data-indicator-percent="corruption">…</strong><small data-corruption-last-change></small></div><div class="state-condition-percent"><small>Преступность</small><strong data-indicator-percent="crime">…</strong><small data-crime-last-change></small></div></div><p class="hint" data-indicator-warning></p>${isAdmin?`<form data-development-limit-form class="inline-actions"><label>Лимит развития <input name="development_limit" type="number" min="0" max="2147483647" step="1" required style="width:8em"></label><button type="submit">Сохранить</button><span class="form-message" role="status"></span></form>`:''}</section><section class="state-dashboard-card"><h4>Население</h4><div class="table-scroll"><table class="state-data-table state-population-table"><thead><tr><th>Показатель</th><th>Численность</th></tr></thead><tbody><tr><td>Городское</td><td><span data-indicator="urban_population">…</span></td></tr><tr><td>Сельское</td><td><span data-indicator="rural_population">…</span></td></tr><tr><td>Общее</td><td data-indicator="population">…</td></tr><tr><td>Урбанизация</td><td data-indicator-percent="urbanization">…</td></tr><tr><td>Влияние на прирост (порог <span data-urbanization-threshold>15</span>%)</td><td data-urbanization-effect>…</td></tr><tr><td>Влияние преступности на прирост</td><td data-crime-population-effect>…</td></tr><tr><td>Расчётный прирост</td><td data-indicator="population_growth">…</td></tr></tbody></table></div></section></div><div class="state-dashboard-finances" data-state-finances><section class="state-dashboard-card"><h4>Казна</h4><div class="hint">Загружаю…</div></section><section class="state-dashboard-card"><h4>Престиж</h4><div class="hint">Загружаю…</div></section></div><h4>Советники правителя</h4>${advisorsTable}<h4>Сословия</h4>${estatesTable}${groupTable('Расы',groupStats('races',state.official_race),'race')}${groupTable('Религии',groupStats('religions',state.official_religion),'religion')}<p class="hint">Вес сословия суммирует ценность принадлежащих ему провинций; оккупант получает 50% веса. Влияние считается по всем пяти сословиям. Лояльность учитывает влияние, амбиции статуса и отклонение налоговой нагрузки от базовой. ${unresolvedTaxes?`Не рассчитано провинций по налогам: ${unresolvedTaxes}.`:''}</p><p class="hint">Каждую ставку можно менять раз в ход: 3 ОП за изменённую группу; администратору бесплатно.</p><div class="inline-actions"><button type="button" class="primary" data-tax-save-all disabled>Сохранить</button></div><p class="form-message" data-tax-save-message role="status"></p>`;
   }
   if(tab==='Экономика')detail='<div data-state-economy><p class="hint">Загружаю финансовые показатели…</p></div>';
   else if(tab==='Власть и династия')detail=`<div class="state-power-grid ${isAdmin?'admin':''}"><div class="state-power-overview"><div class="government-card"><small>Форма правления</small><strong>${escape(state.form_name||'Не задана')}</strong></div><div class="state-facts">${Object.entries(principles).map(([key,value])=>`<p><span>${escape(principleLabels[key]||key)}</span><strong>${escape(value)}</strong></p>`).join('')||'<p class="hint">Принципы государства не заданы.</p>'}</div></div><div data-succession-panel><p class="hint">Загружаю сведения о передаче власти…</p></div></div><div class="state-power-content" data-family-table></div>`;
-  else if(tab==='Провинции')detail=`<p class="hint">Территорий государства: ${Number(state.province_count??ownedProvinces.length).toLocaleString('ru-RU')}; оккупировано у других государств: ${provinces.filter(p=>p.occupation===state.name&&p.layers?.states?.name!==state.name).length}. Рекрутский прирост — пополнение за ход, лимит — вместимость набора; запас рекрутов пока не ведётся. Оккупант получает 50% экономических показателей провинции. Нажмите заголовок, чтобы отсортировать таблицу.</p><div class="table-scroll provinces-table-scroll"><table class="state-data-table provinces-data-table"><thead><tr>${['Название провинции','ID','Раса','Религия','Тип пров.','Торговый статус','Принадлежность','Ресурс','Население','Рост населения','Ценность','КМ, %','Налоги','Торг. влияние','Производство','Прирост рекр.','Лимит рекр.'].map((label,index)=>`<th><button type="button" class="province-sort-button" data-sort-column="${index}" aria-label="Сортировать по столбцу ${label}">${label}<span aria-hidden="true"> ↕</span></button></th>`).join('')}</tr></thead><tbody>${provinces.length?provinces.map(p=>{const economy=calculateProvinceEconomy(p,state.name),value=calculateProvinceValue(p,state.name),occupied=p.occupation===state.name&&p.layers?.states?.name!==state.name;return `<tr class="${occupied?'occupied-province-row':''}"><td>${escape(p.name||'—')}${occupied?' · Оккупирована':''}</td><td>${p.id}</td><td>${escape(p.layers?.races?.name||'—')}</td><td>${escape(p.layers?.religions?.name||'—')}</td><td>${escape(p.province_type||'—')}</td><td>${escape(p.trade_status||'Отсутствует')}</td><td>${escape(p.belonging||'Корона')}</td><td>${escape(p.layers?.resources?.name||'—')}</td><td>${Number(p.population||0).toLocaleString('ru-RU')}</td><td>${economy.populationGrowth===null?'—':economy.populationGrowth.toLocaleString('ru-RU')}</td><td>${value===null?'—':value.toLocaleString('ru-RU')}</td><td>${Number(p.control??100).toLocaleString('ru-RU')}%</td><td>${economy.taxes===null?'—':economy.taxes.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${economy.tradeInfluence===null?'—':economy.tradeInfluence.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${economy.production===null?'—':economy.production.toLocaleString('ru-RU')}</td><td>${economy.recruitGrowth===null?'—':economy.recruitGrowth.toLocaleString('ru-RU')}</td><td>${economy.recruitLimit===null?'—':economy.recruitLimit.toLocaleString('ru-RU')}</td></tr>`}).join(''):'<tr><td colspan="17" class="hint">У государства пока нет провинций.</td></tr>'}</tbody></table></div>`;
+  else if(tab==='Провинции')detail=`<p class="hint">Территорий государства: ${Number(state.province_count??ownedProvinces.length).toLocaleString('ru-RU')}; оккупировано у других государств: ${provinces.filter(p=>p.occupation===state.name&&p.layers?.states?.name!==state.name).length}. Рекрутский прирост — пополнение за ход, лимит — вместимость набора. Оккупант получает 50% экономических показателей провинции. Нажмите заголовок, чтобы отсортировать таблицу.</p><div class="table-scroll provinces-table-scroll"><table class="state-data-table provinces-data-table"><thead><tr>${['Название провинции','ID','Раса','Религия','Тип пров.','Торговый статус','Принадлежность','Ресурс','Население','Рост населения','Ценность','КМ, %','Налоги','Торг. влияние','Производство','Прирост рекр.','Лимит рекр.'].map((label,index)=>`<th><button type="button" class="province-sort-button" data-sort-column="${index}" aria-label="Сортировать по столбцу ${label}">${label}<span aria-hidden="true"> ↕</span></button></th>`).join('')}</tr></thead><tbody>${provinces.length?provinces.map(p=>{const economy=calculateProvinceEconomy(p,state.name),value=calculateProvinceValue(p,state.name),occupied=p.occupation===state.name&&p.layers?.states?.name!==state.name;return `<tr class="${occupied?'occupied-province-row':''}"><td>${escape(p.name||'—')}${occupied?' · Оккупирована':''}</td><td>${p.id}</td><td>${escape(p.layers?.races?.name||'—')}</td><td>${escape(p.layers?.religions?.name||'—')}</td><td>${escape(p.province_type||'—')}</td><td>${escape(p.trade_status||'Отсутствует')}</td><td>${escape(p.belonging||'Корона')}</td><td>${escape(p.layers?.resources?.name||'—')}</td><td>${Number(p.population||0).toLocaleString('ru-RU')}</td><td>${economy.populationGrowth===null?'—':economy.populationGrowth.toLocaleString('ru-RU')}</td><td>${value===null?'—':value.toLocaleString('ru-RU')}</td><td>${Number(p.control??100).toLocaleString('ru-RU')}%</td><td>${economy.taxes===null?'—':economy.taxes.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${economy.tradeInfluence===null?'—':economy.tradeInfluence.toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${economy.production===null?'—':economy.production.toLocaleString('ru-RU')}</td><td>${economy.recruitGrowth===null?'—':economy.recruitGrowth.toLocaleString('ru-RU')}</td><td>${economy.recruitLimit===null?'—':economy.recruitLimit.toLocaleString('ru-RU')}</td></tr>`}).join(''):'<tr><td colspan="17" class="hint">У государства пока нет провинций.</td></tr>'}</tbody></table></div>`;
   else if(tab==='Экономика')detail=`<div data-state-economy><p class="hint">Загружаю финансовые показатели…</p></div>`;
   else if(tab==='Дипломатия')detail=`<div data-state-diplomacy><p class="hint">Загружаю дипломатические предложения…</p></div>`;
   else if(tab==='Торговля')detail=`<div data-state-trade><p class="hint">Загружаю торговые данные…</p></div>`;
@@ -968,7 +1061,38 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
     const unresolved=productionRows.filter(row=>row.unresolved).length;
     detail=`<div class="table-scroll"><table class="state-data-table"><thead><tr><th>Ресурс</th><th>Производство</th><th>Потребление</th><th>Баланс</th><th>Импорт</th><th>Экспорт</th></tr></thead><tbody>${rows}</tbody></table></div><p class="hint">Производство рассчитано по назначенному ресурсу, населению, типу провинции и контролю, затем уменьшено на преступность государства (${Math.round(crime*100)}%). Потребление = ROUNDUP(население / 10 × коэффициент). Эфемерная и Магическая пустоши в таблицу не включаются. ${unresolved?`Не рассчитано ресурсных строк: ${unresolved} из-за отсутствующих входных данных.`:''} Баланс учитывает договорные и зональные поставки последнего расчётного хода; запасы не ведутся.</p>`;
   }
-  host.innerHTML=`<div class="state-menu stack">${isAdmin?'<button id="state-back" type="button">← Все государства</button>':''}<div class="state-heading"><span class="state-color" style="background:${escape(state.color||'#777777')}"></span><h3>${escape(state.name)}</h3></div>${isAdmin?`<nav class="state-subtabs" aria-label="Разделы государства">${STATE_SECTIONS.map(name=>`<button type="button" data-state-tab="${escape(name)}" class="${name===tab?'active':''}">${escape(name)}</button>`).join('')}</nav>`:''}<section class="state-detail"><h3>${escape(tab)}</h3>${detail}</section>${isAdmin?'<button id="state-delete" class="danger-button" type="button">Удалить государство</button>':''}</div>`;
+  if(!detail)detail=`<div class="empty-page"><span class="badge">В РАЗРАБОТКЕ</span><h2>${escape(tab)}</h2><p>Содержание раздела пока не опубликовано.</p></div>`;
+  host.innerHTML=`<div class="state-menu stack">${isAdmin?'<button id="state-back" type="button">← Все государства</button>':''}<div class="state-heading"><span class="state-color" style="background:${escape(state.color||'#777777')}"></span><h3>${escape(state.name)}</h3></div>${isAdmin?`<nav class="state-subtabs" aria-label="Разделы государства">${STATE_SECTIONS.map(name=>`<button type="button" data-state-tab="${escape(name)}" class="${name===tab?'active':''}">${name==='Статистика'?'Обзор':escape(name)}</button>`).join('')}</nav>`:''}<section class="state-detail"><h3>${escape(tab==='Статистика'?'Обзор':tab)}</h3>${detail}</section>${isAdmin?'<button id="state-delete" class="danger-button" type="button">Удалить государство</button>':''}</div>`;
+  if(isAdmin){
+    const picker=document.createElement('label');picker.className='page-tab-picker';picker.innerHTML=`<span>Раздел государства</span><select aria-label="Раздел государства">${STATE_SECTIONS.map(name=>`<option value="${escape(name)}" ${name===tab?'selected':''}>${name==='Статистика'?'Обзор':escape(name)}</option>`).join('')}</select>`;
+    host.querySelector('.state-subtabs').after(picker);
+    picker.querySelector('select').onchange=event=>{if(confirmLeaveEdits())renderStatesContent(host,state.id,event.target.value);else event.target.value=tab;};
+  }
+  if(tab==='Статистика'){
+    const root=host.querySelector('.state-detail'),identity=root.querySelector('.state-identity'),finances=root.querySelector('[data-state-finances]');
+    if(identity&&finances)identity.append(finances);
+    const urbanCell=root.querySelector('[data-indicator-percent="urbanization"]');
+    if(urbanCell){
+      urbanCell.closest('tr').remove();
+      const metric=document.createElement('div');metric.innerHTML='<small>Урбанизация</small><strong data-indicator-percent="urbanization">…</strong>';
+      root.querySelector('.state-condition-list')?.append(metric);
+    }
+    const headings=[...root.children].filter(node=>node.tagName==='H4');
+    const advisorHeading=headings.find(node=>node.textContent.trim()==='Советники правителя');
+    const estateHeading=headings.find(node=>node.textContent.trim()==='Сословия');
+    if(advisorHeading&&estateHeading){
+      const advisors=document.createElement('section');advisors.className='application-panel advisors-panel';
+      root.insertBefore(advisors,advisorHeading);
+      let node=advisorHeading;while(node&&node!==estateHeading){const next=node.nextSibling;advisors.append(node);node=next;}
+      const more=document.createElement('details');more.className='overview-details';
+      const summary=document.createElement('summary');summary.textContent='Сословия и налоговые ставки';more.append(summary);
+      node=estateHeading;while(node){const next=node.nextSibling;more.append(node);node=next;}root.append(more);
+    }
+  }
+  if(tab==='Провинции'){
+    const hint=host.querySelector('.state-detail > p.hint');
+    hint?.remove();
+  }
   if(tab==='Провинции'){
     host.querySelectorAll('.provinces-data-table tbody tr').forEach(row=>{
       const province=provinces.find(item=>Number(item.id)===Number(row.cells[1]?.textContent));
@@ -1022,23 +1146,28 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
   if(tab==='Власть и династия'){
     const familyHost=host.querySelector('[data-family-table]');
     const route=`${isAdmin?'admin':'my'}/states/${Number(state.id)}/characters`;
+    const marriagesRoute=`${isAdmin?'admin':'my'}/states/${Number(state.id)}/marriages`;
     const successionRoute=`${isAdmin?'admin':'my'}/states/${Number(state.id)}/succession`;
-    const familyRequests=[api(route)];
+    const familyRequests=[api(route),api(marriagesRoute)];
     if(!isAdmin)familyRequests.push(api(`my/states/${Number(state.id)}/birth-events`),api(`my/states/${Number(state.id)}/marriage-candidates`));
     familyRequests.push(api(successionRoute));
     Promise.all(familyRequests).then(results=>{
-      const characters=results[0],birthEvents=isAdmin?[]:results[1],marriageInfo=isAdmin?null:results[2],successionInfo=isAdmin?results[1]:results[3];
+      const characters=results[0],activeMarriages=results[1],birthEvents=isAdmin?[]:results[2],marriageInfo=isAdmin?null:results[3],successionInfo=isAdmin?results[2]:results[4];
       if(!familyHost?.isConnected)return;
       const familyTable=characters.length?`<div class="table-scroll"><table class="state-data-table family-character-table"><thead><tr><th>Имя</th><th>Фамилия</th><th>Родство</th><th>Возраст</th><th>Раса</th><th>Религия</th><th>Наследование</th><th>Статус</th></tr></thead><tbody>${characters.map(person=>`<tr class="${person.alive?'':'family-character-dead'}"><td>${escape(person.title?`${person.title} `:'')}${escape(person.name||'—')}${person.is_current_ruler?' <small>(правитель)</small>':''}${person.is_regent?' <small>(регент)</small>':''}</td><td>${escape(person.surname||'—')}</td><td>${escape(person.relationship||'Родственник')}${person.state_name&&person.state_name!==state.name?` · ${escape(person.state_name)}`:''}</td><td>${Number(person.age)} лет</td><td>${escape(person.race||'—')}</td><td>${escape(person.religion||'—')}</td><td>${escape(person.legitimacy||'Неприменимо')}</td><td>${person.alive?'Жив':'Мёртв'}</td></tr>`).join('')}</tbody></table></div>`:'<p class="hint">Профиль правителя ещё не заполнен.</p>';
+      const marriagePanel=activeMarriages?.length?`<section class="application-panel"><h4>Браки</h4><div class="marriage-candidates">${activeMarriages.map(marriage=>`<article class="application-panel marriage-candidate"><strong>${marriage.type==='dynastic'?'Династический':'Местный'} брак</strong><span>${escape(marriage.character_a)} — ${escape(marriage.character_b)}</span><span class="hint">${escape(marriage.state_a)} — ${escape(marriage.state_b)}${marriage.type==='dynastic'?' · расторжение стоит 5 ОП':''}</span><button type="button" class="danger-button" data-dissolve-marriage="${Number(marriage.id)}" data-marriage-type="${escape(marriage.type)}">Расторгнуть брак${marriage.type==='dynastic'?' · 5 ОП':''}</button></article>`).join('')}</div></section>`:'';
       const birthForms=birthEvents.map(event=>`<form class="application-panel birth-naming-form" data-birth-event="${event.id}"><strong>Рождение · ${event.children.length} ${event.children.length===1?'ребёнок':'ребёнка'}</strong>${event.children.map((child,index)=>`<label class="field"><span>${child.gender}, ${escape(categories.find(item=>item.layer==='races'&&item.id===Number(child.race_id))?.name||'раса не указана')} · имя ${index+1}</span><input name="child-name" maxlength="120" required></label>`).join('')}<button class="primary" type="submit">Сохранить имена</button></form>`).join('');
       const marriageCandidates=marriageInfo?.candidates?.length?`<section class="application-panel"><h4>Поиск местного супруга</h4><p class="hint">Заключение брака стоит 10 ОП. Поддержка кандидатов сословиями отображается отдельно.</p><div class="marriage-candidates">${marriageInfo.candidates.map(candidate=>`<article class="application-panel marriage-candidate"><strong>${escape(candidate.name)} ${escape(candidate.surname)}</strong><span>${Number(candidate.age)} лет · ${escape(candidate.race)} · ${escape(candidate.religion)}</span><span class="hint">Поддерживают: ${escape(candidate.supported_by?.join(', ')||'пока никто')}</span><button type="button" data-marry-candidate="${candidate.id}">Заключить брак · 10 ОП</button></article>`).join('')}</div></section>`:(!characters.some(person=>person.relationship==='Супруга'||person.relationship==='Супруг')&&marriageInfo?.message?`<p class="hint">${escape(marriageInfo.message)}</p>`:'');
       const successionCandidates=successionInfo?.candidates||[];
       const successionPanel=`${successionInfo?.pending?`<section class="application-panel succession-panel"><h4>${successionInfo.event_type==='election'?'Выборы правителя':'Выбор наследника'}</h4><p>${escape(successionInfo.reason)}. После выбора кандидат вступит в должность при смене хода ${Number(successionInfo.resolves_turn)}. Престиж будет установлен на 10 ОП.</p>${successionInfo.chosen?'<p class="hint">Кандидат выбран; ожидается смена хода.</p>':`<div class="marriage-candidates">${successionCandidates.map((candidate,index)=>`<article class="application-panel marriage-candidate"><strong>${escape(candidate.name)} ${escape(candidate.surname)}</strong><span>${Number(candidate.age)} лет · ${escape(candidate.gender)} · ${escape(candidate.race||'—')} · ${escape(candidate.religion||'—')}</span>${candidate.support?`<span class="hint">Поддерживают: ${escape(Object.entries(candidate.support).filter(([,supported])=>supported).map(([group])=>group).join(', ')||'нет сословий')}</span>`:''}${candidate.support_votes!==undefined?`<span class="hint">Поддержка провинций: ${Number(candidate.support_votes)}</span>`:''}<button type="button" data-succession-choice="${index+1}">Выбрать кандидата</button></article>`).join('')}</div>`}</section>`:''}${!isAdmin?`<section class="application-panel succession-panel"><h4>Передача власти</h4>${principles.authority==='Династия'?`<label class="field"><span>Назначить законного наследника · 15 ОП и −15 п.п. ключевым сословиям</span><select data-designated-heir><option value="">Выберите живого законного ребёнка</option>${characters.filter(person=>person.alive&&person.relationship==='Ребёнок'&&person.legitimacy==='Законный').map(person=>`<option value="${person.id}" ${Number(successionInfo?.designated_heir_id)===Number(person.id)?'selected':''}>${escape(person.name)} ${escape(person.surname)} · ${person.age}</option>`).join('')}</select></label><button type="button" data-designate-heir ${characters.some(person=>person.alive&&person.relationship==='Ребёнок'&&person.legitimacy==='Законный')?'':'disabled'}>Назначить наследника</button>`:''}${principles.authority==='Диктат'?`<label class="field"><span>Назначенный преемник</span><select data-designated-successor><option value="">Выберите персонажа</option>${characters.filter(person=>person.alive&&Number(person.age)>=16).map(person=>`<option value="${person.id}" ${Number(successionInfo?.designated_successor_id)===Number(person.id)?'selected':''}>${escape(person.name)} ${escape(person.surname)} · ${person.age}</option>`).join('')}</select></label><button type="button" data-designate-successor>Назначить преемника</button>`:''}<button type="button" class="danger-button" data-abdicate>Отречься от власти</button></section>`:''}`;
       const successionHost=host.querySelector('[data-succession-panel]');
       if(successionHost)successionHost.innerHTML=successionPanel||(!isAdmin?'<section class="application-panel succession-panel"><h4>Передача власти</h4><button type="button" class="danger-button" data-abdicate>Отречься от власти</button></section>':'');
-      familyHost.innerHTML=`${birthForms}${!isAdmin?marriageCandidates:''}<section class="family-registry"><h4>Правитель и семья</h4>${familyTable}</section>`;
+      familyHost.innerHTML=`${birthForms}${!isAdmin?marriageCandidates:''}${marriagePanel}<section class="family-registry"><h4>Правитель и семья</h4>${familyTable}</section>`;
+      const spousePanel=[...familyHost.querySelectorAll(':scope > section.application-panel')].find(panel=>panel.querySelector('h4')?.textContent==='Поиск местного супруга');
+      if(spousePanel){const details=document.createElement('details');details.className='application-panel local-spouse-search';const summary=document.createElement('summary');summary.textContent='Поиск местного супруга';details.append(summary);spousePanel.querySelector('h4').remove();while(spousePanel.firstChild)details.append(spousePanel.firstChild);spousePanel.replaceWith(details);}
       familyHost.querySelectorAll('.birth-naming-form').forEach(form=>form.onsubmit=async event=>{event.preventDefault();const names=[...form.querySelectorAll('[name="child-name"]')].map(input=>input.value.trim());const button=form.querySelector('[type="submit"]');button.disabled=true;try{await api(`my/states/${Number(state.id)}/birth-events/${form.dataset.birthEvent}/name`,{method:'POST',body:JSON.stringify({names})});showStatus('Имена детей сохранены',3000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
       familyHost.querySelectorAll('[data-marry-candidate]').forEach(button=>button.onclick=async()=>{if(!confirm('Заключить местный брак и потратить 10 ОП?'))return;button.disabled=true;try{await api(`my/states/${Number(state.id)}/marriages/local`,{method:'POST',body:JSON.stringify({candidate_id:Number(button.dataset.marryCandidate)})});showStatus('Брак заключён',3000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
+      familyHost.querySelectorAll('[data-dissolve-marriage]').forEach(button=>button.onclick=async()=>{const dynastic=button.dataset.marriageType==='dynastic';if(!confirm(`Расторгнуть брак?${dynastic?' С государства будет списано 5 ОП.':''}`))return;button.disabled=true;try{await api(`${marriagesRoute}/${Number(button.dataset.dissolveMarriage)}/dissolve`,{method:'POST',body:'{}'});showStatus(dynastic?'Брак расторгнут; списано 5 ОП':'Брак расторгнут',4000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
       successionHost?.querySelectorAll('[data-succession-choice]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await api(`${successionRoute}/events/${Number(successionInfo.id)}/choose`,{method:'POST',body:JSON.stringify({candidate:Number(button.dataset.successionChoice)})});showStatus('Преемник выбран; вступление состоится при указанной смене хода',5000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
       successionHost?.querySelector('[data-abdicate]')?.addEventListener('click',async event=>{const button=event.currentTarget;if(!confirm('Отречение необратимо и немедленно запустит передачу власти. Продолжить?'))return;button.disabled=true;try{await api(`my/states/${Number(state.id)}/abdicate`,{method:'POST',body:JSON.stringify({confirmed:true})});showStatus('Отречение принято; начата передача власти',5000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
       for(const [kind,selector] of [['heir','[data-designate-heir]'],['successor','[data-designate-successor]']])successionHost?.querySelector(selector)?.addEventListener('click',async event=>{const button=event.currentTarget;const select=successionHost.querySelector(kind==='heir'?'[data-designated-heir]':'[data-designated-successor]');if(!select?.value){showStatus('Сначала выберите персонажа',3500);return;}if(kind==='heir'&&!confirm('Назначение стоит 15 ОП и снизит лояльность ключевых сословий на 15 п.п. Подтвердить?'))return;button.disabled=true;try{await api(`my/states/${Number(state.id)}/designate`,{method:'POST',body:JSON.stringify({kind,character_id:Number(select.value)})});showStatus(kind==='heir'?'Наследник назначен':'Преемник назначен',4000);renderStateDetails(host,state,tab,provinces,isAdmin);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
@@ -1046,9 +1175,10 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
   }
   if(tab==='Статистика'){
     bindStateEmblem(host,state,isAdmin);
+    const overviewRoot=host.querySelector('.state-detail');
     const indicatorPath=`${isAdmin?'admin':'my'}/states/${Number(state.id)}/indicators`;
     const applyIndicators=data=>{
-      if(!host.isConnected)return;
+      if(!overviewRoot?.isConnected||host.querySelector('.state-detail')!==overviewRoot)return;
       host.querySelectorAll('[data-indicator]').forEach(cell=>{
         const value=data[cell.dataset.indicator];
         cell.textContent=value==null?'—':Number(value).toLocaleString('ru-RU',{maximumFractionDigits:cell.dataset.indicator.endsWith('multiplier')?3:0});
@@ -1068,15 +1198,15 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
       const last=data.last_turn;
       host.querySelectorAll('.state-condition-list strong').forEach(value=>{
         value.tabIndex=0;value.setAttribute('role','button');value.title='Показать формулу и источники';
-        const reveal=()=>{host.querySelector('.state-dashboard-card details').open=true;};
+        const reveal=()=>{const details=host.querySelector('.state-dashboard-card details')||host.querySelector('.overview-details');if(details)details.open=true;};
         value.onclick=reveal;value.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();reveal();}};
       });
-      host.querySelector('[data-corruption-loyalty-bonus]').textContent=`+${(data.corruption_loyalty_bonus*100).toLocaleString('ru-RU',{maximumFractionDigits:3})} п.п.`;
+      const bonus=host.querySelector('[data-corruption-loyalty-bonus]');if(bonus)bonus.textContent=`+${(data.corruption_loyalty_bonus*100).toLocaleString('ru-RU',{maximumFractionDigits:3})} п.п.`;
       if(last?.corruption_change_pp!=null)host.querySelector('[data-corruption-last-change]').textContent=`За последний ход: ${last.corruption_change_pp>0?'+':''}${Number(last.corruption_change_pp).toLocaleString('ru-RU',{maximumFractionDigits:5})} п.п.`;
       if(last?.crime_change_pp!=null)host.querySelector('[data-crime-last-change]').textContent=`За последний ход: ${last.crime_change_pp>0?'+':''}${Number(last.crime_change_pp).toLocaleString('ru-RU')} п.п.`;
       const input=host.querySelector('[name="development_limit"]');if(input)input.value=data.development_limit;
     };
-    api(indicatorPath).then(applyIndicators).catch(error=>{if(host.isConnected)host.querySelector('[data-indicator-warning]').textContent=`Не удалось загрузить показатели: ${error.message}`;});
+    api(indicatorPath).then(applyIndicators).catch(error=>{if(overviewRoot?.isConnected&&host.querySelector('.state-detail')===overviewRoot){const warning=host.querySelector('[data-indicator-warning]');if(warning)warning.textContent=`Не удалось загрузить показатели: ${error.message}`;}});
     host.querySelector('[data-development-limit-form]')?.addEventListener('submit',async event=>{
       event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),message=form.querySelector('[role="status"]');
       button.disabled=true;
@@ -1102,6 +1232,29 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
   }
   if(tab==='Провинции'){
     const table=host.querySelector('.provinces-data-table');
+    const scroll=host.querySelector('.provinces-table-scroll');
+    if(table&&scroll){
+      const toolbar=document.createElement('div');toolbar.className='province-table-toolbar';
+      toolbar.innerHTML=`<label class="field"><span>Поиск провинции</span><input type="search" data-province-search placeholder="Название или ID" value="${escape(provinceSearchQuery)}"></label><label class="field"><span>Показатели</span><select data-province-columns><option>Основное</option><option>Население</option><option>Экономика</option><option>Торговля</option><option>Управление</option><option>Все</option></select></label><output data-province-count></output>`;
+      scroll.before(toolbar);
+      const presets={'Основное':[0,1,2,3,4,6,8,10],'Население':[0,1,2,3,8,9,15,16],'Экономика':[0,1,6,7,8,10,11,12,14],'Торговля':[0,1,5,7,12,13,14],'Управление':[0,1,4,6,10,11,15,16]};
+      const preset=toolbar.querySelector('[data-province-columns]'),search=toolbar.querySelector('[data-province-search]');
+      preset.value=provinceColumnPreset;
+      const updateColumns=()=>{
+        provinceColumnPreset=preset.value;
+        const visible=presets[provinceColumnPreset];
+        [...table.rows].forEach(row=>[...row.cells].forEach((cell,index)=>{if(row.cells.length>1)cell.hidden=Boolean(visible&&!visible.includes(index));}));
+        table.classList.toggle('compact-columns',Boolean(visible));
+      };
+      const updateFilter=()=>{
+        provinceSearchQuery=search.value.trim();const needle=provinceSearchQuery.toLocaleLowerCase('ru');let shown=0;
+        [...table.tBodies[0].rows].forEach(row=>{const name=row.querySelector('[data-province-name]')?.value||row.cells[0]?.textContent||'';const id=row.cells[1]?.textContent||'';row.hidden=Boolean(needle&&!`${name} ${id}`.toLocaleLowerCase('ru').includes(needle));if(!row.hidden)shown++;});
+        toolbar.querySelector('[data-province-count]').textContent=`Показано: ${shown} из ${table.tBodies[0].rows.length}`;
+      };
+      preset.onchange=updateColumns;search.oninput=updateFilter;
+      updateColumns();updateFilter();
+      table.querySelectorAll('tbody tr').forEach(row=>{const cell=row.cells[1];if(!cell)return;const id=Number(cell.textContent);if(!Number.isFinite(id))return;cell.innerHTML=`<button type="button" class="province-map-link" data-show-province="${id}" aria-label="Показать провинцию ${id} на карте">${id}</button>`;cell.querySelector('button').onclick=()=>{if(!confirmLeaveEdits())return;showMap();emit('map:search',id);};});
+    }
     const directions=new Map();
     table?.querySelectorAll('[data-sort-column]').forEach(button=>button.addEventListener('click',()=>{
       const column=Number(button.dataset.sortColumn),direction=directions.get(column)===1?-1:1;
@@ -1124,10 +1277,15 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
       table.querySelectorAll('.province-sort-button span').forEach((indicator,index)=>{indicator.textContent=index===column?(direction===1?' ▲':' ▼'):' ↕';});
       table.querySelectorAll('th').forEach((header,index)=>header.setAttribute('aria-sort',index===column?(direction===1?'ascending':'descending'):'none'));
     }));
+    if(pendingProvinceId&&table){
+      const row=[...table.tBodies[0].rows].find(item=>Number(item.cells[1]?.textContent)===Number(pendingProvinceId));
+      if(row){provinceSearchQuery='';host.querySelector('[data-province-search]').value='';host.querySelector('[data-province-search]').dispatchEvent(new Event('input'));row.classList.add('focused-province');requestAnimationFrame(()=>row.scrollIntoView({block:'center',inline:'nearest'}));}
+      pendingProvinceId=null;
+    }
   }
   if(isAdmin){
-    host.querySelector('#state-back').onclick=()=>renderStatesContent(host);
-    host.querySelectorAll('[data-state-tab]').forEach(button=>button.onclick=()=>renderStatesContent(host,state.id,button.dataset.stateTab));
+    host.querySelector('#state-back').onclick=()=>{if(confirmLeaveEdits())renderStatesContent(host);};
+    host.querySelectorAll('[data-state-tab]').forEach(button=>button.onclick=()=>{if(confirmLeaveEdits())renderStatesContent(host,state.id,button.dataset.stateTab);});
     host.querySelector('#state-delete').onclick=async()=>{
       if(!confirm(`Удалить государство «${state.name}»? Его провинции станут нейтральными, назначения игрокам удалятся, маркеры останутся без государства.`))return;
       const button=host.querySelector('#state-delete');button.disabled=true;
@@ -1175,8 +1333,8 @@ function bindStateEmblem(host,state,isAdmin){
 
 async function renderStatesMenu(host){
   host.innerHTML='<p class="hint">Загружаю государства…</p>';
-  try{stateRows=await api('admin/states');if(!host.isConnected)return;const pending=pendingStateNavigation;pendingStateNavigation=null;if(pending&&stateRows.some(row=>Number(row.id)===Number(pending.stateId)))renderStatesContent(host,pending.stateId,pending.tab);else renderStatesContent(host);}
-  catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
+  try{stateRows=await api('admin/states');if(!host.isConnected||activeMenuSection!=='Государства')return;const pending=pendingStateNavigation;pendingStateNavigation=null;const selected=pending||{stateId:lastAdminStateId,tab:lastAdminStateTab};if(selected.stateId&&stateRows.some(row=>Number(row.id)===Number(selected.stateId)))renderStatesContent(host,selected.stateId,selected.tab);else renderStatesContent(host);}
+  catch(error){if(host.isConnected&&activeMenuSection==='Государства')host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
 }
 
 function renderStatesContent(host,selectedId=null,tab='Статистика',create=false){
@@ -1184,6 +1342,10 @@ function renderStatesContent(host,selectedId=null,tab='Статистика',cre
   const state=stateRows.find(row=>row.id===Number(selectedId));
   host.dataset.adminStateId=state?String(state.id):'';
   host.dataset.adminStateTab=tab;
+  lastAdminStateId=state?.id||null;
+  lastAdminStateTab=tab;
+  const nextHash=routeHash('Государства',lastAdminStateId,tab);
+  if(location.hash!==nextHash)history.pushState({section:'Государства'},'',nextHash);
   if(state){
     const local=allProvinces.filter(p=>p.kind==='land'&&(Number(p.layers?.states?.id)===state.id||p.occupation===state.name));
     renderStateDetails(host,state,tab,local,true);
@@ -1205,15 +1367,30 @@ function renderStatesContent(host,selectedId=null,tab='Статистика',cre
 }
 export function initUI(notify){
   showStatus=notify;
+  updateTopNavigation('map');
+  $('app-brand').onclick=()=>{if(confirmLeaveEdits())showMap();};
+  document.querySelectorAll('[data-top-view]').forEach(button=>button.onclick=()=>{
+    const view=button.dataset.topView;
+    if(!confirmLeaveEdits())return;
+    if(view==='map')showMap();
+    else if(view==='state')renderMenu(user?.role==='admin'?'Государства':lastStateSection);
+    else renderMenu(view==='wall'?'Стена':'Правила и механики');
+  });
+  $('header-profile').onclick=()=>showUtilityPopover('profile');
+  $('header-notifications').onclick=()=>showUtilityPopover('notifications');
+  $('calendar-toggle').onclick=()=>{closeUtilityPopover();const popover=$('calendar-popover');popover.hidden=!popover.hidden;$('calendar-toggle').setAttribute('aria-expanded',String(!popover.hidden));};
+  document.addEventListener('click',event=>{if(!event.target.closest('.turn-badge')){$('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');}if(!event.target.closest('.app-utilities,.utility-popover'))closeUtilityPopover();});
+  window.addEventListener('popstate',()=>{const section=sectionFromLocation();if(section==='map')showMap(true);else renderMenu(section,true);});
   for(const[key,[name,icon,side]]of Object.entries(PANELS)){
     const button=document.createElement('button');button.className='dock-button';button.id=`panel-${key}`;button.dataset.panel=key;button.title=name;button.setAttribute('aria-label',name);button.setAttribute('aria-expanded','false');button.innerHTML=`<img src="assets/icons/${icon}.svg" alt="">`;
     if(key==='admin')button.hidden=true;button.onclick=()=>togglePanel(key);$(`${side}-dock`).append(button);
   }
+  if(matchMedia('(min-width:768px)').matches){legendOpen=true;$('legend-drawer').hidden=false;updateDockState();queueLayout();}
   $('advance-turn').onclick=async()=>{
     const button=$('advance-turn');if(user?.role!=='admin'||button.disabled)return;
     if(!confirm('Рассчитать налоги, зачислить их в казны государств и перейти на следующий год и ход?'))return;
     button.disabled=true;button.textContent='Расчёт…';
-    try{renderCalendar(await api('admin/turn/advance',{method:'POST',body:JSON.stringify({expected_year:gameCalendar.year,expected_turn:gameCalendar.turn})}));showStatus('Налоги начислены, содержание армии оплачено, долг обновлён; год и ход увеличены на 1',5000);}
+    try{renderCalendar(await api('admin/turn/advance',{method:'POST',body:JSON.stringify({expected_year:gameCalendar.year,expected_turn:gameCalendar.turn})}));void refreshHeaderResources();showStatus('Налоги начислены, содержание армии оплачено, долг обновлён; год и ход увеличены на 1',5000);}
     catch(error){showStatus(error.message,6000);}
     finally{button.disabled=false;button.textContent='Сменить ход';}
   };
@@ -1225,9 +1402,15 @@ export function initUI(notify){
   window.addEventListener('tools:result',e=>{lastToolResult=e.detail;if($('tool-result'))$('tool-result').textContent=e.detail;queueLayout();});
 }
 let gameCalendar={year:1452,turn:1};
-function renderCalendar(calendar){gameCalendar={year:Number(calendar.year),turn:Number(calendar.turn)};$('calendar-label').textContent=`${gameCalendar.year.toLocaleString('ru-RU')} год / ${gameCalendar.turn.toLocaleString('ru-RU')} ход`;}
-export function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};roadsList=data.roads||[];if(data.economy_config){economyDraft=data.economy_config;setEconomyConfig(data.economy_config);}emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(result=>acceptUser(result.user)).catch(e=>showStatus(e.message,4000));}
+function renderCalendar(calendar){gameCalendar={year:Number(calendar.year),turn:Number(calendar.turn)};const season=gameCalendar.turn%2?'Тёплый':'Холодный';const label=`${gameCalendar.year.toLocaleString('ru-RU')} год · Ход ${gameCalendar.turn.toLocaleString('ru-RU')} · ${season}`;$('calendar-label').textContent=label;$('calendar-detail').textContent=`${label} сезон`;}
+export function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};roadsList=data.roads||[];if(data.economy_config){economyDraft=data.economy_config;setEconomyConfig(data.economy_config);}if(legendOpen)renderLegend();emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(async result=>{await acceptUser(result.user);const section=sectionFromLocation();if(section!=='map')renderMenu(section,true);}).catch(e=>showStatus(e.message,4000));}
 window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;});
+window.addEventListener('ui:open-province',e=>{
+  const id=Number(e.detail?.id),stateId=Number(e.detail?.stateId);
+  if(!id||!stateId)return;
+  if(user?.role==='admin'){lastAdminStateId=stateId;pendingStateNavigation={stateId,tab:'Провинции'};pendingProvinceId=id;renderMenu('Государства');}
+  else if(user?.state_ids?.includes(stateId)){pendingProvinceId=id;renderMenu('Провинции');}
+});
 window.addEventListener('application:province-picked',e=>{
   if(!applicationDraft||!applicationPickMode)return;
   const province=e.detail;
@@ -1241,6 +1424,7 @@ window.addEventListener('map:marker-location-selected',async e=>{try{const marke
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(m=>m.id!==e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
 window.addEventListener('map:refreshed',e=>{categories=e.detail.categories;allProvinces=e.detail.provinces;provinceAdjacency=e.detail.adjacency||provinceAdjacency;mapMarkers=e.detail.markers||[];tradeAvailability={};roadsList=e.detail.roads||[];if(e.detail.economy_config){setEconomyConfig(e.detail.economy_config);if(!economyDirty)economyDraft=e.detail.economy_config;}if(current==='admin')renderDrawer();if(legendOpen)renderLegend();const host=$('menu-section');if(host?.isConnected&&activeMenuSection==='Константы'&&!host.querySelector('input:focus,select:focus,textarea:focus'))renderEconomyConstants(host);else if(host?.isConnected&&STATE_SECTIONS.includes(activeMenuSection)&&!host.querySelector('input:focus,select:focus,textarea:focus'))renderPlayerStateSection(host,activeMenuSection,true);else if(host?.isConnected&&activeMenuSection==='Государства'&&host.dataset.adminStateId&&!host.querySelector('input:focus,select:focus,textarea:focus')){const id=host.dataset.adminStateId,tab=host.dataset.adminStateTab;api('admin/states').then(rows=>{if(host.isConnected&&activeMenuSection==='Государства'&&host.dataset.adminStateId===id&&host.dataset.adminStateTab===tab&&!host.querySelector('input:focus,select:focus,textarea:focus')){stateRows=rows;renderStatesContent(host,Number(id),tab);}}).catch(error=>showStatus(error.message,4000));}});
+window.addEventListener('map:refreshed',()=>{void refreshHeaderResources();});
 window.addEventListener('roads:progress',e=>{roadInfo=e.detail;if(current==='admin'&&adminTool==='roads')renderDrawer();});
 window.addEventListener('roads:saved',e=>{roadsList.push(e.detail);if(current==='admin'&&adminTool==='roads')renderDrawer();});
 let markerPopover=null;

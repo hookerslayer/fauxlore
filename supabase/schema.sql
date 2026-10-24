@@ -18,7 +18,7 @@ create table if not exists fauxlore.provinces (
     check (trade_status in ('Отсутствует','Устье реки','Природный порт','Центр торговли I','Центр торговли II','Центр торговли III')),
   control smallint not null default 100 check (control between 0 and 100),
   occupation text check (occupation is null or length(btrim(occupation)) between 1 and 100),
-  terrain_type text check (terrain_type in ('forest','marsh')),
+  terrain_type text check (terrain_type in ('forest','marsh','plains','hills','mountains','high_mountains')),
   has_capital_marker boolean not null default false,
   has_city_marker boolean not null default false,
   taxes numeric, production jsonb, tension numeric
@@ -175,6 +175,7 @@ do $$ declare item record; begin
     execute format('alter table fauxlore.%I enable row level security',item.tablename);
   end loop;
 end $$;
+
 revoke all on all tables in schema fauxlore from public, anon, authenticated;
 revoke all on all sequences in schema fauxlore from public, anon, authenticated;
 
@@ -367,7 +368,7 @@ begin
     raise sqlstate '22023' using message='Тип провинции определяется автоматически';
   elsif field='terrain_type' then
     if value='null' then return value; end if;
-    if t is null or t not in ('forest','marsh') then raise sqlstate '22023' using message='Неизвестный тип местности'; end if;
+    if t is null or t not in ('forest','marsh','plains','hills','mountains','high_mountains') then raise sqlstate '22023' using message='Неизвестный тип местности'; end if;
   elsif field='occupation' then
     if value='null' then return value; end if;
     if jsonb_typeof(value) is distinct from 'string' or t is null then raise sqlstate '22023' using message='Выберите государство-оккупанта или очистите поле'; end if;
@@ -1003,9 +1004,6 @@ begin
 end $$;
 revoke all on function fauxlore.economy_config_api(text,text,jsonb,uuid) from public,anon,authenticated;
 grant execute on function fauxlore.economy_config_api(text,text,jsonb,uuid) to anon,authenticated;
-notify pgrst,'reload schema';
-+
-
 create or replace function fauxlore.notify_ruler_maternal_death()
 returns trigger language plpgsql security definer set search_path='' as $$
 begin
@@ -1102,6 +1100,23 @@ create table if not exists fauxlore.state_marriages (
 );
 create index if not exists state_marriages_a_idx on fauxlore.state_marriages(character_a_id);
 create index if not exists state_marriages_b_idx on fauxlore.state_marriages(character_b_id);
+create table if not exists fauxlore.state_marriage_proposals (
+  id bigint generated always as identity primary key,
+  from_state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  to_state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  from_character_id bigint not null references fauxlore.state_characters(id) on delete cascade,
+  to_character_id bigint not null references fauxlore.state_characters(id) on delete cascade,
+  status text not null default 'pending' check(status in ('pending','accepted','declined')),
+  created_by bigint not null references fauxlore.accounts(id),
+  created_at timestamptz not null default now(),
+  answered_at timestamptz,
+  check(from_state_id<>to_state_id)
+);
+create unique index if not exists state_marriage_pending_pair_idx on fauxlore.state_marriage_proposals
+  (least(from_state_id,to_state_id),greatest(from_state_id,to_state_id)) where status='pending';
+create index if not exists state_marriage_to_pending_idx on fauxlore.state_marriage_proposals(to_state_id,created_at desc) where status='pending';
+alter table fauxlore.state_marriage_proposals enable row level security;
+revoke all on fauxlore.state_marriage_proposals from public,anon,authenticated;
 alter table fauxlore.state_characters enable row level security;
 alter table fauxlore.state_marriages enable row level security;
 revoke all on fauxlore.state_characters,fauxlore.state_marriages from public,anon,authenticated;
@@ -2147,6 +2162,7 @@ returns jsonb language plpgsql security invoker set search_path='' as $$
 begin
   if path='map/revision' and method='GET' then return fauxlore.map_revision();
   elsif path in ('economy/config','admin/economy/config') then return fauxlore.economy_config_api(path,method,body,request_id);
+  elsif path ~ '^(my|admin)/states/[0-9]+/marriages(/[0-9]+/dissolve)?$' then return fauxlore.marriage_dissolution_api(path,method,body,request_id);
   elsif path ~ '^my/states/[0-9]+/(birth-events|birth-events/[0-9]+/name|marriage-candidates|marriages/local)$' then return fauxlore.character_lifecycle_api(path,method,body,request_id);
   elsif path ~ '^my/states/[0-9]+/characters$' or path ~ '^admin/states/[0-9]+/characters$' then return fauxlore.characters_api(path,method,body,request_id);
   elsif path='my/marriage-offers' or path ~ '^(my|admin)/marriage-offers/[0-9]+/(accept|reject)$' then return fauxlore.dynastic_marriage_api(path,method,body,request_id);
@@ -2168,6 +2184,102 @@ $$;
 revoke all on function public.fauxlore_api(text,text,jsonb,uuid) from public;
 grant execute on function public.fauxlore_api(text,text,jsonb,uuid) to anon,authenticated;
 notify pgrst,'reload schema';
+
+create or replace function fauxlore.marriage_dissolution_api(path text,method text,body jsonb,request_id uuid)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare
+  a fauxlore.accounts;
+  state_value integer;
+  marriage_value bigint;
+  marriage_row fauxlore.state_marriages;
+  character_a fauxlore.state_characters;
+  character_b fauxlore.state_characters;
+  state_row fauxlore.state_profiles;
+  calendar_row fauxlore.game_calendar;
+  previous fauxlore.operations;
+  result jsonb;
+  fingerprint text;
+  cost_value numeric;
+  message_value text;
+begin
+  if path !~ '^(my|admin)/states/[0-9]+/marriages(/[0-9]+/dissolve)?$' then
+    raise sqlstate '22023' using message='Некорректный запрос о браке';
+  end if;
+  a:=fauxlore.current_account();
+  state_value:=split_part(path,'/',3)::integer;
+
+  if left(path,3)='my/' then
+    if not exists(select 1 from fauxlore.account_states ast where ast.account_id=a.id and ast.layer='states' and ast.state_id=state_value) then
+      raise sqlstate '42501' using message='Нет доступа к этому государству';
+    end if;
+  elsif a.role<>'admin' then
+    raise sqlstate '42501' using message='Нужна роль администратора';
+  end if;
+
+  if path='my/states/'||state_value||'/marriages' or path='admin/states/'||state_value||'/marriages' then
+    if method<>'GET' or body<>'{}'::jsonb then raise sqlstate '22023' using message='Недопустимый запрос'; end if;
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'id',m.id,'type',m.marriage_type,
+      'character_a',concat_ws(' ',nullif(a.title,''),a.name,nullif(a.surname,'')),
+      'character_b',concat_ws(' ',nullif(b.title,''),b.name,nullif(b.surname,'')),
+      'state_a',coalesce((select c.name from fauxlore.map_categories c where c.layer='states' and c.id=a.state_id),'—'),
+      'state_b',coalesce((select c.name from fauxlore.map_categories c where c.layer='states' and c.id=b.state_id),'—')
+    ) order by m.id),'[]'::jsonb)
+      into result
+      from fauxlore.state_marriages m
+      join fauxlore.state_characters a on a.id=m.character_a_id
+      join fauxlore.state_characters b on b.id=m.character_b_id
+      where m.ended_at_turn is null and (a.state_id=state_value or b.state_id=state_value);
+    return result;
+  end if;
+
+  if method<>'POST' or body<>'{}'::jsonb or path !~ '/marriages/[0-9]+/dissolve$' then
+    raise sqlstate '22023' using message='Недопустимый запрос';
+  end if;
+  if request_id is null then raise sqlstate '22023' using message='Нужен идентификатор команды'; end if;
+  marriage_value:=split_part(path,'/',5)::bigint;
+  fingerprint:=md5(jsonb_build_array(method,path,body)::text);
+  perform pg_advisory_xact_lock(hashtextextended(a.id::text||':'||request_id::text,0));
+  select * into previous from fauxlore.operations o where o.account_id=a.id and o.request_id=marriage_dissolution_api.request_id;
+  if found then
+    if previous.fingerprint<>fingerprint then raise sqlstate '22023' using message='Идентификатор команды уже использован'; end if;
+    return previous.result;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('marriage-dissolve:'||marriage_value::text,0));
+  select * into marriage_row from fauxlore.state_marriages m where m.id=marriage_value and m.ended_at_turn is null for update;
+  if not found then raise sqlstate 'P0002' using message='Активный брак не найден'; end if;
+  select * into character_a from fauxlore.state_characters where id=marriage_row.character_a_id;
+  select * into character_b from fauxlore.state_characters where id=marriage_row.character_b_id;
+  if state_value not in (character_a.state_id,character_b.state_id) then
+    raise sqlstate '42501' using message='Это государство не является участником брака';
+  end if;
+
+  select * into state_row from fauxlore.state_profiles where state_id=state_value for update;
+  if not found then raise sqlstate 'P0002' using message='Государство не найдено'; end if;
+  cost_value:=case when marriage_row.marriage_type='dynastic' then 5 else 0 end;
+  if state_row.prestige<cost_value then raise sqlstate '22023' using message='Для расторжения династического брака требуется 5 ОП'; end if;
+  select * into calendar_row from fauxlore.game_calendar where singleton=true;
+  if not found then raise sqlstate 'P0002' using message='Игровой календарь не найден'; end if;
+
+  update fauxlore.state_marriages set ended_at_turn=calendar_row.turn where id=marriage_value and ended_at_turn is null;
+  if not found then raise sqlstate '40001' using message='Брак уже был расторгнут'; end if;
+  if cost_value>0 then update fauxlore.state_profiles set prestige=prestige-cost_value where state_id=state_value; end if;
+
+  message_value:=format('Брак между %s %s и %s %s расторгнут%s.',character_a.name,character_a.surname,character_b.name,character_b.surname,
+    case when cost_value>0 then ' за 5 ОП' else '' end);
+  insert into fauxlore.notifications(account_id,kind,title,message)
+    select distinct ast.account_id,'marriage','Брак расторгнут',message_value
+    from fauxlore.account_states ast
+    where ast.layer='states' and ast.state_id in(character_a.state_id,character_b.state_id);
+
+  result:=jsonb_build_object('dissolved',true,'marriage_id',marriage_value,'type',marriage_row.marriage_type,'cost',cost_value);
+  insert into fauxlore.operations(account_id,request_id,fingerprint,result)
+    values(a.id,marriage_dissolution_api.request_id,fingerprint,result);
+  return result;
+end $$;
+revoke all on function fauxlore.marriage_dissolution_api(text,text,jsonb,uuid) from public,anon,authenticated;
+grant execute on function fauxlore.marriage_dissolution_api(text,text,jsonb,uuid) to authenticated;
 
 -- Expose only the compact revision token through a dedicated public RPC.
 create or replace function public.map_revision_api()
@@ -5268,6 +5380,18 @@ begin
     end if;
   end loop;
 end $$;
+
+do $$
+declare definition text; marker text; replacement text;
+begin
+  definition:=pg_get_functiondef('public.fauxlore_api(text,text,jsonb,uuid)'::regprocedure);
+  marker:=' elsif path=''my/marriage-offers'' or path ~ ''^(my|admin)/marriage-offers/[0-9]+/(accept|reject)$'' then return fauxlore.dynastic_marriage_api(path,method,body,request_id);';
+  replacement:=' elsif path ~ ''^(my|admin)/states/[0-9]+/marriages(/[0-9]+/dissolve)?$'' then return fauxlore.marriage_dissolution_api(path,method,body,request_id);'||marker;
+  if position('marriage_dissolution_api' in definition)=0 then
+    if position(marker in definition)=0 then raise exception 'Marriage API dispatch insertion point missing'; end if;
+    execute replace(definition,marker,replacement);
+  end if;
+end $$;
 notify pgrst,'reload schema';
 
 create table if not exists fauxlore.trade_route_transit_policies(
@@ -5381,3 +5505,97 @@ begin
   end if;
 end $$;
 notify pgrst,'reload schema';
+
+create or replace function fauxlore.decline_stale_marriage_proposals()
+returns trigger language plpgsql security definer set search_path='' as $$
+declare proposal fauxlore.state_marriage_proposals; message_value text;
+begin
+  if new.marriage_type<>'local' then return new; end if;
+  message_value:='Предложение династического брака автоматически отклонено: один из персонажей уже вступил в другой брак.';
+  for proposal in
+    update fauxlore.state_marriage_proposals p
+      set status='declined',answered_at=now()
+      where p.status='pending' and (
+        p.from_character_id in(new.character_a_id,new.character_b_id)
+        or p.to_character_id in(new.character_a_id,new.character_b_id)
+      )
+      returning p.*
+  loop
+    insert into fauxlore.notifications(account_id,kind,title,message)
+      select distinct recipient.account_id,'marriage','Предложение брака отклонено',message_value
+      from (
+        select ast.account_id
+        from fauxlore.account_states ast
+        where ast.layer='states' and ast.state_id in(proposal.from_state_id,proposal.to_state_id)
+        union
+        select ac.id
+        from fauxlore.accounts ac
+        where ac.role='admin' and exists(
+          select 1 from fauxlore.state_profiles sp
+          where sp.state_id in(proposal.from_state_id,proposal.to_state_id) and sp.is_npc
+            and not exists(select 1 from fauxlore.account_states ast where ast.layer='states' and ast.state_id=sp.state_id)
+        )
+      ) recipient;
+  end loop;
+  return new;
+end $$;
+revoke all on function fauxlore.decline_stale_marriage_proposals() from public,anon,authenticated;
+drop trigger if exists state_marriage_decline_stale_proposals on fauxlore.state_marriages;
+create trigger state_marriage_decline_stale_proposals after insert on fauxlore.state_marriages
+for each row execute function fauxlore.decline_stale_marriage_proposals();
+
+do $$
+declare proposal fauxlore.state_marriage_proposals;
+begin
+  for proposal in
+    update fauxlore.state_marriage_proposals p
+      set status='declined',answered_at=now()
+      where p.status='pending' and exists(
+        select 1 from fauxlore.state_marriages m
+        where m.ended_at_turn is null and (
+          p.from_character_id in(m.character_a_id,m.character_b_id)
+          or p.to_character_id in(m.character_a_id,m.character_b_id)
+        )
+      )
+      returning p.*
+  loop
+    insert into fauxlore.notifications(account_id,kind,title,message)
+      select distinct recipient.account_id,'marriage','Предложение брака отклонено',
+        'Предложение династического брака автоматически отклонено: один из персонажей уже состоит в другом браке.'
+      from (
+        select ast.account_id from fauxlore.account_states ast
+        where ast.layer='states' and ast.state_id in(proposal.from_state_id,proposal.to_state_id)
+        union
+        select ac.id from fauxlore.accounts ac
+        where ac.role='admin' and exists(
+          select 1 from fauxlore.state_profiles sp
+          where sp.state_id in(proposal.from_state_id,proposal.to_state_id) and sp.is_npc
+            and not exists(select 1 from fauxlore.account_states ast where ast.layer='states' and ast.state_id=sp.state_id)
+        )
+      ) recipient;
+  end loop;
+end $$;
+
+-- Keep marriage lookup aliases distinct from the account variable; retain all proposal statuses for diplomacy lists.
+do $$
+declare fn text; query_start integer; query_end integer; query_body text;
+begin
+  select pg_get_functiondef('fauxlore.marriage_dissolution_api(text,text,jsonb,uuid)'::regprocedure) into fn;
+  query_start:=strpos(fn,'select coalesce(jsonb_agg(jsonb_build_object(');
+  query_end:=query_start+strpos(substring(fn from query_start),'return result;')-1;
+  if query_start>0 and query_end>0 then
+    query_body:=substring(fn from query_start for query_end-query_start);
+    query_body:=replace(query_body,'join fauxlore.state_characters a on a.id=','join fauxlore.state_characters person_a on person_a.id=');
+    query_body:=replace(query_body,'join fauxlore.state_characters b on b.id=','join fauxlore.state_characters person_b on person_b.id=');
+    query_body:=replace(query_body,'a.','person_a.');
+    query_body:=replace(query_body,'b.','person_b.');
+    query_body:=replace(query_body,'person_person_a.','person_a.');
+    query_body:=replace(query_body,'person_person_b.','person_b.');
+    fn:=overlay(fn placing query_body from query_start for query_end-query_start);
+    execute fn;
+  end if;
+  select pg_get_functiondef('fauxlore.dynastic_marriage_api(text,text,jsonb,uuid)'::regprocedure) into fn;
+  fn:=replace(fn,$old$'id',p.id,'from_state_id'$old$,$new$'id',p.id,'status',p.status,'from_state_id'$new$);
+  fn:=replace(fn,$old$where p.status='pending'$old$,$new$where true$new$);
+  execute fn;
+end $$;

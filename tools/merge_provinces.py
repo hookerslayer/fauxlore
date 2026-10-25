@@ -17,6 +17,9 @@ MERGES = (
     (3059, 3179),
     (3059, 3040),
     (3779, 3698),
+    (195, 187),
+    (4138, 4113),
+    (2771, 2886),
 )
 Image.MAX_IMAGE_PIXELS = None
 
@@ -53,11 +56,15 @@ def main():
     mapping = {}
     for survivor, retired in MERGES:
         target = mapping.get(survivor, survivor)
-        mapping[retired] = target
-        if target not in by_id or retired not in by_id:
-            raise ValueError(f"Missing province metadata: {target} or {retired}")
+        if target not in by_id:
+            raise ValueError(f"Missing surviving province metadata: {target}")
+        # Older manual merges are already present in map-data. Skipping their
+        # retired IDs makes this maintenance script safe to run again.
+        if retired not in by_id:
+            continue
         if by_id[target]["kind"] != "sea" or by_id[retired]["kind"] != "sea":
             raise ValueError(f"Only sea provinces may be merged: {target}, {retired}")
+        mapping[retired] = target
     # Resolve the intentional 3179 -> 3059 <- 3040 chain.
     for retired, target in list(mapping.items()):
         while target in mapping:

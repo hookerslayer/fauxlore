@@ -14,9 +14,9 @@
       "16": 0,
       "64": 0,
       "100": 2,
-      "500": 9,
-      "1000": 12,
-      "2000": 13
+      "500": 6,
+      "1000": 9,
+      "2000": 10
     },
     "lake": {
       "16": 1,
@@ -723,44 +723,6 @@
       ]
     },
     {
-      "id": 2886,
-      "kind": "sea",
-      "center": [
-        2995.57,
-        4352.06
-      ],
-      "bbox": [
-        2984,
-        4343,
-        3014,
-        4362
-      ],
-      "area": 293,
-      "seed_area": 229,
-      "neighbors": [
-        {
-          "id": 2881,
-          "kind": "land",
-          "shared_pixel_edges": 57
-        },
-        {
-          "id": 2830,
-          "kind": "land",
-          "shared_pixel_edges": 34
-        },
-        {
-          "id": 2771,
-          "kind": "sea",
-          "shared_pixel_edges": 15
-        },
-        {
-          "id": 2679,
-          "kind": "sea",
-          "shared_pixel_edges": 6
-        }
-      ]
-    },
-    {
       "id": 2050,
       "kind": "land",
       "center": [
@@ -790,34 +752,6 @@
           "id": 2094,
           "kind": "sea",
           "shared_pixel_edges": 19
-        }
-      ]
-    },
-    {
-      "id": 4113,
-      "kind": "sea",
-      "center": [
-        4160.29,
-        5095.43
-      ],
-      "bbox": [
-        4149,
-        5084,
-        4172,
-        5103
-      ],
-      "area": 305,
-      "seed_area": 269,
-      "neighbors": [
-        {
-          "id": 4087,
-          "kind": "land",
-          "shared_pixel_edges": 66
-        },
-        {
-          "id": 3984,
-          "kind": "sea",
-          "shared_pixel_edges": 22
         }
       ]
     },
@@ -998,39 +932,6 @@
           "id": 3259,
           "kind": "land",
           "shared_pixel_edges": 16
-        }
-      ]
-    },
-    {
-      "id": 187,
-      "kind": "sea",
-      "center": [
-        2732.38,
-        3043.55
-      ],
-      "bbox": [
-        2714,
-        3036,
-        2751,
-        3049
-      ],
-      "area": 376,
-      "seed_area": 324,
-      "neighbors": [
-        {
-          "id": 189,
-          "kind": "land",
-          "shared_pixel_edges": 67
-        },
-        {
-          "id": 116,
-          "kind": "sea",
-          "shared_pixel_edges": 32
-        },
-        {
-          "id": 156,
-          "kind": "land",
-          "shared_pixel_edges": 5
         }
       ]
     },

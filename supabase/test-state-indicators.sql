@@ -25,7 +25,6 @@ begin
         for sid in select state_id from fauxlore.state_profiles loop perform fauxlore.ensure_state_group_politics(sid); end loop;
         update fauxlore.state_group_politics set loyalty=1;
         update fauxlore.state_profiles set crime=.02,corruption=.02;
-        update fauxlore.provinces set belonging='Корона' where kind='land';
       end if;
       update fauxlore.economy_parameters set config=jsonb_set(config,'{resources}',
         (select jsonb_agg(r||jsonb_build_object('consumption',0)) from jsonb_array_elements(config->'resources') r)) where singleton;

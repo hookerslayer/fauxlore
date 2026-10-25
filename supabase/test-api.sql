@@ -63,9 +63,9 @@ begin
   exception when no_data_found then null; end;
   select value into p from jsonb_array_elements(public.fauxlore_api('map')->'provinces') where value->>'kind'='land' limit 1;
   pid:=(p->>'id')::integer;
-  result:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"population":2345,"belonging":"Корона","trade_status":"Устье реки","terrain_type":"forest"}',request);
-  if (result->>'population')::int<>2345 or result->>'belonging'<>'Корона' or result->>'trade_status'<>'Устье реки' or result->>'terrain_type'<>'forest' then raise exception 'Province edit'; end if;
-  repeated:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"population":2345,"belonging":"Корона","trade_status":"Устье реки","terrain_type":"forest"}',request);
+  result:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"population":2345,"trade_status":"Устье реки","terrain_type":"forest"}',request);
+  if (result->>'population')::int<>2345 or result->>'trade_status'<>'Устье реки' or result->>'terrain_type'<>'forest' then raise exception 'Province edit'; end if;
+  repeated:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"population":2345,"trade_status":"Устье реки","terrain_type":"forest"}',request);
   if result<>repeated then raise exception 'Idempotency'; end if;
   result:=public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"state":"Тестовая страна переноса","race":"Люди","control":50}',gen_random_uuid());
   if (result->>'control')::int<>50 then raise exception 'Numeric province control'; end if;
@@ -81,7 +81,7 @@ begin
   exception when invalid_parameter_value then null; end;
   begin perform public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"population":-1}',gen_random_uuid()); raise exception 'Invalid number accepted';
   exception when invalid_parameter_value then null; end;
-  begin perform public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"belonging":"Короли"}',gen_random_uuid()); raise exception 'Invalid belonging accepted';
+  begin perform public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"belonging":"Короли"}',gen_random_uuid()); raise exception 'Retired belonging accepted';
   exception when invalid_parameter_value then null; end;
   begin perform public.fauxlore_api('admin/provinces/'||pid,'PATCH','{"trade_status":"Региональный рынок"}',gen_random_uuid()); raise exception 'Invalid trade status accepted';
   exception when invalid_parameter_value then null; end;
@@ -113,7 +113,7 @@ begin
   if (result->>'updated_count')::int<1 then raise exception 'Bulk edit'; end if;
   result:=public.fauxlore_api('admin/provinces/bulk-preview','POST','{"rules":[{"condition_field":"population","condition_value":2345,"target_field":"development","target_value":17},{"condition_field":"population","condition_value":2345,"target_field":"development","target_value":18}]}',gen_random_uuid());
   if (result->>'conflict_count')::int<1 then raise exception 'Bulk conflict detection'; end if;
-  result:=public.fauxlore_api('admin/provinces/bulk-edit','POST','{"rules":[{"condition_field":"province_type","condition_value":"Нейтральная","target_field":"development","target_value":10}]}',gen_random_uuid());
+  result:=public.fauxlore_api('admin/provinces/bulk-edit','POST','{"rules":[{"condition_field":"development","condition_value":100,"target_field":"development","target_value":10}]}',gen_random_uuid());
   if (result->>'updated_count')::int<100 then raise exception 'Large bulk edit'; end if;
 end $$;
 reset role;

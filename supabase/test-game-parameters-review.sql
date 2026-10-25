@@ -4,7 +4,7 @@ create temporary table test_review_calendar(year integer,turn integer) on commit
 create trigger review_loan_penalties before update on test_review_calendar
 for each row execute function fauxlore.apply_estate_loan_turn_penalties();
 do $$
-declare admin_uid uuid; state_key integer; province_key integer; old_estate text;
+declare admin_uid uuid; state_key integer; province_key integer;
   cal fauxlore.game_calendar; before_crown numeric; before_lender numeric; before_prestige numeric;
   before_loyalty numeric; loan_id bigint; answer jsonb; command_id uuid:=gen_random_uuid();
   old_race integer; old_religion integer; next_race integer; next_religion integer;
@@ -13,24 +13,17 @@ begin
   if admin_uid is null then raise exception 'Admin account unavailable'; end if;
   perform set_config('request.jwt.claim.sub',admin_uid::text,true);
   select * into cal from fauxlore.game_calendar where singleton=true;
-  select sp.state_id,p.id,p.belonging into state_key,province_key,old_estate
+  select sp.state_id,p.id into state_key,province_key
   from fauxlore.state_profiles sp
   join fauxlore.province_values v on v.layer='states' and v.category_id=sp.state_id
   join fauxlore.provinces p on p.id=v.province_id and p.kind='land'
   join fauxlore.state_treasuries t on t.state_id=sp.state_id and t.estate='Знать' and t.balance>=100
   where not p.has_capital_marker order by sp.state_id,p.id limit 1;
   if province_key is null then raise exception 'Review test fixture unavailable'; end if;
-  if exists(select 1 from fauxlore.provinces where belonging='Отсутствует') then
-    raise exception 'Unassigned province remains'; end if;
-  if exists(select 1 from fauxlore.provinces where has_capital_marker and belonging<>'Корона') then
-    raise exception 'Capital belongs to another estate'; end if;
-  answer:=public.fauxlore_api('admin/states/'||state_key||'/provinces/'||province_key||'/belonging','POST',
-    jsonb_build_object('belonging',case when old_estate='Знать' then 'Корона' else 'Знать' end),command_id);
-  if answer is distinct from public.fauxlore_api('admin/states/'||state_key||'/provinces/'||province_key||'/belonging','POST',
-    jsonb_build_object('belonging',case when old_estate='Знать' then 'Корона' else 'Знать' end),command_id) then
-    raise exception 'Belonging operation is not replay safe'; end if;
-  if (select belonging from fauxlore.provinces where id=province_key)=old_estate then
-    raise exception 'Belonging was not changed'; end if;
+  if exists(select 1 from fauxlore.provinces where province_type='Территориальная') then
+    raise exception 'Retired province type remains'; end if;
+  answer:=public.fauxlore_api('admin/states/'||state_key||'/estate-tax-rates','GET','{}'::jsonb,null);
+  if jsonb_array_length(answer->'groups')<>4 then raise exception 'Four estate rates not available'; end if;
   select balance into before_crown from fauxlore.state_treasuries where state_id=state_key and estate='Корона';
   select balance into before_lender from fauxlore.state_treasuries where state_id=state_key and estate='Знать';
   answer:=public.fauxlore_api('admin/states/'||state_key||'/loans/borrow','POST',
@@ -77,5 +70,5 @@ begin
     or fauxlore.group_status_loyalty_modifier(state_key,'religion',old_religion)<>.05 then
     raise exception 'Succession did not promote new groups and recognize old ones'; end if;
 end $$;
-select 'Belonging, loan transfers, overdue penalty, transit policy and succession passed' result;
+select 'Four estate rates, loan transfers, overdue penalty, transit policy and succession passed' result;
 rollback;

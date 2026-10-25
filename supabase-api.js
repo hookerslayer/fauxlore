@@ -67,6 +67,17 @@ export function supabaseApi(path, options = {}) {
   return inflight.get(path);
 }
 
+export async function militaryApi(action, stateId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_api', {action, target_state: stateId || null, payload});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось выполнить военное действие');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function hasAuthenticatedSession() {
   const db = await client();
   const { data, error } = await db.auth.getSession();

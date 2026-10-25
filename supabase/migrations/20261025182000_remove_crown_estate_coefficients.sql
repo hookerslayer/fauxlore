@@ -1,0 +1,1 @@
+update fauxlore.economy_parameters set config=jsonb_set(jsonb_set(config,'{estateRecruitModifiers}',(config->'estateRecruitModifiers')-'Корона'),'{estateTaxGreed}',(config->'estateTaxGreed')-'Значимое|Корона'-'Ключевое|Корона'-'Бесправное|Корона') where singleton;

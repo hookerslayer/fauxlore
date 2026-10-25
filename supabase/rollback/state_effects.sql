@@ -453,7 +453,7 @@ owned as (
   from influences cross join cfg
 ), estate_block as (
   select greatest(0,least(1,.5+sum(influence*(effective_loyalty-.6)*2*
-    case status when 'Господствующее' then 1 when 'Ключевое' then 1.5 when 'Значимое' then 1 when 'Бесправное' then .25 else 0 end))) value from loyalties
+    case status when 'Ключевое' then 1.5 when 'Значимое' then 1 when 'Бесправное' then .25 else 0 end))) value from loyalties
 ), groups as (
   select v.layer,v.category_id,sum(p.population)::numeric population from owned p
   join fauxlore.province_values v on v.province_id=p.id and v.layer in ('races','religions') group by v.layer,v.category_id

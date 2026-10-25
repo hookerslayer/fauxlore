@@ -2,9 +2,9 @@
   "source": "fauxlore.png",
   "width": 10000,
   "height": 10000,
-  "provinces": 5716,
+  "provinces": 5713,
   "land": 4596,
-  "sea": 1068,
+  "sea": 1065,
   "lake": 52,
   "exterior_components": 1,
   "contour_pixels": 1107808,
@@ -979,6 +979,18 @@
     {
       "id": 3698,
       "assigned_to": 3779
+    },
+    {
+      "id": 187,
+      "assigned_to": 195
+    },
+    {
+      "id": 4113,
+      "assigned_to": 4138
+    },
+    {
+      "id": 2886,
+      "assigned_to": 2771
     }
   ]
 }

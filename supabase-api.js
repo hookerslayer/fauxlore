@@ -78,6 +78,30 @@ export async function militaryApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function colonizationApi(action, stateId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('colonization_api', {action, target_state: stateId || null, payload});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось выполнить колонизационную миссию');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
+export async function adminResourcesApi(action, targetState = null, resource = null, delta = 0) {
+  const db = await client();
+  const {data, error} = await db.rpc('admin_resources_api', {
+    action, target_state: targetState, resource, delta,
+  });
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось изменить ресурсы государства');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function hasAuthenticatedSession() {
   const db = await client();
   const { data, error } = await db.auth.getSession();

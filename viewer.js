@@ -1,6 +1,6 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=20261025235000';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=admin-resource-editor-20261025';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
-import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025210000';
+import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
 const html = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -10,14 +10,14 @@ const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],portPlacement=null;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],colonizationRouteMode=false,colonizationRouteIds=[],portPlacement=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
 let regionSlots = 25;
 let colorsTexture,occupationColorsTexture,terrainTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null;
 const thematicComponents=new Map();
-let mapMarkers=[],applicationPlacement=null,applicationSelectedIds=new Set();
+let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
 let selectedMarkerPopup=null;
 let mapRoads=[],mapTradeRoutes=[],roadDraft=null,roadWorker=null,roadSequence=0,roadPending=new Map(),roadGeneration=0,roadBusy=false,roadSaving=false;
 function roadProgress(){window.dispatchEvent(new CustomEvent('roads:progress',{detail:{active:!!roadDraft,busy:roadBusy,saving:roadSaving,anchors:roadDraft?.anchors||[],segments:roadDraft?.segments||[]}}));schedule();}
@@ -123,7 +123,7 @@ function setupGL() {
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
-  uniform int uTileSize,uColumns,uSelected,uRouteIds[10],uRouteCount;
+  uniform int uTileSize,uColumns,uSelected,uRouteIds[50],uRouteCount;
   uniform bool uPick,uShowOccupation;
   out vec4 color;
   ivec4 bytesAt(ivec2 p){
@@ -168,11 +168,11 @@ function setupGL() {
       base=mix(base,selectedFill,.5);
     }
     bool routeSelected=false;
-    for(int i=0;i<10;i++)if(i<uRouteCount&&id==uRouteIds[i])routeSelected=true;
+    for(int i=0;i<50;i++)if(i<uRouteCount&&id==uRouteIds[i])routeSelected=true;
     if(routeSelected)base=mix(base,vec3(1.,.86,.38),.64);
 
     vec4 occupation=texelFetch(uOccupationColors,ivec2(id%256,id/256),0);
-    if(uShowOccupation&&occupation.a>.5&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
+    if(occupation.a>.5&&(occupation.a<.75||uShowOccupation)&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
 
     // Rivers are packed into the alpha channel of the same nearest-filtered
     // map texture, keeping them pixelated and avoiding a second canvas pass.
@@ -292,7 +292,9 @@ function updateLayerColors(){
     else if(category&&/^#[0-9a-f]{6}$/i.test(category.color))rgb=category.color.slice(1).match(/../g).map(x=>parseInt(x,16));
     else if(numbers.length&&numeric(p)!==null){const t=max===min?.5:(numeric(p)-min)/(max-min);rgb=[Math.round(55+177*t),Math.round(65+133*t),Math.round(62+41*t)];}
     if(rgb)colors.set([...rgb,255],p.id*4);
-    if(p.occupation_color){const occupationRgb=p.occupation_color.slice(1).match(/../g).map(x=>parseInt(x,16));occupations.set([...occupationRgb,255],p.id*4);}
+    const colony=mapColonies.find(item=>Number(item.province_id)===Number(p.id));
+    if(colony?.color){const colonyRgb=colony.color.slice(1).match(/../g).map(x=>parseInt(x,16));occupations.set([...colonyRgb,128],p.id*4);}
+    else if(p.occupation_color){const occupationRgb=p.occupation_color.slice(1).match(/../g).map(x=>parseInt(x,16));occupations.set([...occupationRgb,255],p.id*4);}
   }
   gl.activeTexture(gl.TEXTURE4);gl.bindTexture(gl.TEXTURE_2D,colorsTexture);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,colors);
@@ -306,8 +308,9 @@ function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
   gl.uniform2f(loc.Offset, view.x, view.y); gl.uniform1f(loc.Scale, view.scale);
   gl.uniform1f(loc.Dpr, canvas.width/innerWidth); gl.uniform1i(loc.Selected, selected);
-  gl.uniform1iv(loc.RouteIds,Int32Array.from(Array.from({length:10},(_,i)=>Number(tradeRouteIds[i])||0)));
-  gl.uniform1i(loc.RouteCount,Math.min(10,tradeRouteIds.length));
+  const routeHighlights=[...tradeRouteIds,...colonizationRouteIds].slice(0,50);
+  gl.uniform1iv(loc.RouteIds,Int32Array.from(Array.from({length:50},(_,i)=>Number(routeHighlights[i])||0)));
+  gl.uniform1i(loc.RouteCount,routeHighlights.length);
 }
 function resetTileCache(nextSlots) {
   cacheSlots=nextSlots; tileCache.clear(); tileLoading.clear(); tileUse=0;
@@ -519,6 +522,7 @@ function mapClick(x,y){
   if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
   lastPoint=p;
   if(roadDraft&&isAdmin()){void addRoadAnchor(x,y);return;}
+  if(colonizationRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри морской провинции.',2500);return;}window.dispatchEvent(new CustomEvent('colonization:route-province-picked',{detail:province}));return;}
   if(tradeRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри провинции маршрута.',2500);return;}window.dispatchEvent(new CustomEvent('trade:route-province-picked',{detail:province}));return;}
   if(applicationPlacement){
     const id=pickProvinceId(x,y),province=provinces.get(id);
@@ -571,7 +575,9 @@ function mapClick(x,y){
 }
 window.addEventListener('trade:route-pick',e=>{tradeRouteMode=Boolean(e.detail?.active);if(tradeRouteMode||e.detail?.clear)tradeRouteIds=[];if(tradeRouteMode)status('Выбор маршрута торговли: кликайте соседние провинции.',0);schedule();});
 window.addEventListener('trade:route-progress',e=>{tradeRouteIds=(e.detail?.ids||[]).slice(0,10).map(Number);schedule();});
-window.addEventListener('keydown',e=>{if(e.key==='Escape'&&tradeRouteMode){tradeRouteMode=false;window.dispatchEvent(new CustomEvent('trade:route-cancelled'));schedule();}});
+window.addEventListener('colonization:route-pick',e=>{colonizationRouteMode=Boolean(e.detail?.active);if(e.detail?.clear||!colonizationRouteMode)colonizationRouteIds=[];if(colonizationRouteMode)status('Выбор морского маршрута: кликайте морские провинции по порядку.',0);schedule();});
+window.addEventListener('colonization:route-progress',e=>{colonizationRouteIds=(e.detail?.ids||[]).slice(0,40).map(Number);schedule();});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&colonizationRouteMode){colonizationRouteMode=false;colonizationRouteIds=[];window.dispatchEvent(new CustomEvent('colonization:route-cancelled'));schedule();}else if(e.key==='Escape'&&tradeRouteMode){tradeRouteMode=false;window.dispatchEvent(new CustomEvent('trade:route-cancelled'));schedule();}});
 function resize() {
   const oldW = canvas.width/(canvas.dataset.dpr || 1), oldH = canvas.height/(canvas.dataset.dpr || 1);
   const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -713,7 +719,7 @@ function installMapData(data){
   tileRevision=nextTileRevision;dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||liveRevision);region=nextRegion;
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   if(ready&&(tileChanged||regionChanged))resetTileCache(Math.min(regionSlots,view.scale>view.min*1.8?12:25));
-  categoryList=data.categories;mapMarkers=data.markers||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();
+  categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();
   window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();
 }
 window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
@@ -755,7 +761,7 @@ window.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);dataRevision=String(data.data_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinceAdjacency=data.adjacency||{};
+  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);dataRevision=String(data.data_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));

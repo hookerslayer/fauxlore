@@ -1,4 +1,4 @@
-import {estatePopulation, BASE_ESTATE_TAX_RATES, developmentMultiplier} from './estate-demography.js';
+import {estatePopulation, BASE_ESTATE_TAX_RATES, developmentMultiplier, provinceTaxEfficiency} from './estate-demography.js';
 
 // Deterministic, display-time economic calculations based on the reviewed
 // technical-information tables in docs/economy.md. Derived values are never
@@ -12,9 +12,9 @@ export const ECONOMY_RESOURCES = [
 ].map(([category,name,value,production,consumption])=>({category,name,value,production,consumption,showInProduction:!name.endsWith('пустошь')}));
 
 export const PROVINCE_MODIFIERS = {
-  'Столичная':{tax:2,production:1,trade:1.5,tradeBase:15},
-  'Городская':{tax:1.5,production:.7,trade:1,tradeBase:10},
-  'Регион':{tax:.8,production:1.2,trade:.5,tradeBase:2},
+  'Столичная':{tax:1,production:1,trade:1.5,tradeBase:15},
+  'Городская':{tax:1,production:.7,trade:1,tradeBase:10},
+  'Регион':{tax:1,production:1.2,trade:.5,tradeBase:2},
 };
 export const TRADE_STATUS_MODIFIERS = {
   'Отсутствует':1,'Устье реки':1.1,'Природный порт':1.25,
@@ -27,6 +27,7 @@ export const RECRUIT_LIMIT_MODIFIERS={'Столичная':1.5,'Городска
 export const ESTATE_RECRUIT_MODIFIERS={'Знать':1.2,'Духовенство':.3,'Горожане':.5,'Крестьяне':.1};
 export const ESTATE_NAMES=['Знать','Духовенство','Горожане','Крестьяне'];
 export const ESTATE_AMBITIONS={'Ключевое':.5,'Значимое':.35,'Бесправное':0};
+export const ESTATE_INFLUENCE_FACTORS={'Ключевое':3,'Значимое':1.5,'Бесправное':.25};
 export const DEFAULT_ECONOMY_CONFIG={resources:ECONOMY_RESOURCES,estateTaxRates:BASE_ESTATE_TAX_RATES,provinceModifiers:PROVINCE_MODIFIERS,tradeStatusModifiers:TRADE_STATUS_MODIFIERS,raceGrowthModifiers:{Люди:1,Дварфы:.8,Полуэльфы:.75,Эльфы:.35,Зверолюди:.6},recruitGrowthModifiers:RECRUIT_GROWTH_MODIFIERS,recruitLimitModifiers:RECRUIT_LIMIT_MODIFIERS,estateRecruitModifiers:ESTATE_RECRUIT_MODIFIERS,provinceValueWeights:PROVINCE_VALUE_WEIGHTS,estateTaxGreed:{'Ключевое|Знать':.35,'Ключевое|Духовенство':.3,'Ключевое|Горожане':.3,'Ключевое|Крестьяне':.2,'Значимое|Знать':.2,'Значимое|Духовенство':.15,'Значимое|Горожане':.15,'Значимое|Крестьяне':.1,'Бесправное|Знать':.05,'Бесправное|Духовенство':.05,'Бесправное|Горожане':.05,'Бесправное|Крестьяне':0},taxLoyaltySensitivity:.5,occupationMultiplier:.5};
 let activeConfig=DEFAULT_ECONOMY_CONFIG;
 export const DEFAULT_STATE_EFFECTS={crimeTaxPenalty:.25,crimePopulationPenalty:.5,crimeRecruitBonus:.5,corruptionTaxPenalty:1,corruptionLoyaltyDivisor:6,corruptionLoyaltyCap:.15,overloadCorruptionPerRatio:1,overloadCorruptionCapPP:3,corruptionRecoveryCapPP:1,corruptionGrowthCapPP:3,urbanizationThreshold:.15,urbanizationPenaltySlope:.5,urbanizationPenaltyCap:.5};
@@ -35,7 +36,7 @@ export function getEconomyConfig(){return activeConfig;}
 
 const floorToInteger=value=>Math.floor(Number(value)||0);
 const roundTo=value=>floorToInteger(value);
-const GROUP_STATUS_EFFECTS={'Официальная':{population:1.1,tax:1,production:1,recruit:1},'Признание':{population:1,tax:1,production:1,recruit:1},'Невмешательство':{population:1,tax:1,production:1,recruit:1},'Ассимиляция':{population:.5,tax:.8,production:.7,recruit:0},'Истребление':{population:0,tax:.5,production:.5,recruit:0}};
+export const GROUP_STATUS_EFFECTS={'Официальная':{population:1.1,tax:1,production:1,recruit:1},'Признание':{population:1,tax:1,production:1,recruit:1},'Невмешательство':{population:1,tax:1,production:1,recruit:1},'Ассимиляция':{population:.5,tax:.8,production:.7,recruit:0},'Истребление':{population:0,tax:.5,production:.5,recruit:0}};
 function groupStatusForProvince(province,groupType){
   const categoryLayer=groupType==='race'?'races':'religions',stateLayer=province?.layers?.states,categoryId=province?.layers?.[categoryLayer]?.id;
   const occupied=province?.occupation&&province.occupation!==stateLayer?.name;
@@ -50,19 +51,20 @@ export const calculateProvinceShare=(province,beneficiary)=>{const occupation=pr
 export function calculateProvinceEstateTaxes(province,beneficiary=province?.layers?.states?.name){
   if(province?.kind!=='land')return null;
   const population=Math.max(0,Number(province.population)||0),counts=estatePopulation(province.province_type,population);
-  const type=activeConfig.provinceModifiers?.[province.province_type],control=Number(province.control??100),development=developmentMultiplier(province.development??100);
+  const type=activeConfig.provinceModifiers?.[province.province_type],control=Number(province.control??100),development=developmentMultiplier(province.development??100),taxEfficiency=provinceTaxEfficiency(province.province_type);
   const occupied=province.occupation&&province.occupation!==province.layers?.states?.name;
   const rates=occupied?province.occupation_estate_tax_rates??activeConfig.estateTaxRates:province.layers?.states?.estate_tax_rates??activeConfig.estateTaxRates;
-  if(!counts||!type||development===null||!Number.isFinite(control)||control<0||control>100)return null;
+  if(!counts||!type||development===null||taxEfficiency===null||!Number.isFinite(control)||control<0||control>100)return null;
   const effects={...DEFAULT_STATE_EFFECTS,...activeConfig.stateEffects},crime=Number(occupied?province.occupation_crime??.2:province.layers?.states?.crime??(province.layers?.states?.name ? .2 : 0)),corruption=Number(occupied?province.occupation_corruption??.2:province.layers?.states?.corruption??(province.layers?.states?.name ? .2 : 0));
   if(!Number.isFinite(crime)||!Number.isFinite(corruption))return null;
   const share=calculateProvinceShare(province,beneficiary),result={};
   for(const [estate,count] of Object.entries(counts)){
     const rate=Number(rates?.[estate]);if(!Number.isFinite(rate)||rate<0)return null;
-    const gross=floorToInteger(count*rate*type.tax*control/100*share*development);
+    const gross=floorToInteger(count*rate*share*Math.min(1,development));
     const corruptionLoss=floorToInteger(gross*corruption*effects.corruptionTaxPenalty);
     const crimeLoss=floorToInteger((gross-corruptionLoss)*crime*effects.crimeTaxPenalty);
-    result[estate]={population:count,gross,corruptionLoss,crimeLoss,net:floorToInteger(gross-corruptionLoss-crimeLoss)};
+    const beforeCollectionEfficiency=floorToInteger(gross-corruptionLoss-crimeLoss);
+    result[estate]={population:count,gross,corruptionLoss,crimeLoss,net:floorToInteger(beforeCollectionEfficiency*taxEfficiency*control/100)};
   }
   return result;
 }
@@ -91,7 +93,7 @@ export function calculateProvinceEconomy(province, beneficiary=province?.layers?
   if(grossTaxes===null)missing.push('estate-tax-rate');
   const corruptionTaxLoss=estateLines?floorToInteger(Object.values(estateLines).reduce((sum,line)=>sum+line.corruptionLoss,0)):null;
   const crimeTaxLoss=estateLines?floorToInteger(Object.values(estateLines).reduce((sum,line)=>sum+line.crimeLoss,0)):null;
-  const taxes=grossTaxes===null?null:floorToInteger(grossTaxes-corruptionTaxLoss-crimeTaxLoss);
+  const taxes=estateLines?floorToInteger(Object.values(estateLines).reduce((sum,line)=>sum+line.net,0)):null;
   const rawCrime=stateLayer||province.occupation?recipientCrime:0;
   const crime=Number.isFinite(rawCrime)&&rawCrime>=0&&rawCrime<=1?rawCrime:null;
   if(crime===null)missing.push('crime-rate');
@@ -136,7 +138,7 @@ export function calculateProvinceValue(province, beneficiary=province?.layers?.s
 }
 
 const clamp01=value=>Math.max(0,Math.min(1,value));
-const GROUP_STATUS_LOYALTY_MODIFIERS={'Официальная':.1,'Признание':.05,'Невмешательство':0,'Ассимиляция':-.1,'Истребление':-.25};
+export const GROUP_STATUS_LOYALTY_MODIFIERS={'Официальная':.1,'Признание':.05,'Невмешательство':0,'Ассимиляция':-.1,'Истребление':-.25};
 function calculateGroupStability(populations,loyaltyForGroup) {
   const total=[...populations.values()].reduce((sum,value)=>sum+value,0);
   const stability={};
@@ -177,10 +179,16 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
       entry.baseline+=effectivePopulation*BASE_ESTATE_TAX_RATES[estate];
     }
   }
+  const estateEconomicWeights={...estateWeights};
+  for(const name of ESTATE_NAMES){
+    const status=rowsByKey.get(`estate:${name}`)?.status;
+    estateWeights[name]*=ESTATE_INFLUENCE_FACTORS[status]??1;
+  }
   const totalWeight=ESTATE_NAMES.reduce((sum,name)=>sum+estateWeights[name],0);
   const estateInfluence={};
   const estateLoyalty={};
   const estateStability={};
+  const estateModifierBreakdown={};
   const estateStatusFactors={'Ключевое':1.5,'Значимое':1,'Бесправное':.25};
   for(const name of ESTATE_NAMES) {
     const row=rowsByKey.get(`estate:${name}`);
@@ -195,9 +203,11 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
     estateLoyalty[name]=loyalty;
     const factor=estateStatusFactors[row?.status];
     estateStability[name]=factor===undefined?null:influence*(loyalty-.6)*2*factor;
+    estateModifierBreakdown[name]={baseLoyalty:Number(row?.loyalty??.5),economicWeight:estateEconomicWeights[name],statusWeightFactor:ESTATE_INFLUENCE_FACTORS[row?.status]??1,influence,status:row?.status||'—',ambition,taxAdjustment,corruptionBonus:bonus,effectiveLoyalty:loyalty,stabilityFactor:factor??null};
   }
   const racialReligiousStability={race:0,religion:0};
   const raceStability={},religionStability={},raceLoyalty={},religionLoyalty={};
+  const raceModifierBreakdown={},religionModifierBreakdown={};
   for(const groupType of ['race','religion']) {
     const field=groupType==='race'?'races':'religions',populations=new Map();
     for(const province of provinces||[]) {
@@ -206,10 +216,12 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
       const key=provinceCategoryId(provinces,field,name);
       populations.set(key,(populations.get(key)||0)+Math.max(0,Number(province.population)||0));
     }
+    const totalPopulation=[...populations.values()].reduce((sum,value)=>sum+value,0);
     const values=calculateGroupStability(populations,categoryId=>{
       const row=rowsByKey.get(`${groupType}:${categoryId}`);
       const loyalty=clamp01(Number(row?.loyalty??.5)+(GROUP_STATUS_LOYALTY_MODIFIERS[row?.status]??0));
       (groupType==='race'?raceLoyalty:religionLoyalty)[categoryId]=loyalty;
+      (groupType==='race'?raceModifierBreakdown:religionModifierBreakdown)[categoryId]={status:row?.status||'Невмешательство',baseLoyalty:Number(row?.loyalty??.5),loyaltyModifier:GROUP_STATUS_LOYALTY_MODIFIERS[row?.status]??0,effectiveLoyalty:loyalty,population:populations.get(categoryId)||0,totalPopulation};
       return loyalty;
     });
     Object.assign(groupType==='race'?raceStability:religionStability,values);
@@ -218,7 +230,7 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
   }
   const estateBlock=clamp01(.5+Object.values(estateStability).reduce((sum,value)=>sum+(value??0),0));
   const stateStability=(racialReligiousStability.race+racialReligiousStability.religion+estateBlock)/3;
-  return {estateWeights,estateInfluence,estateLoyalty,estateStability,raceLoyalty,religionLoyalty,raceStability,religionStability,racialReligiousStability,estateBlock,stateStability};
+  return {estateWeights,estateEconomicWeights,estateInfluence,estateLoyalty,estateStability,estateModifierBreakdown,raceLoyalty,religionLoyalty,raceStability,religionStability,raceModifierBreakdown,religionModifierBreakdown,racialReligiousStability,estateBlock,stateStability};
 }
 
 function provinceCategoryId(provinces,layer,name) {

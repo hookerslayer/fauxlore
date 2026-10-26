@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'military-ui.js', 'economy.js', 'estate-demography.js', 'state-principles.js', 'map-tools.js', 'road-worker.js', 'road-routing.js',
+PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'military-ui.js', 'garrison-ui.js', 'economy.js', 'estate-demography.js', 'state-principles.js', 'map-tools.js', 'road-worker.js', 'road-routing.js',
           'supabase-api.js', 'supabase-return.html', 'supabase-return.js', 'app-config.js')
 
 

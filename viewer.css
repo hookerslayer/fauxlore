@@ -574,6 +574,21 @@ body:not([data-view="map"]) #status{top:calc(var(--app-header-height) + 12px)}
   .turn-badge #calendar-label{font-size:10px}
 }
 @media(max-width:420px){.turn-badge #calendar-toggle{padding:5px}.app-utilities{gap:2px}.app-top-nav button{font-size:12px}}
+.garrison-panel{display:grid;gap:24px;min-width:0}
+.garrison-panel .application-panel{min-width:0}
+.garrison-panel .garrison-detail{max-width:960px}
+.garrison-panel .garrison-form{display:grid;grid-template-columns:minmax(180px,2fr) minmax(120px,1fr) auto;align-items:end;gap:12px;max-width:760px;margin-top:16px;padding-top:16px;border-top:1px solid var(--ui-border)}
+.garrison-panel .garrison-form h5,.garrison-panel .garrison-form .hint{grid-column:1/-1;margin:0}
+.garrison-panel .garrison-form h5{font-size:14px}
+.garrison-panel .garrison-form button{min-height:40px}
+.garrison-panel .state-data-table tr.is-selected{background:var(--ui-accent-soft)}
+@media(max-width:767px){.garrison-panel{gap:16px}.garrison-panel .garrison-form{grid-template-columns:1fr}.garrison-panel .garrison-form button{min-height:44px}}
+.fort-build-dialog{position:fixed;z-index:35;top:50%;left:50%;transform:translate(-50%,-50%);width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;padding:16px;box-shadow:0 20px 60px #0009}
+.fort-build-dialog header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.fort-build-dialog h2{margin:0;font-size:18px}
+.fort-build-dialog .field{margin:12px 0}
+.fort-build-actions,.marker-fort-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.marker-fort-actions{padding:0 10px 10px}
 [data-state-military]{display:grid;gap:16px;min-width:0}
 [data-state-military] .state-menu>div.stack{gap:16px}
 [data-state-military] .application-panel:not(:has(.table-scroll)){max-width:640px}

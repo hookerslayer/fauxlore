@@ -1,8 +1,8 @@
-import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militiaApi,colonizationApi,adminResourcesApi} from './supabase-api.js?v=militia-20261026';
+import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militiaApi,garrisonApi,colonizationApi,adminResourcesApi} from './supabase-api.js?v=garrison-access-20261026';
 import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js';
 import {calculateProvinceEconomy,calculateProvinceEstateTaxes,calculateProvinceValue,calculateStateProduction,calculateStatePolitics,calculateInternalTradeForecast,calculateTradeZoneForecast,distributeTradeZoneIncome,getEconomyConfig,setEconomyConfig,GROUP_STATUS_EFFECTS,GROUP_STATUS_LOYALTY_MODIFIERS,ESTATE_INFLUENCE_FACTORS} from './economy.js?v=20261025173000';
 import {estatePopulation} from './estate-demography.js';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=militia-20261026';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=garrison-access-20261026';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -385,7 +385,7 @@ async function refreshHeaderResources(){
   }catch{/* The header keeps placeholders while state data is unavailable. */}
 }
 async function acceptUser(next){
-  user=next;notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);emit('roads:cancel');}$('panel-admin').hidden=user?.role!=='admin';
+  user=next;colonizationMilitaryCache.clear();if(user?.state_ids?.[0])void loadColonizationMilitary(Number(user.state_ids[0])).catch(()=>{});notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);emit('roads:cancel');}$('panel-admin').hidden=user?.role!=='admin';
   void refreshHeaderResources();
   if(!user&&current==='admin')closeDrawer();
   if(user){void refreshUnreadNotificationCount();try{const stored=await api('preferences');settings={...settings,...stored,markers:{...settings.markers,...stored.markers},information:{...settings.information,...stored.information}};if(!LAYERS[settings.layer])settings.layer='states';save();}catch(e){showStatus(e.message,4000);}}
@@ -1580,10 +1580,81 @@ let colonizationDraft=null;
 function renderCalendar(calendar){gameCalendar={year:Number(calendar.year),turn:Number(calendar.turn)};const season=gameCalendar.turn%2?'Тёплый':'Холодный';const label=`${gameCalendar.year.toLocaleString('ru-RU')} год · Ход ${gameCalendar.turn.toLocaleString('ru-RU')} · ${season}`;$('calendar-label').textContent=label;$('calendar-detail').textContent=`${label} сезон`;}
 export function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};mapMarkers=data.markers||[];activeColonies=data.colonies||[];roadsList=data.roads||[];if(data.economy_config){economyDraft=data.economy_config;setEconomyConfig(data.economy_config);}if(legendOpen)renderLegend();emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(async result=>{await acceptUser(result.user);const section=sectionFromLocation();if(section!=='map')renderMenu(section,true);}).catch(e=>showStatus(e.message,4000));}
 let selectionActionRevision=0;
+const colonizationMilitaryCache=new Map();
+function loadColonizationMilitary(stateId){
+  const cached=colonizationMilitaryCache.get(stateId);if(cached&&Date.now()-cached.time<30000)return cached.promise;
+  const promise=militaryApi('snapshot',stateId).catch(error=>{colonizationMilitaryCache.delete(stateId);throw error;});
+  colonizationMilitaryCache.set(stateId,{time:Date.now(),promise});return promise;
+}
+window.addEventListener('state:resources-changed',()=>colonizationMilitaryCache.clear());
 window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;selectionActionRevision++;if(colonizationDraft&&Number(colonizationDraft.provinceId)!==Number(selectedProvince?.id)){colonizationDraft=null;$('selection')?.classList.remove('colonization-open');$('colonization-inline')?.remove();}});
 window.addEventListener('ui:open-diplomacy-state',event=>{const stateId=Number(event.detail?.stateId);if(!stateId)return;pendingDiplomacyStateId=stateId;if(user?.role==='admin'){lastAdminStateId=stateId;pendingStateNavigation={stateId,tab:'Дипломатия'};renderMenu('Государства');}else renderMenu('Дипломатия');});
 window.addEventListener('map:selection-changed',e=>{void renderSelectedPortAction(e.detail,selectionActionRevision);});
 window.addEventListener('map:selection-changed',e=>{void renderSelectedColonization(e.detail,selectionActionRevision);});
+window.addEventListener('map:selection-changed',e=>{renderSelectedGarrisonAction(e.detail,selectionActionRevision);});
+const fortLabels=['Нет','Форт','Крепость I','Крепость II','Крепость III'];
+const wallLabels=['Нет','Городские стены I','Городские стены II','Городские стены III'];
+const fortCosts=[0,10000,30000,60000,120000],wallCosts=[0,50000,150000,300000];
+const fortCapacity=[0,100,300,800,1300],wallCapacity=[0,500,1000,2000];
+const fortUpkeep=[0,100,200,300,400],wallUpkeep=[0,300,500,700];
+let fortPlacementUI=null;
+function closeFortDialog(){document.querySelector('.fort-build-dialog')?.remove();}
+function openFortDialog(province,stateId,site,kind){
+  closeFortDialog();
+  const currentLevel=Number(kind==='fort'?site.fort_level:site.wall_level)||0;
+  const labels=kind==='fort'?fortLabels:wallLabels,costs=kind==='fort'?fortCosts:wallCosts,capacity=kind==='fort'?fortCapacity:wallCapacity,upkeep=kind==='fort'?fortUpkeep:wallUpkeep;
+  const maxLevel=kind==='fort'?(site.neutral?1:4):3;
+  const choices=Array.from({length:maxLevel-currentLevel},(_,i)=>i+currentLevel+1);
+  if(!choices.length){showStatus('Максимальный уровень уже достигнут',3000);return;}
+  const dialog=document.createElement('section');dialog.className='surface fort-build-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label',kind==='fort'?'Построить или улучшить крепость':'Улучшить городские стены');
+  dialog.innerHTML=`<header><h2>${kind==='fort'?'Крепость':'Городские стены'} · ${escape(province.name)}</h2><button type="button" data-fort-close aria-label="Закрыть">×</button></header><p>Текущий уровень: ${escape(labels[currentLevel])}. Выберите уровень: стоимость улучшения учитывает уже построенное укрепление.</p><label class="field"><span>Уровень</span><select data-fort-level>${choices.map(level=>`<option value="${level}">${escape(labels[level])}</option>`).join('')}</select></label><p data-fort-details></p><div class="fort-build-actions"><button type="button" class="primary" data-fort-submit>Построить</button><button type="button" data-fort-close>Отмена</button></div>`;
+  document.body.append(dialog);
+  const select=dialog.querySelector('[data-fort-level]'),details=dialog.querySelector('[data-fort-details]');
+  const update=()=>{const level=Number(select.value),turns=(kind==='fort'?level===4:level===3)?2:1;details.textContent=`Цена: ${(costs[level]-costs[currentLevel]).toLocaleString('ru-RU')} G · Вместимость: +${capacity[level].toLocaleString('ru-RU')} · Содержание: ${upkeep[level]} G/ход · Строительство: ${turns} ход.`;};
+  select.onchange=update;update();dialog.querySelectorAll('[data-fort-close]').forEach(button=>button.onclick=closeFortDialog);
+  dialog.querySelector('[data-fort-submit]').onclick=async()=>{const level=Number(select.value),cost=costs[level]-costs[currentLevel];if(!confirm(`Построить ${labels[level]} в провинции «${province.name}» за ${cost.toLocaleString('ru-RU')} G?`))return;
+    if(kind==='fort'&&currentLevel===0){fortPlacementUI={provinceId:Number(province.id),stateId,level};closeFortDialog();closeMarkerPopover();emit('map:place-fort',{province_id:Number(province.id),state_id:stateId,level});showStatus('Укажите точку крепости внутри провинции. Esc — отмена.',0);return;}
+    const button=dialog.querySelector('[data-fort-submit]');button.disabled=true;try{await garrisonApi('build',stateId,Number(province.id),{kind,level});closeFortDialog();showStatus('Строительство началось',3000);emit('map:refresh');window.dispatchEvent(new Event('state:resources-changed'));}catch(error){button.disabled=false;showStatus(error.message,5000);}};
+  select.focus();
+}
+function renderSelectedGarrisonAction(province,revision){
+  if(province?.kind!=='land'||!user)return;
+  const stateId=Number(user.role==='admin'?lastAdminStateId:user.state_ids?.[0]);if(!stateId)return;
+  const owned=Number(province.layers?.states?.id)===stateId,neutral=province.layers?.states?.id==null;
+  const adjacent=(provinceAdjacency?.[province.id]||[]).some(id=>allProvinces.some(p=>Number(p.id)===Number(id)&&p.kind==='land'&&Number(p.layers?.states?.id)===stateId));
+  if(!owned&&!(neutral&&adjacent&&!activeColonies.some(item=>Number(item.province_id)===Number(province.id))))return;
+  if(mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&['fortress','capital'].includes(marker.type)))return;
+  const details=$('selection-details');if(!details||$('selection')?.hidden||revision!==selectionActionRevision)return;
+  addFortBuildButton(province,stateId,details,owned);
+}
+function addFortBuildButton(province,stateId,details,owned){
+  if(details.querySelector('[data-build-fort]')||mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&['fortress','capital'].includes(marker.type)))return;
+  const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.buildFort='';button.textContent='Построить Крепость';button.onclick=async()=>{button.disabled=true;
+    try{const info=await garrisonApi('info',null,Number(province.id));
+      if(!info||Number(info.fort_level)>0||info.building?.some(project=>project.kind==='fort'))throw new Error('Крепость уже построена или строится');
+      openFortDialog(province,stateId,{fort_level:info.fort_level,wall_level:info.wall_level,neutral:!owned,owned},'fort');
+    }catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};
+  const colonyButton=details.querySelector('[data-colonize-land]')||details.querySelector('[data-colonize-sea]');if(colonyButton)colonyButton.after(button);else details.prepend(button);
+}
+function seaColonizationReachable(provinceId,stateId){
+  const byId=new Map(allProvinces.map(province=>[Number(province.id),province]));
+  const targetSeas=new Set((provinceAdjacency?.[provinceId]||[]).map(Number).filter(id=>byId.get(id)?.kind==='sea'));
+  if(!targetSeas.size)return false;
+  const queue=[],visited=new Set();
+  for(const province of allProvinces){if(province.kind!=='land'||Number(province.layers?.states?.id)!==stateId)continue;
+    for(const next of provinceAdjacency?.[province.id]||[]){const id=Number(next);if(byId.get(id)?.kind==='sea'&&!visited.has(id)){visited.add(id);queue.push([id,1]);}}
+  }
+  for(let index=0;index<queue.length;index++){
+    const [id,depth]=queue[index];if(targetSeas.has(id))return true;if(depth>=40)continue;
+    for(const next of provinceAdjacency?.[id]||[]){const nextId=Number(next);if(byId.get(nextId)?.kind==='sea'&&!visited.has(nextId)){visited.add(nextId);queue.push([nextId,depth+1]);}}
+  }
+  return false;
+}
+window.addEventListener('map:fort-placement-cancelled',()=>{fortPlacementUI=null;});
+window.addEventListener('map:fort-location-selected',async event=>{const placement=fortPlacementUI;fortPlacementUI=null;if(!placement)return;
+  try{await garrisonApi('build',placement.stateId,placement.provinceId,{kind:'fort',level:placement.level,x:Number(event.detail.x),y:Number(event.detail.y)});showStatus('Строительство крепости началось',3500);emit('map:refresh');window.dispatchEvent(new Event('state:resources-changed'));}
+  catch(error){showStatus(error.message,5000);}
+});
 async function renderSelectedColonization(province,revision){
   if(province?.kind!=='land'||!user)return;
   const existing=activeColonies.find(item=>Number(item.province_id)===Number(province.id));
@@ -1594,13 +1665,15 @@ async function renderSelectedColonization(province,revision){
   const neighbors=(provinceAdjacency?.[province.id]||[]).map(Number);
   const adjacent=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='land'&&Number(p.layers?.states?.id)===stateId));
   const coastal=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='sea'));
-  let military;
-  try{military=await militaryApi('snapshot',stateId);}catch{return;}
-  if(revision!==selectionActionRevision||Number(selectedProvince?.id)!==Number(province.id)||!$('selection')||$('selection').hidden)return;
-  const fleets=(military.formations||[]).filter(f=>f.domain==='naval'&&f.active&&f.leader_id&&(f.units||[]).some(u=>Number(u.capacity)>0&&Number(u.quantity)>0)&&!(f.units||[]).some(u=>Number(u.capacity)>0&&Number(u.quantity)>0&&u.locked));
-  const launch=(sea)=>openColonizationDialog(province,stateId,military,sea);
-  if(adjacent){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.textContent='Колонизировать';button.onclick=()=>launch(false);details.prepend(button);}
-  if(fleets.length&&coastal){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.textContent='Морская колонизация';button.onclick=()=>launch(true);details.prepend(button);}
+  const loadMilitary=()=>loadColonizationMilitary(stateId);
+  if(adjacent){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.colonizeLand='';button.textContent='Колонизировать';button.onclick=async()=>{button.disabled=true;try{openColonizationDialog(province,stateId,await loadMilitary(),false);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
+  if(!coastal)return;
+  try{const military=await loadMilitary();
+    if(revision!==selectionActionRevision||Number(selectedProvince?.id)!==Number(province.id)||!$('selection')||$('selection').hidden)return;
+    const fleets=(military.formations||[]).filter(f=>f.domain==='naval'&&f.active&&f.leader_id&&(f.units||[]).reduce((sum,u)=>sum+Number(u.capacity||0)*Number(u.quantity||0),0)>=50&&!(f.units||[]).some(u=>Number(u.capacity)>0&&Number(u.quantity)>0&&u.locked));
+    if(fleets.length&&seaColonizationReachable(province.id,stateId)){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.colonizeSea='';button.textContent='Морская колонизация';button.onclick=()=>openColonizationDialog(province,stateId,military,true);details.insertBefore(button,details.querySelector('[data-colonize-land]')||details.querySelector('[data-build-fort]')||details.firstChild);
+      if(!adjacent&&!mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&marker.type==='fortress'))addFortBuildButton(province,stateId,details,false);}
+  }catch(error){showStatus(error.message,4000);}
 }
 function openColonizationDialog(province,stateId,military,sea){
   if(colonizationDraft&&Number(colonizationDraft.provinceId)===Number(province.id)&&colonizationDraft.sea===sea){colonizationDraft=null;$('selection').classList.remove('colonization-open');$('colonization-inline')?.remove();window.dispatchEvent(new CustomEvent('colonization:route-pick',{detail:{active:false}}));return;}
@@ -1704,6 +1777,28 @@ window.addEventListener('map:marker-selected',event=>{
   const close=document.createElement('button');close.type='button';close.className='icon-button';close.textContent='×';close.setAttribute('aria-label','Закрыть');close.onclick=closeMarkerPopover;header.append(title,close);box.append(header);
   const content=document.createElement('div');content.className='marker-popover-content';
   for(const [label,value] of [['Название',marker.name],['Тип',MARKERS[marker.type]||marker.type],['Государство',marker.state_name||'—'],['ID провинции',marker.province_id],['Координаты',`${Number(marker.x).toFixed(1)}, ${Number(marker.y).toFixed(1)}`]]){const row=document.createElement('p');row.textContent=`${label}: ${value}`;content.append(row);}
+  if(['capital','city','fortress'].includes(marker.type)){
+    const levels=document.createElement('p');levels.textContent='Укрепления: загружаю…';content.append(levels);
+    void garrisonApi('info',null,Number(marker.province_id)).then(info=>{
+      if(!box.isConnected||!info)return;
+      const forts=['нет','Форт','Крепость I','Крепость II','Крепость III'];
+      const walls=['нет','Городские стены I','Городские стены II','Городские стены III'];
+      levels.textContent=`Крепость: ${forts[Number(info.fort_level)]||'нет'} · Стены: ${walls[Number(info.wall_level)]||'нет'} · Лимит гарнизона: ${Number(info.capacity||0).toLocaleString('ru-RU')}`;
+      if(info.building?.length){const build=document.createElement('p');build.textContent=`Строится: ${info.building.map(item=>`${item.kind==='fort'?forts[item.target_level]:walls[item.target_level]} (${item.turns_remaining} ход.)`).join(', ')}`;content.append(build);}
+      const stateId=Number(user?.role==='admin'?lastAdminStateId:user?.state_ids?.[0]);
+      if(!stateId)return;
+      void garrisonApi('snapshot',stateId).then(snapshot=>{
+        if(!box.isConnected)return;
+        const site=(snapshot.provinces||[]).find(item=>Number(item.id)===Number(marker.province_id));
+        const province=allProvinces.find(item=>Number(item.id)===Number(marker.province_id));
+        if(!site||!province||site.projects?.length)return;
+        const actions=document.createElement('div');actions.className='marker-fort-actions';
+        if(Number(site.fort_level)>0&&Number(site.fort_level)<4&&site.owned){const button=document.createElement('button');button.type='button';button.textContent='Улучшить Крепость';button.onclick=()=>openFortDialog(province,stateId,site,'fort');actions.append(button);}
+        if(site.owned&&['capital','city'].includes(marker.type)&&Number(site.wall_level)<3){const button=document.createElement('button');button.type='button';button.textContent=Number(site.wall_level)>0?'Улучшить Стены':'Построить Стены';button.onclick=()=>openFortDialog(province,stateId,site,'wall');actions.append(button);}
+        if(actions.childElementCount)box.append(actions);
+      }).catch(()=>{});
+    }).catch(()=>{if(box.isConnected)levels.textContent='Уровни укреплений недоступны';});
+  }
   box.append(content);
   const renameForm=document.createElement('form');renameForm.className='marker-rename-form';
   const nameInput=document.createElement('input');nameInput.type='text';nameInput.maxLength=120;nameInput.required=true;nameInput.value=marker.name;nameInput.setAttribute('aria-label','Название маркера');

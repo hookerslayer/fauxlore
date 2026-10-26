@@ -85,6 +85,15 @@ export async function militiaApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function garrisonApi(action, stateId = null, provinceId = null, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('garrison_api', {
+    action, target_state: stateId, province_key: provinceId, payload,
+  });
+  if (error) throw new Error(error.message || 'Не удалось выполнить действие гарнизона');
+  return data;
+}
+
 export async function colonizationApi(action, stateId, payload = {}) {
   const db = await client();
   const {data, error} = await db.rpc('colonization_api', {action, target_state: stateId || null, payload});

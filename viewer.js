@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=diplomacy-compact-20261026';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=garrisons-selection-20261026';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -10,7 +10,7 @@ const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[], provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],colonizationRouteMode=false,colonizationRouteIds=[],portPlacement=null;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[],provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],colonizationRouteMode=false,colonizationRouteIds=[],portPlacement=null,fortPlacement=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
@@ -539,6 +539,13 @@ function mapClick(x,y){
     window.dispatchEvent(new CustomEvent('map:port-location-selected',{detail:{province_id:id,x:p[0],y:p[1],state_id:placement.state_id}}));
     status('Строю порт в выбранной точке…',0);return;
   }
+  if(fortPlacement){
+    const id=pickProvinceId(x,y);
+    if(id!==Number(fortPlacement.province_id)){status('Щёлкните внутри выбранной сухопутной провинции',2500);return;}
+    const placement=fortPlacement;fortPlacement=null;canvas.classList.remove('placing-marker');
+    window.dispatchEvent(new CustomEvent('map:fort-location-selected',{detail:{province_id:id,x:p[0],y:p[1],state_id:placement.state_id,level:placement.level}}));
+    return;
+  }
   if(markerPlacement){
     const province_id=pickProvinceId(x,y);
     if(!province_id){status('Укажите точку внутри провинции',3000);return;}
@@ -613,7 +620,6 @@ function select(id, focus=false) {
     if(p.occupation){const occupier=categoryList.find(item=>item.layer==='states'&&item.name.toLocaleLowerCase('ru-RU')===String(p.occupation).toLocaleLowerCase('ru-RU'));if(occupier&&Number(occupier.id)!==Number(p.layers.states.id))appendState(occupier.id,occupier.name,'Контролирует');}
     window.dispatchEvent(new CustomEvent('ui:hydrate-state-flags',{detail:{root:relationLine}}));
   }
-  window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:p}));
   const details=$('selection-details');details.replaceChildren();
   const val=value=>value===null||value===undefined||value===''?'—':value;
   const economy=calculateProvinceEconomy(p);
@@ -623,6 +629,7 @@ function select(id, focus=false) {
   if(p.kind==='land'&&p.layers?.states?.id!=null&&(isAdmin()||canRenameProvince(p.layers.states.id))){const link=document.createElement('button');link.type='button';link.className='selection-open-data';link.textContent='Открыть в провинциях';link.onclick=()=>window.dispatchEvent(new CustomEvent('ui:open-province',{detail:{id:p.id,stateId:p.layers.states.id}}));details.append(link);}
   if(p.kind==='land'&&isAdminEditing())renderAdminEditor(p,details);
   else if(p.kind==='land'&&canRenameProvince(p.layers?.states?.id))renderNameEditor(p,details);
+  window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:p}));
   if($('province-id'))$('province-id').value = id;
   if (focus) {
     const [bx0,by0,bx1,by1] = p.bbox;
@@ -715,7 +722,8 @@ window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(admin
 let markerPlacement=null;
 window.addEventListener('map:place-marker',e=>{markerPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!markerPlacement);if(markerPlacement)status('Щёлкните по точке провинции для размещения маркера',0);else status('',0);});
 window.addEventListener('map:place-port',e=>{portPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!portPlacement);if(portPlacement)status('Щёлкните по точке внутри выбранной морской провинции · Esc — отмена',0);else status('',0);});
-window.addEventListener('keydown',e=>{if(e.key==='Escape'&&portPlacement){portPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:port-placement-cancelled'));status('Размещение порта отменено',2500);}});
+window.addEventListener('map:place-fort',e=>{fortPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!fortPlacement);if(fortPlacement)status('Выберите точку крепости внутри провинции · Esc — отмена',0);else status('',0);});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&portPlacement){portPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:port-placement-cancelled'));status('Размещение порта отменено',2500);}if(e.key==='Escape'&&fortPlacement){fortPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:fort-placement-cancelled'));status('Размещение крепости отменено',2500);}});
 window.addEventListener('application:pick',e=>{applicationPlacement=e.detail||null;status(applicationPlacement?.mode==='provinces'?'Выберите пять свободных сухопутных провинций':applicationPlacement?.mode==='capital'?'Выберите провинцию столицы':'',0);if(e.detail?.mode==='provinces'){applicationSelectedIds=new Set((e.detail.ids||[]).map(Number));if(ready)updateLayerColors();schedule();}});
 window.addEventListener('application:selection-updated',e=>{applicationSelectedIds=new Set((e.detail?.ids||[]).map(Number));if(ready)updateLayerColors();schedule();});
 window.addEventListener('application:clear-selection',()=>{applicationSelectedIds.clear();if(ready)updateLayerColors();schedule();});

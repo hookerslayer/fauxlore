@@ -172,7 +172,7 @@ function setupGL() {
     if(routeSelected)base=mix(base,vec3(1.,.86,.38),.64);
 
     vec4 occupation=texelFetch(uOccupationColors,ivec2(id%256,id/256),0);
-    if(occupation.a>.5&&(occupation.a<.75||uShowOccupation)&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
+    if(occupation.a>.5&&uShowOccupation&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
 
     // Rivers are packed into the alpha channel of the same nearest-filtered
     // map texture, keeping them pixelated and avoiding a second canvas pass.

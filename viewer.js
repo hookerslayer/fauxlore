@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=admin-resource-editor-20261025';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=diplomacy-compact-20261026';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -606,6 +606,13 @@ function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
 function select(id, focus=false) {
   const p = provinces.get(id); if (!p) { status(`Провинция с ID ${id} не найдена в игровой области`,4000); return; }
   selected = id; $('selection').hidden = false;$('selection').classList.toggle('admin-edit',p.kind==='land'&&isAdminEditing()); $('selection-title').textContent = p.name;
+  const relationLine=$('selection-relations');relationLine.replaceChildren();
+  if(p.kind==='land'&&p.layers?.states?.id!=null){
+    const appendState=(stateId,stateName,label)=>{const row=document.createElement('div');row.className='selection-state-link';const flag=document.createElement('span');flag.className='diplomacy-flag';flag.dataset.stateFlag=String(stateId);const category=categoryList.find(item=>item.layer==='states'&&Number(item.id)===Number(stateId));flag.style.setProperty('--state-color',category?.color||'#697264');row.append(flag);const link=document.createElement('button');link.type='button';link.textContent=`${label}: ${stateName}`;link.onclick=()=>window.dispatchEvent(new CustomEvent('ui:open-diplomacy-state',{detail:{stateId:Number(stateId)}}));row.append(link);relationLine.append(row);};
+    appendState(p.layers.states.id,p.layers.states.name,'Владелец');
+    if(p.occupation){const occupier=categoryList.find(item=>item.layer==='states'&&item.name.toLocaleLowerCase('ru-RU')===String(p.occupation).toLocaleLowerCase('ru-RU'));if(occupier&&Number(occupier.id)!==Number(p.layers.states.id))appendState(occupier.id,occupier.name,'Контролирует');}
+    window.dispatchEvent(new CustomEvent('ui:hydrate-state-flags',{detail:{root:relationLine}}));
+  }
   window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:p}));
   const details=$('selection-details');details.replaceChildren();
   const val=value=>value===null||value===undefined||value===''?'—':value;

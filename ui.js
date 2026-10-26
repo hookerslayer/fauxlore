@@ -1,8 +1,8 @@
-import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,colonizationApi,adminResourcesApi} from './supabase-api.js?v=admin-resource-editor-20261025';
+import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militiaApi,colonizationApi,adminResourcesApi} from './supabase-api.js?v=militia-20261026';
 import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js';
 import {calculateProvinceEconomy,calculateProvinceEstateTaxes,calculateProvinceValue,calculateStateProduction,calculateStatePolitics,calculateInternalTradeForecast,calculateTradeZoneForecast,distributeTradeZoneIncome,getEconomyConfig,setEconomyConfig,GROUP_STATUS_EFFECTS,GROUP_STATUS_LOYALTY_MODIFIERS,ESTATE_INFLUENCE_FACTORS} from './economy.js?v=20261025173000';
 import {estatePopulation} from './estate-demography.js';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=20261025173000';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=militia-20261026';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -15,6 +15,8 @@ let current=null,user=null,categories=[],allProvinces=[],provinceAdjacency={},ma
 let lastStateSection='Статистика',lastAdminStateId=null,lastAdminStateTab='Статистика',pendingProvinceId=null,activePortPlacementUI=null;
 let provinceColumnPreset='Основное',provinceSearchQuery='';
 let headerResourceToken=0;
+let pendingDiplomacyStateId=null;
+const stateEmblemCache=new Map();
 const TRADE_STATUS_VALUES=['Отсутствует','Устье реки','Природный порт','Центр торговли I','Центр торговли II','Центр торговли III'];
 const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','Государство'],['occupation','Оккупация'],['population','Население'],['trade_status','Торговый статус'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль, %'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
 let bulkRules=[{condition_field:'climate',condition_value:'Холодный',target_field:'population',target_value:2000},{condition_field:'climate',condition_value:'Умеренный',target_field:'population',target_value:4000},{condition_field:'climate',condition_value:'Тропический',target_field:'population',target_value:5000}],bulkPreview=null,bulkBusy=false;
@@ -22,6 +24,7 @@ const panelPages={};let layoutFrame=0;
 let adminTool='manual',colorLayer='resources',colorCategoryId=null;
 const ADMIN_TOOLS={manual:'Ручное редактирование',bulk:'Массовое редактирование',markers:'Создать маркер',colors:'Цвета параметров',roads:'Прокладывание дорог'};
 let economyDraft=null,economyLoading=false,economyDirty=false;
+let militiaCoefficient=null,militiaCoefficientLoading=false;
 let armyBudget={state_id:null,units:[],treasury:0,debt:0},armyBudgetLoading=false,armyBudgetDirty=false,armyReport=null;
 const ROAD_TYPES={trail:'Тропа',highway:'Тракт',imperial:'Имперская'};
 let roadsList=[],roadInfo={active:false,busy:false,anchors:[],segments:[]},roadType='trail';
@@ -67,7 +70,20 @@ function economyConfigMarkup(){
 }
 function renderEconomyConstants(host){
   if(user?.role!=='admin'){host.innerHTML='<h3>Константы</h3><p class="hint">Раздел доступен только администратору.</p>';return;}
-  host.innerHTML=`<h3>Константы</h3>${economyDraft?economyConfigMarkup():'<p class="hint">Загружаю константы экономики…</p>'}`;
+  host.innerHTML=`<h3>Константы</h3><section class="application-panel"><h4>Ополчение</h4><form class="inline-actions" data-militia-coefficient><label class="field"><span>Общий коэффициент мобилизации</span><input name="coefficient" type="number" min="0" max="10" step="0.001" required value="${militiaCoefficient??''}" ${militiaCoefficient==null?'disabled':''}></label><button type="submit" ${militiaCoefficient==null?'disabled':''}>Сохранить</button></form><p class="hint" data-militia-coefficient-message aria-live="polite">${militiaCoefficient==null?'Загружаю коэффициент…':'Базовое значение — 1.'}</p></section>${economyDraft?economyConfigMarkup():'<p class="hint">Загружаю константы экономики…</p>'}`;
+  const militiaForm=host.querySelector('[data-militia-coefficient]');
+  militiaForm.onsubmit=async event=>{
+    event.preventDefault();const button=militiaForm.querySelector('button'),message=host.querySelector('[data-militia-coefficient-message]');
+    button.disabled=true;
+    try{const result=await militiaApi('set_coefficient',null,{coefficient:Number(militiaForm.elements.coefficient.value)});militiaCoefficient=Number(result.coefficient);message.textContent='Коэффициент сохранён. Прогноз ополчения пересчитается при открытии подраздела.';}
+    catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  };
+  if(militiaCoefficient==null&&!militiaCoefficientLoading){
+    militiaCoefficientLoading=true;
+    militiaApi('settings').then(result=>{militiaCoefficient=Number(result.coefficient);if(host.isConnected&&activeMenuSection==='Константы')renderEconomyConstants(host);})
+      .catch(error=>{if(host.isConnected)host.querySelector('[data-militia-coefficient-message]').textContent=error.message;})
+      .finally(()=>militiaCoefficientLoading=false);
+  }
   host.querySelectorAll('[data-economy-path]').forEach(input=>input.oninput=()=>{economyDirty=true;});
   const form=host.querySelector('#economy-config-form');
   if(form)form.onsubmit=async event=>{
@@ -100,6 +116,15 @@ export const canRenameProvince=stateId=>!!user&&stateId!=null&&user.state_ids?.i
 export const canRenameMarker=marker=>!!user&&(user.role==='admin'||marker?.state_id!=null&&user.state_ids?.includes(Number(marker.state_id)));
 export const getCategories=()=>categories;
 export function api(path,options={}){return supabaseApi(path,options);}
+function hydrateDiplomacyFlags(root){
+  if(!root)return;
+  root.querySelectorAll('[data-state-flag]').forEach(async flag=>{
+    const id=Number(flag.dataset.stateFlag);if(!id)return;
+    try{let emblem=stateEmblemCache.get(id);if(!emblem){emblem=await api(`state-emblem/${id}`);stateEmblemCache.set(id,emblem||{});}if(emblem?.emblem_url){flag.style.backgroundImage=`url("${emblem.emblem_url}")`;flag.classList.add('has-emblem');}}
+    catch{ /* The state color remains as a usable fallback when no emblem is available. */ }
+  });
+}
+window.addEventListener('ui:hydrate-state-flags',event=>hydrateDiplomacyFlags(event.detail?.root));
 export function loadInitialMap(){return loadSupabaseInitialMap();}
 function save(){
   try{localStorage.setItem('fauxlore.map-settings',JSON.stringify(settings));}catch{}
@@ -741,11 +766,19 @@ async function renderDynasticDiplomacy(host,options={}){
       if(host.isConnected)host.innerHTML='<h3>Династические браки</h3><p class="hint">Войдите через Google, чтобы открыть дипломатические предложения.</p>';
       return;
     }
-    const [data,tradeData]=await Promise.all([api('my/marriage-offers'),api('my/trade-agreements')]);
+    const [data,tradeData,proposalData]=await Promise.all([api('my/marriage-offers'),api('my/trade-agreements'),api('my/diplomatic-proposals')]);
     if(!host.isConnected)return;
+    const contextStateId=stateId||Number(data.states?.[0]?.id)||null;
+    const militarySnapshot=contextStateId?await militaryApi('snapshot',contextStateId).catch(()=>null):null;
+    const states=(categories||[]).filter(row=>row.layer==='states').map(row=>({id:Number(row.id),name:row.name,color:row.color}));
+    const relationRows=militarySnapshot?.states||[];
+    const relationFor=id=>{const war=relationRows.find(row=>Number(row.id)===Number(id));if(war?.relation?.includes('war'))return 'Война';const agreements=(tradeData.agreements||[]).filter(row=>[Number(row.from_state_id),Number(row.to_state_id)].includes(Number(id))&&row.status==='accepted');if(agreements.length)return 'Торговый договор';const passage=militarySnapshot?.diplomacy?.find(row=>row.kind==='passage'&&row.status==='accepted'&&[Number(row.from_state_id),Number(row.to_state_id)].includes(Number(id)));if(passage)return 'Право прохода';const marriage=(data.incoming||[]).concat(data.outgoing||[]).some(row=>[Number(row.from_state_id),Number(row.to_state_id)].includes(Number(id))&&row.status==='accepted');return marriage?'Династический брак':'Нейтрально';};
+    const stateRowsHtml=states.filter(row=>row.id!==contextStateId).map(row=>`<button type="button" class="diplomacy-state-row" data-diplomacy-state="${row.id}"><span class="diplomacy-flag" data-state-flag="${row.id}" style="--state-color:${escape(row.color)}"></span><span class="diplomacy-state-name">${escape(row.name)}</span><span class="badge">${escape(relationFor(row.id))}</span></button>`).join('');
+    const multilateralCards=(proposalData.proposals||[]).map(proposal=>`<article class="application-panel diplomacy-proposal-card"><header><strong>${escape(proposal.title)}</strong><span class="badge">${escape({pending:'Ожидает ответов',active:'Действует',rejected:'Отклонено',cancelled:'Отозвано',ended:'Завершено'}[proposal.status]||proposal.status)}</span></header><p class="hint">Инициатор: ${escape(proposal.proposer_state)}</p><p>${escape(proposal.terms)}</p><div class="diplomacy-participants">${(proposal.participants||[]).map(item=>`<span>${escape(item.state_name)} · ${escape({pending:'ожидает',accepted:'принято',rejected:'отклонено'}[item.decision]||item.decision)}</span>`).join('')}</div>${proposal.status==='pending'?(proposal.participants||[]).filter(item=>item.decision==='pending'&&(user.role==='admin'||(data.states||[]).some(s=>Number(s.id)===Number(item.state_id)))).map(item=>`<button type="button" data-proposal-action="accept" data-proposal-id="${Number(proposal.id)}" data-proposal-state="${Number(item.state_id)}">Принять от имени ${escape(item.state_name)}</button><button type="button" class="danger-button" data-proposal-action="reject" data-proposal-id="${Number(proposal.id)}" data-proposal-state="${Number(item.state_id)}">Отклонить</button>`).join(''):''}${proposal.status==='active'?`<button type="button" class="danger-button" data-proposal-action="end" data-proposal-id="${Number(proposal.id)}">Завершить договор</button>`:''}${proposal.status==='pending'&&Number(proposal.proposer_state_id)===contextStateId?`<button type="button" class="danger-button" data-proposal-action="cancel" data-proposal-id="${Number(proposal.id)}">Отозвать предложение</button>`:''}</article>`).join('');
+    const multiCreate=(states.length>=3&&(user.role==='admin'||data.states?.length)?`<form class="application-panel diplomacy-multilateral-form"><h4>Новое многостороннее предложение</h4>${isAdminState?`<input type="hidden" name="proposer_state_id" value="${stateId}">`:user.role==='admin'?`<label class="field"><span>От имени государства</span><select name="proposer_state_id" required>${states.map(row=>`<option value="${row.id}">${escape(row.name)}</option>`).join('')}</select></label>`:''}<label class="field"><span>Название</span><input name="title" maxlength="160" required></label><label class="field"><span>Условия договора</span><textarea name="terms" rows="4" maxlength="10000" required></textarea></label><fieldset class="diplomacy-participant-picker"><legend>Участники (выберите минимум два)</legend>${states.filter(row=>row.id!==contextStateId).map(row=>`<label><input type="checkbox" name="participant_state_ids" value="${row.id}"><span>${escape(row.name)}</span></label>`).join('')}</fieldset><button class="primary" type="submit">Отправить текстовое предложение</button></form>`:'<p class="hint">Для предложения нужен доступ хотя бы к одному государству.</p>');
     const participantLabel=person=>`${person.name} ${person.surname||''} · ${person.age} лет · ${person.gender} · ${person.race}`.trim();
     const sendForm=!isAdminState&&data.states.length&&data.targets.length?`<form class="dynastic-offer-form stack"><label class="field"><span>От имени государства</span><select name="from_state" required>${data.states.map(state=>`<option value="${Number(state.id)}">${escape(state.name)} · ${escape(state.authority||'Форма власти не задана')}</option>`).join('')}</select></label><label class="field"><span>Государство-получатель</span><select name="to_state" required></select></label><label class="field"><span>Персонаж вашего государства</span><select name="from_character" required></select></label><label class="field"><span>Персонаж государства-получателя (противоположный пол)</span><select name="to_character" required></select></label><div class="marriage-warning" data-marriage-warning role="status">Выберите персонажей, чтобы увидеть последствия договора.</div><button class="primary" type="submit">Отправить предложение</button></form>`:'<p class="hint">Предложения династического брака создаются игроками государств.</p>';
-    const statusLabel=status=>({pending:'Ожидает ответа',accepted:'Заключён',declined:'Отклонён',cancelled:'Отозван'}[status]||status||'Статус неизвестен');
+    const statusLabel=status=>({pending:'Ожидает ответа',accepted:'Заключён',declined:'Отклонён',rejected:'Отклонён',cancelled:'Отозван',ended:'Расторгнут',active:'Действует',awaiting_admin:'Ожидает решения администратора'}[status]||status||'Статус неизвестен');
     const proposalCard=(proposal,incoming)=>`<article class="application-panel marriage-candidate"><strong>Династический брак · ${escape(proposal.from_state)} → ${escape(proposal.to_state)}</strong><span>${escape(statusLabel(proposal.status))}</span><span>${escape(proposal.from_ruler)} ↔ ${escape(proposal.to_ruler)}</span><p class="hint">Законность детей: ${proposal.lawful_for_children?'дети будут законными наследниками в государстве матери-Династии и войдут в её семейный реестр':'брак не даёт детям законного права на наследование'}. Зачатие: ${proposal.child_race&&Number(proposal.from_age)<(proposal.from_gender==='Мужской'?60:45)&&Number(proposal.to_age)<(proposal.to_gender==='Мужской'?60:45)?`возможно, раса ребёнка — ${escape(proposal.child_race)}`:'невозможно по возрасту или сочетаемости рас'}.</p><small>${new Date(proposal.created_at).toLocaleDateString('ru-RU')}</small>${incoming&&proposal.status==='pending'?`<div class="inline-actions"><button type="button" data-marriage-decision="accept" data-proposal-id="${Number(proposal.id)}">Принять</button><button type="button" class="danger-button" data-marriage-decision="reject" data-proposal-id="${Number(proposal.id)}">Отклонить</button></div>`:''}</article>`;
     const relevant=item=>!stateId||Number(item.from_state_id)===stateId||Number(item.to_state_id)===stateId;
     const marriageRecords=(data.incoming||[]).map(item=>({...item,contractType:'marriage',incoming:Number(item.to_state_id)===stateId||(!stateId&&user.role!=='admin')}));
@@ -757,7 +790,9 @@ async function renderDynasticDiplomacy(host,options={}){
     const tradeCard=(item,incoming)=>`<article class="application-panel marriage-candidate"><strong>Торговый договор · ${escape(item.from_state)} → ${escape(item.to_state)}</strong><span>${escape(statusLabel(item.status))}</span><p>Маршрут: ${tradeRouteNames(item.route_province_ids||[])}</p><p>Отправитель: ${tradeTermsText(item.terms?.from_goods,item.terms?.from_gold)}</p><p>Получатель: ${tradeTermsText(item.terms?.to_goods,item.terms?.to_gold)}</p><small>${Number(item.created_year)} год · ${Number(item.created_turn)} ход</small>${item.status==='pending'&&incoming?`<div class="inline-actions"><button type="button" data-trade-action="accept" data-trade-id="${Number(item.id)}">Принять</button><button type="button" class="danger-button" data-trade-action="decline" data-trade-id="${Number(item.id)}">Отклонить</button></div>`:''}${['pending','accepted'].includes(item.status)&&(!incoming||user.role==='admin')?`<div class="inline-actions"><button type="button" class="danger-button" data-trade-action="cancel" data-trade-id="${Number(item.id)}">Отозвать / расторгнуть</button></div>`:''}</article>`;
     const incoming=[...marriageIncoming,...tradeIncoming].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     const outgoing=[...marriageOutgoing,...tradeOutgoing].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
-    host.innerHTML=`<div class="state-menu stack"><h3>Дипломатия</h3><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal></div></div></section><section class="application-panel"><h4>Входящие договоры</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>item.contractType==='marriage'?proposalCard(item,true):tradeCard(item,true)).join('')}</div>`:'<p class="hint">Входящих договоров нет.</p>'}</section><section class="application-panel"><h4>Отправленные договоры</h4>${outgoing.length?`<div class="marriage-candidates">${outgoing.map(item=>item.contractType==='marriage'?proposalCard(item,false):tradeCard(item,false)).join('')}</div>`:'<p class="hint">Отправленных договоров нет.</p>'}</section></div>`;
+    const outgoingRows=outgoing.map(item=>`<tr><td>${escape(item.to_state||'—')}</td><td>${item.contractType==='trade'?'Торговый договор':'Династический брак'}</td><td>${escape(statusLabel(item.status))}</td></tr>`).join('');
+    host.innerHTML=`<div class="state-menu stack diplomacy-page"><h3>Дипломатия</h3><nav class="diplomacy-tabs" aria-label="Разделы дипломатии"><button type="button" class="active" data-diplomacy-tab="countries" aria-selected="true">Государства</button><button type="button" data-diplomacy-tab="summary" aria-selected="false">Дипломатическая сводка</button></nav><section class="diplomacy-view" data-diplomacy-view="countries"><div class="diplomacy-state-list">${stateRowsHtml||'<p class="hint">Нет других государств для отображения.</p>'}</div></section><section class="diplomacy-view" data-diplomacy-view="summary" hidden><h4>Договоры и дипломатические состояния</h4><div class="diplomacy-existing"><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal></div></div></section><section class="application-panel"><h4>Входящие договоры</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>item.contractType==='marriage'?proposalCard(item,true):tradeCard(item,true)).join('')}</div>`:'<p class="hint">Входящих договоров нет.</p>'}</section><section class="application-panel"><h4>Отправленные договоры</h4>${outgoing.length?`<div class="table-scroll"><table class="state-data-table diplomacy-contract-table"><thead><tr><th>Государство</th><th>Тип договора</th><th>Статус договора</th></tr></thead><tbody>${outgoingRows}</tbody></table></div>`:'<p class="hint">Отправленных договоров нет.</p>'}</section><section class="application-panel"><h4>Многосторонние договоры</h4>${multiCreate}${multilateralCards||'<p class="hint">Договоров пока нет.</p>'}</section></div></section><dialog class="diplomacy-dialog"><div class="modal-shell surface"><header><strong data-diplomacy-modal-title></strong><button type="button" class="icon-button" data-diplomacy-close aria-label="Закрыть">×</button></header><div class="diplomacy-modal-content" data-diplomacy-modal-content></div></div></dialog></div>`;
+    hydrateDiplomacyFlags(host);
     const contractSelect=host.querySelector('[data-contract-type]');
     const contractSection=contractSelect?.closest('section');
     for(const [kind,label] of [['war','Объявить войну'],['peace','Заключить мир'],['passage','Право прохода']]){
@@ -769,7 +804,7 @@ async function renderDynasticDiplomacy(host,options={}){
       contractSelect.value=activeContractType;
       host.querySelectorAll('[data-contract-panel]').forEach(panel=>{panel.hidden=panel.dataset.contractPanel!==activeContractType;});
     }
-    const militaryRelations=document.createElement('div');host.querySelector('.state-menu').append(militaryRelations);
+    const militaryRelations=document.createElement('div');militaryRelations.className='diplomacy-military';host.querySelector('[data-diplomacy-view="summary"] .diplomacy-existing').append(militaryRelations);
     void renderMilitaryDiplomacy(militaryRelations,{stateId,notify:message=>showStatus(message,4000)});
     const showMilitaryContract=kind=>{if(['war','peace','passage'].includes(kind))void renderMilitaryContract(host.querySelector(`[data-contract-panel="${kind}"]`),kind,{stateId,notify:message=>showStatus(message,4000)}).catch(error=>showStatus(error.message,4000));};
     showMilitaryContract(activeContractType);
@@ -782,6 +817,40 @@ async function renderDynasticDiplomacy(host,options={}){
       activeContractType=event.target.value;
       host.querySelectorAll('[data-contract-panel]').forEach(panel=>{panel.hidden=panel.dataset.contractPanel!==event.target.value;});
     });
+    host.querySelectorAll('[data-diplomacy-tab]').forEach(button=>button.addEventListener('click',()=>{
+      host.querySelectorAll('[data-diplomacy-tab]').forEach(tab=>{const active=tab===button;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));});
+      host.querySelectorAll('[data-diplomacy-view]').forEach(view=>{view.hidden=view.dataset.diplomacyView!==button.dataset.diplomacyTab;});
+    }));
+    const modal=host.querySelector('.diplomacy-dialog'),modalContent=host.querySelector('[data-diplomacy-modal-content]');
+    const openCountry=country=>{
+      if(!country)return;host.querySelector('[data-diplomacy-modal-title]').textContent=country.name;
+      const id=Number(country.id),relationship=relationFor(id);
+      const contracts=(tradeData.agreements||[]).filter(row=>[Number(row.from_state_id),Number(row.to_state_id)].includes(id)).map(row=>{const incoming=Number(row.to_state_id)===id;const actions=row.status==='pending'&&incoming?`<button type="button" data-modal-agreement="trade" data-modal-id="${Number(row.id)}" data-modal-action="accept">Принять</button><button type="button" class="danger-button" data-modal-agreement="trade" data-modal-id="${Number(row.id)}" data-modal-action="decline">Отклонить</button>`:['pending','accepted'].includes(row.status)&&(!incoming||user.role==='admin')?`<button type="button" class="danger-button" data-modal-agreement="trade" data-modal-id="${Number(row.id)}" data-modal-action="cancel">Отозвать / расторгнуть</button>`:'';return `<li>Торговый договор · ${escape({pending:'ожидает ответа',accepted:'действует',declined:'отклонён',cancelled:'завершён'}[row.status]||row.status)} ${actions?`<div class="inline-actions">${actions}</div>`:''}</li>`;});
+      for(const row of [...(data.incoming||[]),...(data.outgoing||[])])if([Number(row.from_state_id),Number(row.to_state_id)].includes(id)){const incoming=Number(row.to_state_id)===id,actions=row.status==='pending'&&incoming?`<button type="button" data-modal-agreement="marriage" data-modal-id="${Number(row.id)}" data-modal-action="accept">Принять</button><button type="button" class="danger-button" data-modal-agreement="marriage" data-modal-id="${Number(row.id)}" data-modal-action="reject">Отклонить</button>`:'';contracts.push(`<li>Династический брак · ${escape({pending:'ожидает ответа',accepted:'заключён',declined:'отклонён',cancelled:'отозван'}[row.status]||row.status)} ${actions?`<div class="inline-actions">${actions}</div>`:''}</li>`);}
+      for(const row of militarySnapshot?.diplomacy||[])if([Number(row.from_state_id),Number(row.to_state_id)].includes(id))contracts.push(`<li>${escape({passage:'Право прохода',peace:'Мирный договор',war:'Военное действие'}[row.kind]||row.kind)} · ${escape(({pending:'Ожидает ответа',awaiting_admin:'На рассмотрении администратора',accepted:'Действует',rejected:'Отклонено',ended:'Расторгнуто'})[row.status]||statusLabel(row.status))}</li>`);
+      for(const row of proposalData.proposals||[])if((row.participants||[]).some(item=>Number(item.state_id)===id))contracts.push(`<li>${escape(row.title)} · ${escape({pending:'ожидает ответов',active:'действует',rejected:'отклонено',cancelled:'отозвано',ended:'завершено'}[row.status]||row.status)}</li>`);
+      modalContent.innerHTML=`<div class="diplomacy-country-summary"><span class="diplomacy-flag large" data-state-flag="${id}" style="--state-color:${escape(country.color||'#6b7464')}"></span><div><strong>${escape(country.name)}</strong><span class="badge">${escape(relationship)}</span></div></div><section class="application-panel"><h4>Текущие договоры и отношения</h4>${contracts.length?`<ul>${contracts.join('')}</ul>`:`<p class="hint">Активных договоров не найдено.</p>`}</section><section class="application-panel"><h4>Дипломатические действия</h4><div class="diplomacy-actions"><button type="button" data-contract-jump="trade">Предложить торговый договор</button><button type="button" data-contract-jump="passage">Предложить право прохода</button>${!isAdminState?'<button type="button" data-contract-jump="dynastic_marriage">Предложить династический брак</button>':''}</div></section>`;
+      hydrateDiplomacyFlags(modalContent);
+      modalContent.querySelectorAll('[data-modal-agreement]').forEach(action=>action.addEventListener('click',async()=>{action.disabled=true;try{const prefix=user.role==='admin'?'admin':'my',kind=action.dataset.modalAgreement,route=kind==='trade'?`${prefix}/trade-agreements/${Number(action.dataset.modalId)}/${action.dataset.modalAction}`:`${prefix}/marriage-offers/${Number(action.dataset.modalId)}/${action.dataset.modalAction}`;await api(route,{method:'POST',body:'{}'});showStatus('Статус договора обновлён',3500);void renderDynasticDiplomacy(host,options);}catch(error){action.disabled=false;showStatus(error.message,5000);}}));
+      modalContent.querySelectorAll('[data-contract-jump]').forEach(action=>action.addEventListener('click',()=>{
+        const kind=action.dataset.contractJump;modal.close();host.querySelector('[data-diplomacy-tab="summary"]').click();
+        activeContractType=kind;const selector=host.querySelector('[data-contract-type]');if(selector){selector.value=kind;selector.dispatchEvent(new Event('change',{bubbles:true}));}
+        const target=kind==='dynastic_marriage'?host.querySelector('.dynastic-offer-form select[name="to_state"]'):kind==='trade'?host.querySelector('.trade-agreement-form select[name="to_state"]'):host.querySelector('[data-contract-panel="passage"] select[name="to_state_id"]');
+        if(target){target.value=String(id);target.dispatchEvent(new Event('change',{bubbles:true}));}
+      }));
+      if(typeof modal.showModal==='function')modal.showModal();
+    };
+    host.querySelectorAll('[data-diplomacy-state]').forEach(button=>button.addEventListener('click',()=>openCountry(states.find(row=>row.id===Number(button.dataset.diplomacyState)))));
+    host.querySelector('[data-diplomacy-close]')?.addEventListener('click',()=>modal.close());
+    modal?.addEventListener('click',event=>{if(event.target===modal)modal.close();});
+    const multiForm=host.querySelector('.diplomacy-multilateral-form');
+    if(multiForm?.elements.proposer_state_id?.tagName==='SELECT'){
+      const syncInitiator=()=>multiForm.querySelectorAll('[name="participant_state_ids"]').forEach(input=>{input.disabled=Number(input.value)===Number(multiForm.elements.proposer_state_id.value);if(input.disabled)input.checked=false;});
+      multiForm.elements.proposer_state_id.addEventListener('change',syncInitiator);syncInitiator();
+    }
+    multiForm?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type="submit"]'),participants=[...form.querySelectorAll('[name="participant_state_ids"]:checked')].map(input=>Number(input.value));if(participants.length<2){showStatus('Выберите как минимум два других государства',3500);return;}button.disabled=true;try{const payload={title:form.elements.title.value,terms:form.elements.terms.value,participant_state_ids:participants};if(form.elements.proposer_state_id)payload.proposer_state_id=Number(form.elements.proposer_state_id.value);await api('my/diplomatic-proposals',{method:'POST',body:JSON.stringify(payload)});showStatus('Текстовое предложение отправлено участникам',4000);void renderDynasticDiplomacy(host,options);}catch(error){button.disabled=false;showStatus(error.message,5000);}});
+    host.querySelectorAll('[data-proposal-action]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const result=await api(`my/diplomatic-proposals/${Number(button.dataset.proposalId)}/${button.dataset.proposalAction}`,{method:'POST',body:JSON.stringify({state_id:Number(button.dataset.proposalState)||undefined})});showStatus(result.status==='active'?'Договор принят всеми участниками и действует как текстовая запись':'Ответ сохранён',4000);void renderDynasticDiplomacy(host,options);}catch(error){button.disabled=false;showStatus(error.message,5000);}}));
+    if(pendingDiplomacyStateId){const country=states.find(row=>row.id===Number(pendingDiplomacyStateId));pendingDiplomacyStateId=null;if(country)openCountry(country);}
     const form=host.querySelector('.dynastic-offer-form');
     if(form){
       const fromState=form.elements.from_state,toState=form.elements.to_state,fromCharacter=form.elements.from_character,toCharacter=form.elements.to_character,warning=form.querySelector('[data-marriage-warning]');
@@ -1510,10 +1579,12 @@ let gameCalendar={year:1452,turn:1};
 let colonizationDraft=null;
 function renderCalendar(calendar){gameCalendar={year:Number(calendar.year),turn:Number(calendar.turn)};const season=gameCalendar.turn%2?'Тёплый':'Холодный';const label=`${gameCalendar.year.toLocaleString('ru-RU')} год · Ход ${gameCalendar.turn.toLocaleString('ru-RU')} · ${season}`;$('calendar-label').textContent=label;$('calendar-detail').textContent=`${label} сезон`;}
 export function hydrateUI(data){categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};mapMarkers=data.markers||[];activeColonies=data.colonies||[];roadsList=data.roads||[];if(data.economy_config){economyDraft=data.economy_config;setEconomyConfig(data.economy_config);}if(legendOpen)renderLegend();emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(async result=>{await acceptUser(result.user);const section=sectionFromLocation();if(section!=='map')renderMenu(section,true);}).catch(e=>showStatus(e.message,4000));}
-window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;if(colonizationDraft&&Number(colonizationDraft.provinceId)!==Number(selectedProvince?.id)){colonizationDraft=null;$('selection')?.classList.remove('colonization-open');$('colonization-inline')?.remove();}});
-window.addEventListener('map:selection-changed',e=>{void renderSelectedPortAction(e.detail);});
-window.addEventListener('map:selection-changed',e=>{void renderSelectedColonization(e.detail);});
-async function renderSelectedColonization(province){
+let selectionActionRevision=0;
+window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;selectionActionRevision++;if(colonizationDraft&&Number(colonizationDraft.provinceId)!==Number(selectedProvince?.id)){colonizationDraft=null;$('selection')?.classList.remove('colonization-open');$('colonization-inline')?.remove();}});
+window.addEventListener('ui:open-diplomacy-state',event=>{const stateId=Number(event.detail?.stateId);if(!stateId)return;pendingDiplomacyStateId=stateId;if(user?.role==='admin'){lastAdminStateId=stateId;pendingStateNavigation={stateId,tab:'Дипломатия'};renderMenu('Государства');}else renderMenu('Дипломатия');});
+window.addEventListener('map:selection-changed',e=>{void renderSelectedPortAction(e.detail,selectionActionRevision);});
+window.addEventListener('map:selection-changed',e=>{void renderSelectedColonization(e.detail,selectionActionRevision);});
+async function renderSelectedColonization(province,revision){
   if(province?.kind!=='land'||!user)return;
   const existing=activeColonies.find(item=>Number(item.province_id)===Number(province.id));
   if(existing){const details=$('selection-details');if(details&&!$('selection').hidden){const field=document.createElement('div');field.className='province-field';field.textContent=`Колония государства «${existing.state_name}»`;details.append(field);}return;}
@@ -1525,7 +1596,7 @@ async function renderSelectedColonization(province){
   const coastal=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='sea'));
   let military;
   try{military=await militaryApi('snapshot',stateId);}catch{return;}
-  if(Number(selectedProvince?.id)!==Number(province.id)||!$('selection')||$('selection').hidden)return;
+  if(revision!==selectionActionRevision||Number(selectedProvince?.id)!==Number(province.id)||!$('selection')||$('selection').hidden)return;
   const fleets=(military.formations||[]).filter(f=>f.domain==='naval'&&f.active&&f.leader_id&&(f.units||[]).some(u=>Number(u.capacity)>0&&Number(u.quantity)>0)&&!(f.units||[]).some(u=>Number(u.capacity)>0&&Number(u.quantity)>0&&u.locked));
   const launch=(sea)=>openColonizationDialog(province,stateId,military,sea);
   if(adjacent){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.textContent='Колонизировать';button.onclick=()=>launch(false);details.prepend(button);}
@@ -1562,7 +1633,7 @@ window.addEventListener('colonization:route-province-picked',event=>{
   else showStatus(`Морская провинция добавлена (${route.length}). Выберите следующую соседнюю.`,0);
 });
 window.addEventListener('colonization:route-cancelled',()=>{if(colonizationDraft)showStatus('Выбор маршрута отменён.',2500);});
-async function renderSelectedPortAction(province){
+async function renderSelectedPortAction(province,revision){
   if(province?.kind!=='sea'||!user)return;
   const stateId=Number(user.role==='admin'?lastAdminStateId:user.state_ids?.[0]);
   if(!stateId)return;
@@ -1572,7 +1643,7 @@ async function renderSelectedPortAction(province){
   if(hasPort||!hasControlledShore)return;
   try{
     const snapshot=await militaryApi('snapshot',stateId);
-    if(Number(selectedProvince?.id)!==Number(province.id)||Number(snapshot.crown)<10000)return;
+    if(revision!==selectionActionRevision||Number(selectedProvince?.id)!==Number(province.id)||Number(snapshot.crown)<10000)return;
     const details=$('selection-details');if(!details||$('selection').hidden)return;
     const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.textContent='Выбрать место для порта · 10 000 G';
     button.onclick=()=>{button.disabled=true;cancel.hidden=false;activePortPlacementUI={button,cancel};emit('map:place-port',{province_id:Number(province.id),state_id:stateId});showStatus('Укажите точку порта на карте. Нажмите Esc для отмены.',0);};

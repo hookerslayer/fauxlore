@@ -104,6 +104,55 @@ export async function militaryMovementApi(action, formationId, payload = {}) {
   return data;
 }
 
+export async function militaryTransportApi(action, armyId, fleetId, targetProvinceId = null) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_transport_api', {
+    action,
+    army_key: armyId,
+    fleet_key: fleetId,
+    target_province: targetProvinceId,
+  });
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось выполнить погрузку или высадку');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
+export async function militaryBattleApi(battleId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_battle_api', {battle_key: battleId, payload});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось сохранить решение по сражению');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
+export async function militarySiegeApi(stateId = null) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_siege_api', {target_state: stateId || null});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось загрузить сведения об осадах');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
+export async function militarySiegeStormApi(provinceId, route) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_siege_storm_api', {province_key: provinceId, attack_route: route});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось начать штурм укрепления');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function militiaApi(action, stateId, payload = {}) {
   const db = await client();
   const {data, error} = await db.rpc('militia_api', {action, target_state: stateId || null, payload});

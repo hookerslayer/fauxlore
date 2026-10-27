@@ -2,7 +2,7 @@ import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession
 import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js';
 import {calculateProvinceEconomy,calculateProvinceEstateTaxes,calculateProvinceValue,calculateStateProduction,calculateStatePolitics,calculateInternalTradeForecast,calculateTradeZoneForecast,distributeTradeZoneIncome,getEconomyConfig,setEconomyConfig,GROUP_STATUS_EFFECTS,GROUP_STATUS_LOYALTY_MODIFIERS,ESTATE_INFLUENCE_FACTORS} from './economy.js?v=20261025173000';
 import {estatePopulation} from './estate-demography.js';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=military-map-layer-20261027';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=siege-assault-20261028';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};

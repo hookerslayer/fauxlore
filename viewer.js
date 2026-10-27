@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=naval-movement-20261027';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=military-transport-20261027';
 import {militaryMapApi} from './supabase-api.js?v=naval-movement-20261027';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
@@ -25,7 +25,7 @@ function tintedMilitaryIcon(type,color){
   const tint=/^#[0-9a-f]{6}$/i.test(color)?color:'#6e7669',key=`${type}:${tint}`;if(tintedMilitaryIconCache.has(key))return tintedMilitaryIconCache.get(key);
   const icon=document.createElement('canvas');icon.width=32;icon.height=32;const iconContext=icon.getContext('2d');iconContext.drawImage(source,0,0,32,32);iconContext.globalCompositeOperation='source-in';iconContext.fillStyle=tint;iconContext.fillRect(0,0,32,32);tintedMilitaryIconCache.set(key,icon);return icon;
 }
-let colorsTexture,occupationColorsTexture,terrainTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
+let colorsTexture,occupationColorsTexture,terrainTexture,fogVisibilityTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
 const thematicComponents=new Map();
 let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
 let selectedMarkerPopup=null;
@@ -111,6 +111,20 @@ const status = (text, timeout = 0) => {
   if (timeout) statusTimer = setTimeout(() => { $('status').textContent = ''; }, timeout);
 };
 function schedule() { if (!frame) frame = requestAnimationFrame(draw); }
+
+function drawMilitaryRoute(route){
+  if(!Array.isArray(route)||route.length<2)return;
+  const points=route.map(point=>({x:Number(point.x)*view.scale+view.x,y:Number(point.y)*view.scale+view.y}));
+  if(points.some(point=>!Number.isFinite(point.x)||!Number.isFinite(point.y)))return;
+  ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
+  for(const point of points.slice(1))ctx.lineTo(point.x,point.y);
+  ctx.setLineDash([7,5]);ctx.strokeStyle='#101311';ctx.lineWidth=5;ctx.stroke();
+  ctx.strokeStyle='#ffe06a';ctx.lineWidth=2.5;ctx.stroke();ctx.setLineDash([]);
+  for(const point of [points[0],points.at(-1)]){
+    ctx.beginPath();ctx.arc(point.x,point.y,4,0,Math.PI*2);
+    ctx.fillStyle='#ffe06a';ctx.fill();ctx.lineWidth=1.75;ctx.strokeStyle='#101311';ctx.stroke();
+  }
+}
 initUI(status);
 function compile(type, source) {
   const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
@@ -130,11 +144,12 @@ function setupGL() {
   uniform sampler2D uColors;
   uniform sampler2D uOccupationColors;
   uniform sampler2D uTerrain;
+  uniform sampler2D uFogVisibility;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
   uniform float uScale,uDpr;
   uniform int uTileSize,uColumns,uSelected,uRouteIds[50],uRouteCount;
-  uniform bool uPick,uShowOccupation;
+  uniform bool uPick,uShowOccupation,uFogEnabled;
   out vec4 color;
   ivec4 bytesAt(ivec2 p){
     if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,ivec2(uMapSize))))return ivec4(0);
@@ -228,18 +243,20 @@ function setupGL() {
         base*=mix(vec3(1.),multiplyColor,.4);
       }
     }
+    if(uFogEnabled&&texelFetch(uFogVisibility,ivec2(id%256,id/256),0).r<.5)base*=.8;
     color=vec4(base,1.);
   }`);
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','Terrain','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation','RouteCount'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','Terrain','FogVisibility','FogEnabled','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation','RouteCount'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
   loc.RouteIds=gl.getUniformLocation(program,'uRouteIds[0]');
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
   gl.uniform1i(loc.Colors,4);
   gl.uniform1i(loc.OccupationColors,5);
   gl.uniform1i(loc.Terrain,6);
+  gl.uniform1i(loc.FogVisibility,7);
   gl.uniform2f(loc.MapSize, width, height); gl.uniform1i(loc.TileSize, tileSize); gl.uniform1i(loc.Columns, columns);
   const maxId = Math.max(...provinces.keys());
   const typeRows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*typeRows);
@@ -275,7 +292,17 @@ function setupGL() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
   gl.disable(gl.DITHER); // Exact byte values for picking, including low province IDs.
-  colorsTexture=gl.createTexture(); occupationColorsTexture=gl.createTexture(); terrainTexture=gl.createTexture(); updateLayerColors(); updateTerrainTypes();
+  colorsTexture=gl.createTexture(); occupationColorsTexture=gl.createTexture(); terrainTexture=gl.createTexture(); fogVisibilityTexture=gl.createTexture(); updateLayerColors(); updateTerrainTypes(); updateFogVisibility();
+}
+function updateFogVisibility(){
+  if(!fogVisibilityTexture)return;
+  const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),visibility=new Uint8Array(256*height);
+  if(!mapMilitary?.fog_of_war)visibility.fill(255);
+  else for(const id of mapMilitary.visible_provinces||[])if(Number.isInteger(Number(id))&&Number(id)>=0&&Number(id)<=maxId)visibility[Number(id)]=255;
+  gl.activeTexture(gl.TEXTURE7);gl.bindTexture(gl.TEXTURE_2D,fogVisibilityTexture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,256,height,0,gl.RED,gl.UNSIGNED_BYTE,visibility);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.activeTexture(gl.TEXTURE0);
 }
 function updateTerrainTypes(){
   if(!terrainTexture)return;
@@ -318,6 +345,7 @@ function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
   gl.uniform2f(loc.Offset, view.x, view.y); gl.uniform1f(loc.Scale, view.scale);
   gl.uniform1f(loc.Dpr, canvas.width/innerWidth); gl.uniform1i(loc.Selected, selected);
+  gl.uniform1i(loc.FogEnabled,activeSettings.layer==='military'&&!!mapMilitary?.fog_of_war);
   const routeHighlights=[...tradeRouteIds,...colonizationRouteIds].slice(0,50);
   gl.uniform1iv(loc.RouteIds,Int32Array.from(Array.from({length:50},(_,i)=>Number(routeHighlights[i])||0)));
   gl.uniform1i(loc.RouteCount,routeHighlights.length);
@@ -508,39 +536,21 @@ function drawLabels() {
   militaryHitTargets=[];
   if(activeSettings.layer==='military'){
     ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
-    for(const item of mapMilitary.formations||[]){const route=item.movement_order?.route||[];if(route.length<2)continue;ctx.beginPath();route.forEach((point,index)=>{const x=Number(point.x)*view.scale+view.x,y=Number(point.y)*view.scale+view.y;index?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.strokeStyle=item.state_color||'#e7c667';ctx.globalAlpha=.65;ctx.lineWidth=Math.max(1,1.2*view.scale);ctx.setLineDash([6*view.scale,4*view.scale]);ctx.stroke();}
+    for(const item of mapMilitary.formations||[]){const route=item.movement_order?.route||[];ctx.globalAlpha=1;drawMilitaryRoute(route);}
     ctx.restore();
   }
-  if(militaryMoveDraft?.route?.length>1){
-    ctx.save();ctx.strokeStyle='#e7c667';ctx.lineWidth=Math.max(1,1.5*view.scale);ctx.setLineDash([8*view.scale,5*view.scale]);ctx.beginPath();
-    militaryMoveDraft.route.forEach((point,index)=>{const x=point.x*view.scale+view.x,y=point.y*view.scale+view.y;index?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.setLineDash([]);
-    for(const point of militaryMoveDraft.route.slice(1)){const x=point.x*view.scale+view.x,y=point.y*view.scale+view.y;ctx.beginPath();ctx.arc(x,y,3*view.scale,0,Math.PI*2);ctx.fillStyle='#e7c667';ctx.fill();}
-    ctx.restore();
-  }
+  if(militaryMoveDraft?.route?.length>1){ctx.save();ctx.globalAlpha=1;ctx.lineCap='round';ctx.lineJoin='round';drawMilitaryRoute(militaryMoveDraft.route);ctx.restore();}
   if(activeSettings.layer==='military'){
     const tokens=(mapMilitary.formations||[]).map(item=>({...item,token_type:item.domain==='naval'?'fleet':'army'}));
-    const offsets=[[18,-16],[-18,-16],[18,16],[-18,16],[0,-34],[0,34],[36,0],[-36,0],[34,-32],[-34,-32],[34,32],[-34,32],[0,-52],[0,52]];
-    for(let radius=68;radius<=212;radius+=24)for(let step=0;step<16;step++){const angle=step*Math.PI/8;offsets.push([Math.cos(angle)*radius,Math.sin(angle)*radius]);}
-    const tokenRects=[];
     tokens.sort((a,b)=>Number(a.province_id)-Number(b.province_id)||String(a.token_type).localeCompare(String(b.token_type))||Number(a.id||0)-Number(b.id||0));
-    const byProvince=new Map();for(const token of tokens){const rows=byProvince.get(Number(token.province_id))||[];rows.push(token);byProvince.set(Number(token.province_id),rows);}
-    for(const [provinceId,items] of byProvince){
-      const province=provinces.get(provinceId);if(!province)continue;
-      // Token geometry stays in map units: icons, glyphs, collision padding and
-      // cluster offsets all scale with the province map transform.
-      const baseItem=items[0],cx=Number(baseItem.x??province.center[0])*view.scale+view.x,cy=Number(baseItem.y??province.center[1])*view.scale+view.y;
-      if(cx<-240||cy<-240||cx>innerWidth+240||cy>innerHeight+240)continue;
-      for(let index=0;index<items.length;index++){
-        const item=items[index],r=MILITARY_TOKEN_RADIUS*view.scale,padding=MILITARY_TOKEN_HIT_PADDING*view.scale,labelGap=2*view.scale,tokenGap=3*view.scale;let x,y,rect;
-        for(const offset of offsets){const testX=cx+offset[0]*view.scale,testY=cy+offset[1]*view.scale,testRect={left:testX-r-padding,right:testX+r+padding,top:testY-r-padding,bottom:testY+r+padding};
-          if(labelRects.some(other=>testRect.left<other.right+labelGap&&testRect.right>other.left-labelGap&&testRect.top<other.bottom+labelGap&&testRect.bottom>other.top-labelGap)||tokenRects.some(other=>testRect.left<other.right+tokenGap&&testRect.right>other.left-tokenGap&&testRect.top<other.bottom+tokenGap&&testRect.bottom>other.top-tokenGap))continue;
-          x=testX;y=testY;rect=testRect;break;
-        }
-        if(!rect){x=Math.max(r+padding,Math.min(innerWidth-r-padding,cx));y=Math.max(r+padding,Math.min(innerHeight-r-padding,cy-20*view.scale));rect={left:x-r-padding,right:x+r+padding,top:y-r-padding,bottom:y+r+padding};}
-        const color=/^#[0-9a-f]{6}$/i.test(item.state_color)?item.state_color:'#6e7669';
-        ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle=color;ctx.lineWidth=1*view.scale;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.stroke();const icon=tintedMilitaryIcon(item.token_type,color),iconSize=r*1.8;if(icon)ctx.drawImage(icon,x-iconSize/2,y-iconSize/2,iconSize,iconSize);ctx.restore();
-        tokenRects.push(rect);militaryHitTargets.push({...rect,item});
-      }
+    for(const item of tokens){
+      const province=provinces.get(Number(item.province_id));if(!province)continue;
+      const x=Number(item.x??province.center[0])*view.scale+view.x,y=Number(item.y??province.center[1])*view.scale+view.y;
+      const r=MILITARY_TOKEN_RADIUS*view.scale,padding=MILITARY_TOKEN_HIT_PADDING*view.scale;
+      if(x<-240||y<-240||x>innerWidth+240||y>innerHeight+240)continue;
+      const color=/^#[0-9a-f]{6}$/i.test(item.state_color)?item.state_color:'#6e7669';
+      ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle=color;ctx.lineWidth=1*view.scale;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.stroke();const icon=tintedMilitaryIcon(item.token_type,color),iconSize=r*1.8;if(icon)ctx.drawImage(icon,x-iconSize/2,y-iconSize/2,iconSize,iconSize);ctx.restore();
+      militaryHitTargets.push({left:x-r-padding,right:x+r+padding,top:y-r-padding,bottom:y+r+padding,item});
     }
   }
   constructionHitTargets=[];
@@ -567,8 +577,8 @@ function pickConstruction(x,y){
 }
 async function refreshMapMilitary(){
   const token=++militaryRequestToken;
-  try{const data=await militaryMapApi();if(token!==militaryRequestToken)return;mapMilitary=data||{formations:[],garrisons:[]};window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}
-  catch{if(token===militaryRequestToken){mapMilitary={formations:[],garrisons:[]};window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}}
+  try{const data=await militaryMapApi();if(token!==militaryRequestToken)return;mapMilitary=data||{formations:[],garrisons:[]};updateFogVisibility();window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}
+  catch{if(token===militaryRequestToken){mapMilitary={formations:[],garrisons:[]};updateFogVisibility();window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}}
 }
 function emitSelectedGarrisonInfo(){const item=(mapMilitary.garrisons||[]).find(row=>Number(row.province_id)===Number(selected));window.dispatchEvent(new CustomEvent('map:garrison-info',{detail:item||null}));}
 const movementTerrainFactor={forest:1.25,hills:1.5,marsh:2,mountains:2.5,high_mountains:4};
@@ -642,11 +652,16 @@ function mapClick(x,y){
     const provinceId=pickProvinceId(x,y),province=provinces.get(provinceId);
     const expectedKind=militaryMoveDraft.formation.domain==='naval'?'sea':'land';
     if(!province||province.kind!==expectedKind){status(expectedKind==='sea'?'Маршрут флотилии должен проходить по морю.':'Маршрут сухопутной армии должен проходить по суше.',3000);return;}
-    const previous=militaryMoveDraft.route.at(-1),length=Math.hypot(p[0]-previous.x,p[1]-previous.y);
+    const routeTarget=militaryMoveDraft.formation.domain==='naval'
+      ?mapMarkers.filter(marker=>marker.type==='port'&&Number(marker.province_id)===Number(provinceId))
+        .sort((a,b)=>Math.hypot(Number(a.x)-p[0],Number(a.y)-p[1])-Math.hypot(Number(b.x)-p[0],Number(b.y)-p[1]))[0]
+      :null;
+    const targetPoint=routeTarget?[Number(routeTarget.x),Number(routeTarget.y)]:p;
+    const previous=militaryMoveDraft.route.at(-1),length=Math.hypot(targetPoint[0]-previous.x,targetPoint[1]-previous.y);
     if(length<1){status('Укажите точку дальше от предыдущей.',2500);return;}
     const steps=Math.ceil(length),added=[];let lastProvince=Number(previous.province_id);
     for(let step=1;step<=steps;step++){
-      const t=step/steps,point=[previous.x+(p[0]-previous.x)*t,previous.y+(p[1]-previous.y)*t],id=pickProvinceId(point[0]*view.scale+view.x,point[1]*view.scale+view.y),sample=provinces.get(id);
+      const t=step/steps,point=[previous.x+(targetPoint[0]-previous.x)*t,previous.y+(targetPoint[1]-previous.y)*t],id=pickProvinceId(point[0]*view.scale+view.x,point[1]*view.scale+view.y),sample=provinces.get(id);
       if(!sample||sample.kind!==expectedKind){status(expectedKind==='sea'?'Отрезок маршрута пересекает сушу или неизвестную область. Выберите другой путь.':'Отрезок маршрута пересекает море или неизвестную область. Выберите другую точку.',4000);return;}
       if(expectedKind==='land'&&sample.terrain_type==='high_mountains'&&movementRoadFactor({x:point[0],y:point[1]})>=1){status('Высокие горы непроходимы без дороги через перевал.',4000);return;}
       if(expectedKind==='sea'&&mapMilitary.movement_conditions?.[id]?.open_sea&&militaryMoveDraft.formation.units?.some(unit=>unit.name==='Галера'&&Number(unit.quantity)>0)){status('Галера не может пересекать открытое море.',4000);return;}
@@ -689,14 +704,19 @@ function mapClick(x,y){
     window.dispatchEvent(new CustomEvent('map:marker-location-selected',{detail:{...draft,province_id,x:p[0],y:p[1]}}));
     status('Сохраняю маркер…',2500);return;
   }
+  const militaryHit=pickMilitary(x,y);
+  if(militaryHit){
+    selectedMarkerPopup=null;
+    window.dispatchEvent(new Event('map:close-marker-popup'));
+    window.dispatchEvent(new CustomEvent('map:military-selected',{detail:{...militaryHit.item,screenX:x,screenY:y}}));
+    return;
+  }
   const marker=pickMarker(x,y);
   if(marker&&canRenameMarker(marker)){selectedMarkerPopup=marker;window.dispatchEvent(new CustomEvent('map:marker-selected',{detail:{...marker,screenX:x,screenY:y}}));return;}
   selectedMarkerPopup=null;
   window.dispatchEvent(new CustomEvent('map:close-marker-popup'));
   const constructionHit=pickConstruction(x,y);
   if(constructionHit){window.dispatchEvent(new CustomEvent('map:military-selected',{detail:{...constructionHit.item,screenX:x,screenY:y}}));return;}
-  const militaryHit=pickMilitary(x,y);
-  if(militaryHit){window.dispatchEvent(new CustomEvent('map:military-selected',{detail:{...militaryHit.item,screenX:x,screenY:y}}));return;}
   window.dispatchEvent(new Event('map:close-military-popup'));
   if(isAdminPainting()&&adminPaint){
     const id=pickProvinceId(x,y),province=provinces.get(id);
@@ -901,7 +921,7 @@ function installMapData(data){
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   if(ready&&(tileChanged||regionChanged))resetTileCache(Math.min(regionSlots,view.scale>view.min*1.8?12:25));
   categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};thematicComponents.clear();
-  window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();schedule();
+  window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();updateFogVisibility();schedule();
 }
 window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
 window.addEventListener('map:cache-error',e=>status(e.detail?.message||'Не удалось обновить карту с сервера',4000));

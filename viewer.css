@@ -625,6 +625,7 @@ body:not([data-view="map"]) #status{top:calc(var(--app-header-height) + 12px)}
 .group-status-table select{width:100%;min-width:0}
 .military-formation-gap td{height:10px;padding:0;border:0;background:transparent}
 .military-formation-heading-content{display:grid;gap:8px;min-width:0}
+.military-manage-formation{width:fit-content;min-height:30px;padding:5px 10px}
 .military-composition-details{width:min(100%,1100px);min-width:0}
 .military-composition-details>summary{cursor:pointer;color:var(--ui-accent);font-weight:600;padding:4px 0}
 .military-composition-controls{display:grid;gap:8px;margin-top:8px;padding:10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:rgba(0,0,0,.2)}
@@ -636,6 +637,20 @@ body:not([data-view="map"]) #status{top:calc(var(--app-header-height) + 12px)}
 .military-composition-controls input[name=quantity]{width:100px}
 .military-composition-controls button{width:auto;min-height:32px;padding:5px 10px}
 @media(max-width:560px){.military-composition-controls form{align-items:stretch}.military-composition-controls form>strong{width:100%}.military-composition-controls select,.military-composition-controls input[name=name]{width:100%;max-width:none}.military-composition-controls input[name=quantity]{width:110px}}
+.military-formation-dialog{width:min(620px,calc(100vw - 24px));height:auto;max-height:calc(100dvh - 32px);margin:auto;overflow:hidden}
+dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh - 32px)}
+.military-formation-dialog .modal-shell>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--ui-border)}
+.military-formation-dialog .modal-shell>header h3,.military-formation-dialog .modal-shell>header p{margin:0}
+.military-formation-dialog .military-formation-dialog-content{display:grid;gap:10px;padding:14px;overflow:auto}
+.military-formation-dialog .military-composition-controls{margin:0;padding:10px}
+.military-formation-dialog .military-composition-controls h4{margin:0 0 8px}
+.military-formation-dialog .military-composition-controls form{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.military-formation-dialog .military-composition-controls select,.military-formation-dialog .military-composition-controls input{min-width:100px;max-width:100%;min-height:34px;padding:5px 8px}
+.military-formation-dialog .military-composition-controls input[name=name]{width:min(250px,100%)}
+.military-formation-dialog .military-composition-controls input[name=quantity]{width:95px}
+.military-formation-dialog .military-composition-controls button{width:auto;min-height:34px;padding:5px 10px}
+.military-formation-dialog .form-message:empty{display:none}
+@media(max-width:560px){.military-formation-dialog .military-composition-controls form{align-items:stretch}.military-formation-dialog .military-composition-controls select{width:100%}.military-formation-dialog .military-composition-controls input[name=name]{width:100%}}
 .group-status-table{min-width:820px}
 .group-status-table th:nth-child(7),.group-status-table td:nth-child(7){width:22%;white-space:normal}
 .province-assimilation-progress{color:var(--ui-accent)}

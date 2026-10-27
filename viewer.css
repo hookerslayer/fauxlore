@@ -166,6 +166,22 @@ dialog.menu-dialog .menu-tabs button[data-section="Уведомления"]{posi
 .balance-neutral{color:var(--ui-accent);font-weight:650}
 .economy-estate-summary{min-width:0}
 .economy-estate-summary .state-data-table{white-space:nowrap}
+.estate-investment-panel{min-width:0}
+.estate-investment-panel [data-estate-investments]{display:grid;justify-items:start;gap:12px;min-width:0}
+.estate-investment-panel .table-scroll{width:100%;min-width:0}
+.estate-investment-panel .state-data-table{white-space:nowrap}
+.estate-investment-panel select{min-width:130px}
+.estate-social-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:10px}
+.estate-social-card{display:grid;gap:7px;align-content:start;padding:12px;border:1px solid var(--border,#414740);border-radius:8px;background:rgba(0,0,0,.25)}
+.estate-social-card small{color:var(--text-muted,#aeb3aa)}
+.estate-social-card button{justify-self:start}
+.garrison-sponsor-form{display:grid;gap:10px;margin:16px 0;padding:12px;border:1px solid var(--border,#414740);border-radius:8px;background:rgba(0,0,0,.2)}
+.garrison-sponsor-form .field{max-width:260px}
+.garrison-sponsor-form button{justify-self:start}
+.estate-fiscal-panel{min-width:0}
+.estate-fiscal-panel .table-scroll{max-width:100%}
+.estate-fiscal-panel input[type=number]{width:110px;min-width:0}
+.estate-fiscal-panel [data-fiscal-war]{max-width:min(100%,430px)}
 .estate-loan-borrow{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:end;gap:8px;max-width:560px;width:100%}
 .estate-loan-borrow .field{width:100%;margin:0}
 .estate-loan-borrow .field:first-child{grid-column:1/-1}
@@ -608,8 +624,32 @@ body:not([data-view="map"]) #status{top:calc(var(--app-header-height) + 12px)}
 .group-status-table th:nth-child(6),.group-status-table td:nth-child(6){width:12%}
 .group-status-table select{width:100%;min-width:0}
 .military-formation-gap td{height:10px;padding:0;border:0;background:transparent}
+.military-formation-heading-content{display:grid;gap:8px;min-width:0}
+.military-composition-details{width:min(100%,1100px);min-width:0}
+.military-composition-details>summary{cursor:pointer;color:var(--ui-accent);font-weight:600;padding:4px 0}
+.military-composition-controls{display:grid;gap:8px;margin-top:8px;padding:10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:rgba(0,0,0,.2)}
+.military-composition-controls .hint{margin:0}
+.military-composition-controls form{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
+.military-composition-controls form>strong{min-width:150px}
+.military-composition-controls select,.military-composition-controls input{min-width:110px;min-height:32px;padding:5px 8px}
+.military-composition-controls input[name=name]{width:min(260px,100%)}
+.military-composition-controls input[name=quantity]{width:100px}
+.military-composition-controls button{width:auto;min-height:32px;padding:5px 10px}
+@media(max-width:560px){.military-composition-controls form{align-items:stretch}.military-composition-controls form>strong{width:100%}.military-composition-controls select,.military-composition-controls input[name=name]{width:100%;max-width:none}.military-composition-controls input[name=quantity]{width:110px}}
+.group-status-table{min-width:820px}
+.group-status-table th:nth-child(7),.group-status-table td:nth-child(7){width:22%;white-space:normal}
+.province-assimilation-progress{color:var(--ui-accent)}
+.province-assimilation-editor{margin-top:14px;padding-top:12px;border-top:1px solid var(--ui-border)}
+.province-assimilation-editor h4{margin:0}
+.province-assimilation-editor .hint{margin:0}
+.province-assimilation-editor button{width:auto}
 
 .diplomacy-page{gap:12px}.diplomacy-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--ui-border);padding-bottom:8px}.diplomacy-tabs button{width:auto;min-height:36px;padding:7px 12px}.diplomacy-tabs button.active{border-color:var(--ui-accent);color:var(--ui-accent);background:var(--ui-accent-soft)}.diplomacy-state-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(310px,100%),1fr));gap:8px}.diplomacy-state-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:10px;text-align:left;min-width:0;padding:9px 10px;background:rgba(5,8,9,.55)}.diplomacy-state-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.diplomacy-flag{display:inline-block;width:34px;height:23px;flex:none;border:1px solid var(--ui-border);border-radius:3px;background-color:var(--state-color,#687064);background-image:linear-gradient(135deg,transparent 45%,#ffffff44 46%,#ffffff44 54%,transparent 55%);background-position:center;background-size:cover}.diplomacy-flag.has-emblem{background-image:none;background-position:center;background-size:cover}.diplomacy-flag.large{width:54px;height:38px;border-radius:5px}.diplomacy-country-summary{display:flex;align-items:center;gap:12px}.diplomacy-country-summary>div{display:grid;gap:6px}.diplomacy-actions{display:flex;gap:8px;flex-wrap:wrap}.diplomacy-actions button{width:auto}.diplomacy-proposal-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0;border:0}.diplomacy-participants{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.diplomacy-participants span{padding:4px 7px;border:1px solid var(--ui-border);border-radius:5px;font-size:12px;color:var(--ui-text-secondary)}.diplomacy-participant-picker{display:flex;flex-wrap:wrap;gap:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);padding:10px}.diplomacy-participant-picker legend{padding:0 4px;color:var(--ui-text-secondary);font-size:12px}.diplomacy-participant-picker label{display:flex;align-items:center;gap:6px;padding:5px 8px;border:1px solid var(--ui-border-subtle);border-radius:5px}dialog.diplomacy-dialog{width:min(560px,calc(100vw - 24px));height:auto;max-height:calc(100dvh - 40px);margin:auto;overflow:hidden}dialog.diplomacy-dialog .modal-shell{height:auto;max-height:calc(100dvh - 40px)}dialog.diplomacy-dialog .diplomacy-modal-content{padding:14px;overflow:auto;display:grid;gap:12px}dialog.diplomacy-dialog .application-panel{margin:0}.diplomacy-modal-content ul{padding-left:20px;margin:0;display:grid;gap:7px}.diplomacy-military{margin-top:4px}.selection-relations{display:grid;gap:5px;padding:0 12px 8px}.selection-state-link{display:flex;align-items:center;gap:7px;min-width:0}.selection-state-link .diplomacy-flag{width:25px;height:17px}.selection-state-link button{width:auto;min-height:26px;padding:3px 6px;border-color:transparent;background:transparent;color:var(--ui-accent);text-align:left;white-space:normal}.selection-state-link button:hover{text-decoration:underline}.selection-relations:empty{display:none}
 @media(max-width:767px){.diplomacy-state-list{grid-template-columns:1fr}.diplomacy-state-row{min-height:44px}dialog.diplomacy-dialog{width:calc(100vw - 24px);max-height:calc(100dvh - 24px)}dialog.diplomacy-dialog .modal-shell{height:auto;max-height:calc(100dvh - 24px)}}
 @media(max-width:767px){dialog.diplomacy-dialog{height:auto}}
 .diplomacy-state-list{grid-template-columns:minmax(0,1fr);gap:6px}.diplomacy-state-list .diplomacy-state-row{width:min(100%,560px);min-height:42px}.diplomacy-contract-table{min-width:460px}.diplomacy-contract-table th,.diplomacy-contract-table td{padding:7px 9px}.diplomacy-contract-table th:first-child{width:42%}.diplomacy-contract-table th:nth-child(2){width:34%}.diplomacy-contract-table th:last-child{width:24%}
+
+.military-legend{display:grid;gap:8px;margin:8px 0}.military-legend>div{display:flex;align-items:center;gap:9px}.military-token{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid #9aa28e;border-radius:50%;background:#fff;color:#111;font-style:normal}.military-token img{width:16px;height:16px;object-fit:contain;filter:invert(1)}.military-map-popover{position:fixed;z-index:1200;width:min(320px,calc(100vw - 20px));max-height:min(70vh,480px);overflow:auto;padding:0}.military-map-popover>header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--ui-border)}.military-map-popover>header h2{margin:0;font-size:15px}.military-map-popover-content{display:grid;gap:8px;padding:12px}.military-map-popover-content p{margin:0}.military-map-owner{display:flex;align-items:center;gap:8px}.military-map-owner .legend-swatch{width:12px;height:12px;border-radius:50%;flex:none}.military-map-popover-content ul{display:grid;gap:4px;margin:0;padding-left:20px}.military-map-total{padding-top:7px;border-top:1px solid var(--ui-border);font-weight:700}.province-garrison-summary{margin-top:8px;padding:8px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:#0003}.province-garrison-summary h3{margin:0 0 5px;font-size:12px;color:var(--ui-text)}.province-garrison-summary p{margin:3px 0}.province-garrison-summary ul{display:grid;gap:2px;margin:4px 0;padding-left:18px}.province-garrison-total{padding-top:5px;border-top:1px solid #ffffff12;font-weight:650;color:var(--ui-text)}
+
+.military-map-actions,.military-movement-panel>div{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.military-map-actions button,.military-movement-panel button{width:auto}.military-movement-panel{position:fixed;z-index:8;left:50%;bottom:72px;transform:translateX(-50%);display:flex;align-items:flex-start;gap:12px;padding:10px 12px;max-width:min(720px,calc(100vw - 24px));box-shadow:0 8px 32px #0009}.military-movement-panel>span{color:var(--ui-muted);font-size:12px;white-space:nowrap}.military-movement-panel .military-movement-forecast{display:flex;flex-direction:column;gap:3px;margin:0;min-width:200px}.military-movement-panel .military-movement-forecast span{color:var(--ui-muted);font-size:12px;line-height:1.35}.military-movement-panel>div:last-child{margin:0;flex-shrink:0}
+@media(max-width:760px){.military-movement-panel{left:12px;right:12px;bottom:66px;transform:none;flex-direction:column;gap:6px;max-width:none}.military-movement-panel>div:last-child{width:100%}}

@@ -78,6 +78,32 @@ export async function militaryApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function militaryMapApi() {
+  const db = await client();
+  const {data, error} = await db.rpc('military_map_api');
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось загрузить военные формирования карты');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
+export async function militaryMovementApi(action, formationId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('military_movement_api', {
+    action,
+    formation_key: formationId,
+    payload,
+  });
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось задать движение армии');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function militiaApi(action, stateId, payload = {}) {
   const db = await client();
   const {data, error} = await db.rpc('militia_api', {action, target_state: stateId || null, payload});
@@ -91,6 +117,27 @@ export async function garrisonApi(action, stateId = null, provinceId = null, pay
     action, target_state: stateId, province_key: provinceId, payload,
   });
   if (error) throw new Error(error.message || 'Не удалось выполнить действие гарнизона');
+  return data;
+}
+
+export async function estateInvestmentApi(action, stateId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('estate_investment_api', {action, target_state: stateId, payload});
+  if (error) throw new Error(error.message || 'Не удалось получить вложения сословий');
+  return data;
+}
+
+export async function estateSocialApi(action, stateId, estate = null) {
+  const db = await client();
+  const {data, error} = await db.rpc('estate_social_api', {action, target_state: stateId, target_estate: estate});
+  if (error) throw new Error(error.message || 'Не удалось выполнить действие сословия');
+  return data;
+}
+
+export async function estateFiscalApi(action, stateId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('estate_fiscal_api', {action, target_state: stateId, payload});
+  if (error) throw new Error(error.message || 'Не удалось выполнить операцию с казной сословий');
   return data;
 }
 

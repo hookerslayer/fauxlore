@@ -10142,3 +10142,2223 @@ begin
  if start_at=0 or end_at<=start_at then raise exception 'Colonization access quota section missing'; end if;
  execute substr(definition,1,start_at-1)||substr(definition,end_at);
 end $migration$;
+
+-- Migration: 20261027110000_estate_development_investments.sql
+-- Estate-funded development is settled after the regular turn economy. It
+-- changes next turn's production and never transfers money through the Crown.
+do $$ begin
+  if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+    raise exception 'Rollback the active test turn before adding estate investments';
+  end if;
+end $$;
+
+create table fauxlore.estate_investment_policies (
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  estate text not null check (estate in ('Знать','Духовенство','Горожане','Крестьяне')),
+  enabled boolean not null default true,
+  updated_at timestamptz not null default now(),
+  primary key (state_id,estate)
+);
+create table fauxlore.estate_investment_events (
+  id bigint generated always as identity primary key,
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  estate text not null check (estate in ('Знать','Духовенство','Горожане','Крестьяне')),
+  province_id integer not null references fauxlore.provinces(id),
+  year integer not null,
+  turn integer not null,
+  cost integer not null check (cost>0),
+  development_before integer not null,
+  development_after integer not null check (development_after=development_before+1),
+  created_at timestamptz not null default now(),
+  unique (year,turn,province_id)
+);
+create index estate_investment_events_state_turn on fauxlore.estate_investment_events(state_id,turn desc,id desc);
+alter table fauxlore.estate_investment_policies enable row level security;
+alter table fauxlore.estate_investment_events enable row level security;
+revoke all on fauxlore.estate_investment_policies,fauxlore.estate_investment_events from public,anon,authenticated;
+
+create or replace function fauxlore.estate_investment_candidate(
+  target_state integer,target_estate text,target_year integer,target_turn integer,available_g integer
+)
+returns table(province_id integer,province_name text,development_before integer,cost integer)
+language sql stable security definer set search_path='' as $function$
+  select p.id,p.name,p.development,(1000+20*p.development)::integer
+  from fauxlore.provinces p
+  join fauxlore.province_values owner on owner.province_id=p.id and owner.layer='states' and owner.category_id=target_state
+  join fauxlore.state_profiles sp on sp.state_id=target_state
+  join lateral fauxlore.estate_population(p.province_type,p.population) ep on ep.estate=target_estate
+  where p.kind='land' and p.occupation is null and p.development is not null
+    and p.development<1000000 and ep.population>0
+    and (1000+20*p.development)<=available_g
+    and not exists(select 1 from fauxlore.estate_investment_events x
+      where x.province_id=p.id and x.year=target_year and x.turn=target_turn)
+  order by
+    (case
+      when target_estate in ('Знать','Крестьяне') and p.province_type='Регион' then 400
+      when target_estate='Горожане' and p.province_type in ('Городская','Столичная') then 400
+      when target_estate='Духовенство' and p.province_type in ('Городская','Столичная') then 200
+      else 0 end)
+    +(case
+      when target_estate='Знать' and sp.principles->>'structure'='Ленное право' and p.province_type='Регион' then 200
+      when target_estate='Знать' and sp.principles->>'economy'='Крепостничество' and p.province_type='Регион' then 200
+      when target_estate='Духовенство' and sp.principles->>'authority'='Клир' then 150
+      when target_estate='Духовенство' and sp.principles->>'structure'='Командорство' then 100
+      when target_estate='Горожане' and sp.principles->>'structure'='Консорциум' and p.province_type in ('Городская','Столичная') then 150
+      when target_estate='Горожане' and sp.principles->>'economy'='Гильдии' and p.province_type in ('Городская','Столичная') then 200
+      when target_estate='Горожане' and sp.principles->>'economy'='Адмиралтейство' and p.trade_status='Природный порт' then 200
+      when target_estate='Крестьяне' and sp.principles->>'structure'='Содружество' and p.province_type='Регион' then 150
+      when target_estate='Крестьяне' and sp.principles->>'authority'='Вече' and p.province_type='Регион' then 150
+      else 0 end)
+    +greatest(0,100-least(p.development,100))*3
+    +least(300,floor(ep.population::numeric/50)) desc,
+    p.id
+  limit 1
+$function$;
+revoke all on function fauxlore.estate_investment_candidate(integer,text,integer,integer,integer) from public,anon,authenticated;
+
+create or replace function fauxlore.settle_estate_investments()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare state_row record; estate_name text; estate_balance numeric; remaining_g integer;
+  slots integer; slot integer; picked record; total_cost integer;
+begin
+  if new.year=old.year and new.turn=old.turn then return new; end if;
+  for state_row in select state_id from fauxlore.state_profiles order by state_id loop
+    total_cost:=0;
+    foreach estate_name in array array['Знать','Духовенство','Горожане','Крестьяне'] loop
+      if exists(select 1 from fauxlore.estate_investment_policies policy
+        where policy.state_id=state_row.state_id and policy.estate=estate_name and not policy.enabled) then continue; end if;
+      select balance into estate_balance from fauxlore.state_treasuries
+        where state_id=state_row.state_id and estate=estate_name for update;
+      remaining_g:=floor(greatest(coalesce(estate_balance,0),0)*.20)::integer;
+      if remaining_g<1000 then continue; end if;
+      slots:=case fauxlore.estate_status_for(state_row.state_id,estate_name)
+        when 'Ключевое' then 2 else 1 end;
+      for slot in 1..slots loop
+        select * into picked from fauxlore.estate_investment_candidate(
+          state_row.state_id,estate_name,new.year,new.turn,remaining_g);
+        exit when not found;
+        update fauxlore.state_treasuries set balance=balance-picked.cost,updated_at=now()
+          where state_id=state_row.state_id and estate=estate_name and balance>=picked.cost;
+        if not found then raise exception 'Estate investment balance changed during turn'; end if;
+        update fauxlore.provinces set development=development+1
+          where id=picked.province_id and development=picked.development_before;
+        if not found then raise exception 'Estate investment province changed during turn'; end if;
+        insert into fauxlore.estate_investment_events
+          (state_id,estate,province_id,year,turn,cost,development_before,development_after)
+          values(state_row.state_id,estate_name,picked.province_id,new.year,new.turn,
+            picked.cost,picked.development_before,picked.development_before+1);
+        remaining_g:=remaining_g-picked.cost;
+        total_cost:=total_cost+picked.cost;
+      end loop;
+    end loop;
+    if total_cost>0 then
+      update fauxlore.state_profiles set treasury=(select coalesce(sum(balance),0)
+        from fauxlore.state_treasuries where state_id=state_row.state_id) where state_id=state_row.state_id;
+      update fauxlore.turn_economy_reports set report=(select jsonb_agg(
+        case when (entry.value->>'id')::integer=state_row.state_id then
+          entry.value||jsonb_build_object('estate_investments',total_cost,
+            'closing_treasury',(select coalesce(sum(balance),0) from fauxlore.state_treasuries where state_id=state_row.state_id),
+            'tax_buckets',(select jsonb_object_agg(estate,balance) from fauxlore.state_treasuries where state_id=state_row.state_id))
+        else entry.value end order by entry.ord)
+        from jsonb_array_elements(report) with ordinality entry(value,ord))
+        where year=old.year and turn=old.turn;
+    end if;
+  end loop;
+  return new;
+end $function$;
+revoke all on function fauxlore.settle_estate_investments() from public,anon,authenticated;
+create trigger zzz_estate_investments_after_turn after update of year,turn on fauxlore.game_calendar
+  for each row execute function fauxlore.settle_estate_investments();
+
+create or replace function public.estate_investment_api(action text,target_state integer,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; estate_name text; toggled jsonb; calendar_row fauxlore.game_calendar;
+begin
+  actor:=fauxlore.current_account();
+  if target_state is null or not exists(select 1 from fauxlore.state_profiles where state_id=target_state) then
+    raise sqlstate '22023' using message='Выберите государство'; end if;
+  if actor.role<>'admin' and not exists(select 1 from fauxlore.account_states
+    where account_id=actor.id and state_id=target_state) then
+    raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+  if action='save' then
+    toggled:=payload->'enabled';
+    if jsonb_typeof(toggled) is distinct from 'object' or
+      (toggled-array['Знать','Духовенство','Горожане','Крестьяне'])<>'{}'::jsonb or
+      (select count(*) from jsonb_object_keys(toggled))<>4 or
+      exists(select 1 from jsonb_each(toggled) choice where jsonb_typeof(choice.value)<>'boolean') then
+      raise sqlstate '22023' using message='Укажите режим инвестирования для четырёх сословий'; end if;
+    foreach estate_name in array array['Знать','Духовенство','Горожане','Крестьяне'] loop
+      insert into fauxlore.estate_investment_policies(state_id,estate,enabled)
+        values(target_state,estate_name,(toggled->>estate_name)::boolean)
+      on conflict(state_id,estate) do update set enabled=excluded.enabled,updated_at=now();
+    end loop;
+  elsif action<>'snapshot' then
+    raise sqlstate '22023' using message='Неизвестное действие вложений';
+  end if;
+  select * into calendar_row from fauxlore.game_calendar where singleton=true;
+  return jsonb_build_object('state_id',target_state,'year',calendar_row.year,'turn',calendar_row.turn,
+    'estates',(select coalesce(jsonb_agg(jsonb_build_object(
+      'name',e.name,'status',fauxlore.estate_status_for(target_state,e.name),
+      'balance',coalesce(t.balance,0),'enabled',coalesce(policy.enabled,true),
+      'budget',floor(greatest(coalesce(t.balance,0),0)*.20),
+      'next_province',(select to_jsonb(candidate) from fauxlore.estate_investment_candidate(
+        target_state,e.name,calendar_row.year+1,calendar_row.turn+1,
+        floor(greatest(coalesce(t.balance,0),0)*.20)::integer) candidate)
+      ) order by e.ord),'[]'::jsonb)
+      from unnest(array['Знать','Духовенство','Горожане','Крестьяне']) with ordinality e(name,ord)
+      left join fauxlore.state_treasuries t on t.state_id=target_state and t.estate=e.name
+      left join fauxlore.estate_investment_policies policy on policy.state_id=target_state and policy.estate=e.name),
+    'events',(select coalesce(jsonb_agg(to_jsonb(rows) order by rows.turn desc,rows.id desc),'[]'::jsonb)
+      from (select x.id,x.estate,x.province_id,p.name province_name,x.year,x.turn,x.cost,
+        x.development_before,x.development_after from fauxlore.estate_investment_events x
+        join fauxlore.provinces p on p.id=x.province_id where x.state_id=target_state
+        order by x.turn desc,x.id desc limit 20) rows));
+end $function$;
+revoke all on function public.estate_investment_api(text,integer,jsonb) from public,anon;
+grant execute on function public.estate_investment_api(text,integer,jsonb) to authenticated;
+
+-- Extend the safe test-turn rollback with both the province change and journal.
+do $$
+declare definition text; marker text;
+begin
+  definition:=pg_get_functiondef('fauxlore.turn_snapshot_payload()'::regprocedure);
+  marker:='''game_calendar'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.game_calendar x)';
+  if position(marker in definition)=0 then raise exception 'Turn snapshot marker missing'; end if;
+  definition:=replace(definition,marker,
+    '''province_development'',(select coalesce(jsonb_agg(jsonb_build_object(''id'',id,''development'',development) order by id),''[]'') from fauxlore.provinces),'||chr(10)||
+    '    ''estate_investment_events'',(select coalesce(jsonb_agg(to_jsonb(x) order by id),''[]'') from fauxlore.estate_investment_events x),'||chr(10)||'    '||marker);
+  execute definition;
+end $$;
+
+create or replace function fauxlore.capture_test_turn_estate_investments()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+    'province_development',(select coalesce(jsonb_agg(jsonb_build_object('id',id,'development',development) order by id),'[]'::jsonb) from fauxlore.provinces),
+    'estate_investment_events',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb) from fauxlore.estate_investment_events x));
+  return new;
+end $function$;
+revoke all on function fauxlore.capture_test_turn_estate_investments() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_estate_investments before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_estate_investments();
+
+create or replace function fauxlore.restore_test_turn_estate_investments()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if old.after_revision is null or jsonb_typeof(old.payload->'province_development')<>'array' then return old; end if;
+  lock table fauxlore.provinces,fauxlore.estate_investment_events in access exclusive mode;
+  update fauxlore.provinces p set development=(saved->>'development')::integer
+    from jsonb_array_elements(old.payload->'province_development') saved where p.id=(saved->>'id')::integer;
+  delete from fauxlore.estate_investment_events where true;
+  insert into fauxlore.estate_investment_events overriding system value
+    select * from jsonb_populate_recordset(null::fauxlore.estate_investment_events,old.payload->'estate_investment_events');
+  return old;
+end $function$;
+revoke all on function fauxlore.restore_test_turn_estate_investments() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_estate_investments before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_estate_investments();
+notify pgrst,'reload schema';
+
+-- 20261027120000_estate_garrison_sponsorship.sql
+-- One payer per provincial garrison site. Existing sites stay Crown-funded.
+do $$ begin
+ if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+   raise exception 'Rollback the active test turn before adding garrison sponsorship'; end if;
+end $$;
+alter table fauxlore.garrison_sites add column sponsor_estate text not null default 'Корона'
+  check (sponsor_estate in ('Корона','Знать','Духовенство','Горожане','Крестьяне'));
+alter table fauxlore.garrison_charges add column payers jsonb not null default '{}'::jsonb;
+
+create or replace function fauxlore.garrison_site_upkeep(province_key integer)
+returns numeric language sql stable security definer set search_path='' as $function$
+  select coalesce((select sum(round(u.quantity*c.upkeep*.4,2))
+    from fauxlore.garrison_units u join fauxlore.military_unit_catalog c on c.id=u.unit_id
+    where u.province_id=province_key),0)
+    +greatest(0,(case g.fort_level when 1 then 100 when 2 then 200 when 3 then 300 when 4 then 400 else 0 end)
+      -case when g.free_fort then 300 else 0 end)
+    +greatest(0,(case g.wall_level when 1 then 300 when 2 then 500 when 3 then 700 else 0 end)
+      -case when g.free_wall then 300 else 0 end)
+  from fauxlore.garrison_sites g where g.province_id=province_key
+$function$;
+revoke all on function fauxlore.garrison_site_upkeep(integer) from public,anon,authenticated;
+
+create or replace function fauxlore.charge_garrison_before_turn()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare state_row record; payer_row record; troop_cost numeric; fort_cost numeric;
+  total_cost numeric; closing_balance numeric; payer_costs jsonb;
+begin
+ if new.year=old.year and new.turn=old.turn then return new; end if;
+ for state_row in select state_id from fauxlore.state_profiles order by state_id loop
+   select coalesce(sum(round(u.quantity*c.upkeep*.4,2)),0) into troop_cost
+     from fauxlore.garrison_units u join fauxlore.garrison_sites g on g.province_id=u.province_id
+     join fauxlore.military_unit_catalog c on c.id=u.unit_id where g.state_id=state_row.state_id;
+   total_cost:=fauxlore.garrison_upkeep(state_row.state_id);fort_cost:=total_cost-troop_cost;
+   if total_cost<=0 then continue; end if;
+   payer_costs:='{}'::jsonb;
+   for payer_row in select g.sponsor_estate payer,sum(fauxlore.garrison_site_upkeep(g.province_id)) amount
+     from fauxlore.garrison_sites g where g.state_id=state_row.state_id
+     group by g.sponsor_estate order by g.sponsor_estate loop
+     if payer_row.amount<=0 then continue; end if;
+     update fauxlore.state_treasuries set balance=balance-payer_row.amount,updated_at=now()
+       where state_id=state_row.state_id and estate=payer_row.payer;
+     if not found then raise exception 'Missing treasury for garrison sponsor %',payer_row.payer; end if;
+     payer_costs:=payer_costs||jsonb_build_object(payer_row.payer,payer_row.amount);
+   end loop;
+   insert into fauxlore.garrison_charges(state_id,year,turn,troops,fortifications,payers)
+     values(state_row.state_id,old.year,old.turn,troop_cost,fort_cost,payer_costs);
+   select coalesce(sum(balance),0) into closing_balance from fauxlore.state_treasuries where state_id=state_row.state_id;
+   update fauxlore.state_profiles set treasury=closing_balance where state_id=state_row.state_id;
+   update fauxlore.turn_economy_reports set report=(select jsonb_agg(case when (entry.value->>'id')::integer=state_row.state_id then
+      entry.value||jsonb_build_object('garrison_upkeep',troop_cost,'fortification_upkeep',fort_cost,
+       'garrison_payers',payer_costs,'army_upkeep',coalesce((entry.value->>'army_upkeep')::numeric,0)+total_cost,
+       'army_upkeep_paid',coalesce((entry.value->>'army_upkeep_paid')::numeric,0)+total_cost,
+       'closing_treasury',closing_balance,'tax_buckets',(select jsonb_object_agg(estate,balance)
+         from fauxlore.state_treasuries where state_id=state_row.state_id))
+      else entry.value end order by entry.ord) from jsonb_array_elements(report) with ordinality entry(value,ord))
+     where year=old.year and turn=old.turn;
+ end loop;
+ return new;
+end $function$;
+revoke all on function fauxlore.charge_garrison_before_turn() from public,anon,authenticated;
+
+-- Keep the public garrison API's existing ownership, capacity, recruit and
+-- neutral-fort checks. Only extend its payer choice and payment source.
+do $$
+declare definition text; old_text text; new_text text;
+begin
+ definition:=pg_get_functiondef('public.garrison_api(text,integer,integer,jsonb)'::regprocedure);
+ old_text:=' if action not in (''hire'',''build'') then raise sqlstate ''22023'' using message=''Неизвестное действие гарнизона''; end if;';
+ new_text:=$patch$
+ if action='sponsor' then
+   select * into site from fauxlore.garrison_sites where province_id=province_key and state_id=sid for update;
+   if not found or not exists(select 1 from fauxlore.province_values
+     where province_id=province_key and layer='states' and category_id=sid) then
+     raise sqlstate '42501' using message='Плательщика можно выбрать только для своего гарнизона'; end if;
+   project_kind:=payload->>'estate';
+   if project_kind is null or project_kind not in ('Корона','Знать','Духовенство','Горожане','Крестьяне') then
+     raise sqlstate '22023' using message='Выберите казну плательщика'; end if;
+   if project_kind<>'Корона' then
+     if fauxlore.estate_status_for(sid,project_kind)='Бесправное' then
+       raise sqlstate '22023' using message='Бесправное сословие не может финансировать гарнизон'; end if;
+     select balance into balance_value from fauxlore.state_treasuries
+       where state_id=sid and estate=project_kind for update;
+     if coalesce(balance_value,0)<2*fauxlore.garrison_site_upkeep(province_key) then
+       raise sqlstate '22023' using message='У сословия нет резерва на два хода содержания'; end if;
+   end if;
+   update fauxlore.garrison_sites set sponsor_estate=project_kind where province_id=province_key;
+   return jsonb_build_object('sponsor',project_kind,'upkeep',fauxlore.garrison_site_upkeep(province_key));
+ end if;
+ if action not in ('hire','build') then raise sqlstate '22023' using message='Неизвестное действие гарнизона'; end if;$patch$;
+ if position(old_text in definition)=0 then raise exception 'Garrison action marker missing'; end if;
+ definition:=replace(definition,old_text,new_text);
+ old_text:='''fort_level'',coalesce(g.fort_level,0),''wall_level'',coalesce(g.wall_level,0),''free_fort''';
+ new_text:='''fort_level'',coalesce(g.fort_level,0),''wall_level'',coalesce(g.wall_level,0),''sponsor'',coalesce(g.sponsor_estate,''Корона''),''free_fort''';
+ if position(old_text in definition)=0 then raise exception 'Garrison snapshot marker missing'; end if;
+ definition:=replace(definition,old_text,new_text);
+ old_text:='and estate=''Корона'' for update;';
+ if (length(definition)-length(replace(definition,old_text,'')))/length(old_text)<>2 then
+   raise exception 'Garrison payment lookup marker count changed'; end if;
+ definition:=replace(definition,old_text,'and estate=coalesce(site.sponsor_estate,''Корона'') for update;');
+ old_text:='and estate=''Корона'';';
+ if (length(definition)-length(replace(definition,old_text,'')))/length(old_text)<>2 then
+   raise exception 'Garrison payment debit marker count changed'; end if;
+ definition:=replace(definition,old_text,'and estate=coalesce(site.sponsor_estate,''Корона'');');
+ definition:=replace(definition,'Недостаточно G в казне Короны','Недостаточно G в казне плательщика');
+ execute definition;
+end $$;
+
+-- Keep a two-turn upkeep reserve out of the development investment budget.
+do $$
+declare definition text; old_text text; new_text text;
+begin
+ definition:=pg_get_functiondef('fauxlore.settle_estate_investments()'::regprocedure);
+ old_text:='remaining_g:=floor(greatest(coalesce(estate_balance,0),0)*.20)::integer;';
+ new_text:='remaining_g:=floor(greatest(coalesce(estate_balance,0)-2*coalesce((select sum(fauxlore.garrison_site_upkeep(g.province_id)) from fauxlore.garrison_sites g where g.state_id=state_row.state_id and g.sponsor_estate=estate_name),0),0)*.20)::integer;';
+ if position(old_text in definition)=0 then raise exception 'Estate investment budget marker missing'; end if;
+ execute replace(definition,old_text,new_text);
+end $$;
+do $$
+declare definition text; old_text text; new_text text;
+begin
+ definition:=pg_get_functiondef('public.estate_investment_api(text,integer,jsonb)'::regprocedure);
+ old_text:='floor(greatest(coalesce(t.balance,0),0)*.20)';
+ new_text:='floor(greatest(coalesce(t.balance,0)-2*coalesce((select sum(fauxlore.garrison_site_upkeep(g.province_id)) from fauxlore.garrison_sites g where g.state_id=target_state and g.sponsor_estate=e.name),0),0)*.20)';
+ if (length(definition)-length(replace(definition,old_text,'')))/length(old_text)<>2 then
+   raise exception 'Estate budget API marker count changed'; end if;
+ execute replace(definition,old_text,new_text);
+end $$;
+notify pgrst,'reload schema';
+
+
+-- 20261027130000_estate_social_spending.sql
+-- Temporary, non-stacking estate loyalty support, paid from the estate's own treasury.
+do $$ begin
+ if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+   raise exception 'Rollback the active test turn before adding social spending'; end if;
+end $$;
+create table fauxlore.estate_social_actions (
+  id bigint generated always as identity primary key,
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  estate text not null check (estate in ('Знать','Духовенство','Горожане','Крестьяне')),
+  year integer not null,
+  turn integer not null,
+  cost numeric(14,2) not null check (cost>0),
+  loyalty_bonus numeric(5,4) not null check (loyalty_bonus>0 and loyalty_bonus<=.1),
+  turns_remaining smallint not null check (turns_remaining between 0 and 2),
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create unique index estate_social_one_active on fauxlore.estate_social_actions(state_id,estate) where active;
+create index estate_social_state_history on fauxlore.estate_social_actions(state_id,id desc);
+alter table fauxlore.estate_social_actions enable row level security;
+revoke all on fauxlore.estate_social_actions from public,anon,authenticated;
+
+create or replace function public.estate_social_api(action text,target_state integer,target_estate text default null)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; balance_value numeric; calendar_row fauxlore.game_calendar;
+  social_row fauxlore.estate_social_actions; loyalty_before numeric; applied_bonus numeric;
+begin
+ actor:=fauxlore.current_account();
+ if target_state is null or not exists(select 1 from fauxlore.state_profiles where state_id=target_state) then
+   raise sqlstate '22023' using message='Выберите государство'; end if;
+ if actor.role<>'admin' and not exists(select 1 from fauxlore.account_states
+   where account_id=actor.id and state_id=target_state) then
+   raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+ if action='start' then
+   if target_estate not in ('Знать','Духовенство','Горожане','Крестьяне') or target_estate is null then
+     raise sqlstate '22023' using message='Выберите сословие'; end if;
+   perform 1 from fauxlore.state_profiles where state_id=target_state for update;
+   if exists(select 1 from fauxlore.estate_social_actions where state_id=target_state
+     and estate=target_estate and active) then
+     raise sqlstate '22023' using message='Поддержка этого сословия ещё действует'; end if;
+   select balance into balance_value from fauxlore.state_treasuries
+     where state_id=target_state and estate=target_estate for update;
+   if coalesce(balance_value,0)<2000 then
+     raise sqlstate '22023' using message='У сословия недостаточно G'; end if;
+   select * into calendar_row from fauxlore.game_calendar where singleton=true;
+   insert into fauxlore.state_group_politics(state_id,group_type,group_key,status,loyalty)
+     values(target_state,'estate',target_estate,fauxlore.estate_status_for(target_state,target_estate),.5)
+     on conflict(state_id,group_type,group_key) do nothing;
+   select loyalty into loyalty_before from fauxlore.state_group_politics
+     where state_id=target_state and group_type='estate' and group_key=target_estate for update;
+   applied_bonus:=least(.03,1-loyalty_before);
+   if applied_bonus<=0 then raise sqlstate '22023' using message='Лояльность сословия уже максимальна'; end if;
+   update fauxlore.state_group_politics set loyalty=least(1,loyalty+.03)
+     where state_id=target_state and group_type='estate' and group_key=target_estate;
+   update fauxlore.state_treasuries set balance=balance-2000,updated_at=now()
+     where state_id=target_state and estate=target_estate;
+   update fauxlore.state_profiles set treasury=(select coalesce(sum(balance),0)
+     from fauxlore.state_treasuries where state_id=target_state) where state_id=target_state;
+   insert into fauxlore.estate_social_actions(state_id,estate,year,turn,cost,loyalty_bonus,turns_remaining)
+     values(target_state,target_estate,calendar_row.year,calendar_row.turn,2000,applied_bonus,2)
+     returning * into social_row;
+   return jsonb_build_object('id',social_row.id,'estate',target_estate,'cost',2000,
+     'loyalty_bonus',applied_bonus,'turns_remaining',2);
+ elsif action<>'snapshot' then
+   raise sqlstate '22023' using message='Неизвестное действие поддержки сословия';
+ end if;
+ return jsonb_build_object('actions',(select coalesce(jsonb_agg(jsonb_build_object(
+   'id',x.id,'estate',x.estate,'year',x.year,'turn',x.turn,'cost',x.cost,
+   'bonus',x.loyalty_bonus,'turns_remaining',x.turns_remaining,'active',x.active)
+   order by x.id desc),'[]'::jsonb) from
+   (select * from fauxlore.estate_social_actions where state_id=target_state
+     order by id desc limit 20) x));
+end $function$;
+revoke all on function public.estate_social_api(text,integer,text) from public,anon;
+grant execute on function public.estate_social_api(text,integer,text) to authenticated;
+
+create or replace function fauxlore.advance_estate_social_actions()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare action_row fauxlore.estate_social_actions;
+begin
+ if new.year=old.year and new.turn=old.turn then return new; end if;
+ for action_row in select * from fauxlore.estate_social_actions where active order by id for update loop
+   if action_row.turns_remaining<=1 then
+     update fauxlore.state_group_politics set loyalty=greatest(0,loyalty-action_row.loyalty_bonus)
+       where state_id=action_row.state_id and group_type='estate' and group_key=action_row.estate;
+     update fauxlore.estate_social_actions set turns_remaining=0,active=false where id=action_row.id;
+   else
+     update fauxlore.estate_social_actions set turns_remaining=turns_remaining-1 where id=action_row.id;
+   end if;
+ end loop;
+ return new;
+end $function$;
+revoke all on function fauxlore.advance_estate_social_actions() from public,anon,authenticated;
+create trigger zzz_estate_social_after_turn after update of year,turn on fauxlore.game_calendar
+  for each row execute function fauxlore.advance_estate_social_actions();
+
+-- Admin test-turn rollback restores the social journal as well as the loyalty
+-- and treasury values already present in the shared snapshot.
+create or replace function fauxlore.capture_test_turn_estate_social()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+   'estate_social_actions',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+     from fauxlore.estate_social_actions x));
+ return new;
+end $function$;
+revoke all on function fauxlore.capture_test_turn_estate_social() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_estate_social before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_estate_social();
+
+create or replace function fauxlore.restore_test_turn_estate_social()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ if old.after_revision is null or jsonb_typeof(old.payload->'estate_social_actions')<>'array' then return old; end if;
+ lock table fauxlore.estate_social_actions in access exclusive mode;
+ delete from fauxlore.estate_social_actions where true;
+ insert into fauxlore.estate_social_actions overriding system value
+   select * from jsonb_populate_recordset(null::fauxlore.estate_social_actions,
+     old.payload->'estate_social_actions');
+ return old;
+end $function$;
+revoke all on function fauxlore.restore_test_turn_estate_social() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_estate_social before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_estate_social();
+notify pgrst,'reload schema';
+
+-- 20261027140000_garrison_test_turn_snapshot.sql
+-- The test-turn snapshot must cover fort completion and maintenance, including
+-- the payer introduced by estate sponsorship.
+do $$ begin
+ if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+   raise exception 'Rollback the active test turn before extending garrison snapshot'; end if;
+end $$;
+
+create or replace function fauxlore.capture_test_turn_garrisons()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+   'garrison_sites',(select coalesce(jsonb_agg(to_jsonb(x) order by province_id),'[]'::jsonb) from fauxlore.garrison_sites x),
+   'garrison_units',(select coalesce(jsonb_agg(to_jsonb(x) order by province_id,unit_id),'[]'::jsonb) from fauxlore.garrison_units x),
+   'garrison_projects',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb) from fauxlore.garrison_projects x),
+   'garrison_charges',(select coalesce(jsonb_agg(to_jsonb(x) order by state_id,year,turn),'[]'::jsonb) from fauxlore.garrison_charges x));
+ return new;
+end $function$;
+revoke all on function fauxlore.capture_test_turn_garrisons() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_garrisons before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_garrisons();
+
+create or replace function fauxlore.restore_test_turn_garrisons()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ if old.after_revision is null or jsonb_typeof(old.payload->'garrison_sites')<>'array' then return old; end if;
+ lock table fauxlore.garrison_sites,fauxlore.garrison_units,fauxlore.garrison_projects,
+   fauxlore.garrison_charges in access exclusive mode;
+ delete from fauxlore.garrison_charges where true;
+ delete from fauxlore.garrison_sites where true;
+ insert into fauxlore.garrison_sites
+   select * from jsonb_populate_recordset(null::fauxlore.garrison_sites,old.payload->'garrison_sites');
+ insert into fauxlore.garrison_units
+   select * from jsonb_populate_recordset(null::fauxlore.garrison_units,old.payload->'garrison_units');
+ insert into fauxlore.garrison_projects overriding system value
+   select * from jsonb_populate_recordset(null::fauxlore.garrison_projects,old.payload->'garrison_projects');
+ insert into fauxlore.garrison_charges
+   select * from jsonb_populate_recordset(null::fauxlore.garrison_charges,old.payload->'garrison_charges');
+ return old;
+end $function$;
+revoke all on function fauxlore.restore_test_turn_garrisons() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_garrisons before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_garrisons();
+
+-- 20261027150000_estate_treasury_fiscal_tools.sql
+-- Voluntary Crown-to-estate investment and wartime estate levies.
+do $$ begin
+ if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+   raise exception 'Rollback the active test turn before adding estate fiscal tools'; end if;
+end $$;
+
+create table fauxlore.estate_fiscal_events (
+  id bigint generated always as identity primary key,
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  estate text not null check (estate in ('Знать','Духовенство','Горожане','Крестьяне')),
+  kind text not null check (kind in ('loyalty_investment','military_tax')),
+  war_id bigint references fauxlore.military_wars(id) on delete set null,
+  year integer not null,
+  turn integer not null,
+  amount numeric(14,2) not null check (amount>0),
+  loyalty_change numeric(7,4) not null,
+  expires_year integer,
+  recovery_remaining numeric(7,4) not null default 0 check (recovery_remaining>=0),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  check ((kind='loyalty_investment' and war_id is null and expires_year is not null and loyalty_change>0)
+      or (kind='military_tax' and war_id is not null and expires_year is null and loyalty_change<0))
+);
+create unique index estate_military_tax_once_per_war on fauxlore.estate_fiscal_events(state_id,war_id,estate)
+  where kind='military_tax';
+create index estate_fiscal_history on fauxlore.estate_fiscal_events(state_id,id desc);
+alter table fauxlore.estate_fiscal_events enable row level security;
+revoke all on fauxlore.estate_fiscal_events from public,anon,authenticated;
+
+create or replace function public.estate_fiscal_api(action text,target_state integer,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; cal fauxlore.game_calendar; war fauxlore.military_wars;
+  estate_name text; amount_value numeric; loyalty_value numeric; bonus_value numeric;
+  maximum_value numeric; crown_balance numeric; estate_balance numeric; tax_value numeric;
+  opponent_id integer; result jsonb;
+begin
+ actor:=fauxlore.current_account();
+ if target_state is null or not exists(select 1 from fauxlore.state_profiles where state_id=target_state) then
+   raise sqlstate '22023' using message='Выберите государство'; end if;
+ if actor.role<>'admin' and not exists(select 1 from fauxlore.account_states
+   where account_id=actor.id and state_id=target_state) then
+   raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+ if action not in ('snapshot','invest','military_tax') then
+   raise sqlstate '22023' using message='Неизвестная операция с казной сословий'; end if;
+ if action='snapshot' then
+   return jsonb_build_object(
+     'state_id',target_state,
+     'crown_balance',(select balance from fauxlore.state_treasuries where state_id=target_state and estate='Корона'),
+     'estates',(select coalesce(jsonb_agg(jsonb_build_object('name',e.name,'balance',coalesce(t.balance,0),
+       'loyalty',coalesce(g.loyalty,.5),'investment_bonus',coalesce((select sum(x.loyalty_change)
+         from fauxlore.estate_fiscal_events x where x.state_id=target_state and x.estate=e.name
+          and x.kind='loyalty_investment' and x.active),0),
+       'investment_expires_year',(select min(x.expires_year) from fauxlore.estate_fiscal_events x
+         where x.state_id=target_state and x.estate=e.name and x.kind='loyalty_investment' and x.active),
+       'tax_recovery',(select coalesce(sum(x.recovery_remaining),0) from fauxlore.estate_fiscal_events x
+         where x.state_id=target_state and x.estate=e.name and x.kind='military_tax' and x.active)
+       ) order by e.ord),'[]'::jsonb) from
+       unnest(array['Знать','Духовенство','Горожане','Крестьяне']) with ordinality e(name,ord)
+       left join fauxlore.state_treasuries t on t.state_id=target_state and t.estate=e.name
+       left join fauxlore.state_group_politics g on g.state_id=target_state and g.group_type='estate' and g.group_key=e.name),
+     'wars',(select coalesce(jsonb_agg(jsonb_build_object('id',w.id,'opponent_id',
+       case when w.attacker_id=target_state then w.defender_id else w.attacker_id end,
+       'attacker_id',w.attacker_id,'defender_id',w.defender_id,'casus_belli',w.casus_belli,
+       'used_estates',(select coalesce(jsonb_agg(x.estate order by x.estate),'[]'::jsonb)
+         from fauxlore.estate_fiscal_events x where x.state_id=target_state and x.war_id=w.id and x.kind='military_tax'))
+       order by w.declared_at),'[]'::jsonb) from fauxlore.military_wars w
+       where w.active and target_state in (w.attacker_id,w.defender_id)),
+     'events',(select coalesce(jsonb_agg(jsonb_build_object('id',x.id,'estate',x.estate,'kind',x.kind,
+       'war_id',x.war_id,'year',x.year,'turn',x.turn,'amount',x.amount,'loyalty_change',x.loyalty_change,
+       'expires_year',x.expires_year,'recovery_remaining',x.recovery_remaining,'active',x.active)
+       order by x.id desc),'[]'::jsonb) from (select * from fauxlore.estate_fiscal_events
+       where state_id=target_state order by id desc limit 40) x),
+     'year',(select year from fauxlore.game_calendar where singleton),
+     'turn',(select turn from fauxlore.game_calendar where singleton));
+ end if;
+ estate_name:=payload->>'estate';
+ if estate_name is null or estate_name not in ('Знать','Духовенство','Горожане','Крестьяне') then
+   raise sqlstate '22023' using message='Выберите сословие'; end if;
+ select * into cal from fauxlore.game_calendar where singleton for share;
+ perform 1 from fauxlore.state_profiles where state_id=target_state for update;
+ perform fauxlore.ensure_state_group_politics(target_state);
+ select loyalty into loyalty_value from fauxlore.state_group_politics
+   where state_id=target_state and group_type='estate' and group_key=estate_name for update;
+ select balance into crown_balance from fauxlore.state_treasuries
+   where state_id=target_state and estate='Корона' for update;
+ if crown_balance is null then raise sqlstate '22023' using message='Казна Короны не найдена'; end if;
+ select balance into estate_balance from fauxlore.state_treasuries
+   where state_id=target_state and estate=estate_name for update;
+ if estate_balance is null then raise sqlstate '22023' using message='Казна сословия не найдена'; end if;
+ if action='invest' then
+   if jsonb_typeof(payload->'amount') is distinct from 'number' then
+     raise sqlstate '22023' using message='Укажите сумму вложения'; end if;
+   amount_value:=(payload->>'amount')::numeric;
+   if amount_value<1000 or amount_value>=1000000000000 or amount_value<>trunc(amount_value)
+      or mod(amount_value,1000)<>0 then
+     raise sqlstate '22023' using message='Сумма должна быть целым числом не меньше 1 000 G и кратна 1 000'; end if;
+   if crown_balance<amount_value then raise sqlstate '22023' using message='Недостаточно G в Казне Короны'; end if;
+   bonus_value:=(amount_value/1000)*case when estate_name in ('Горожане','Крестьяне') then .01 else .005 end;
+   if loyalty_value+bonus_value>1 then
+     maximum_value:=floor((1-loyalty_value)/case when estate_name in ('Горожане','Крестьяне') then .01 else .005 end)*1000;
+     raise sqlstate '22023' using message=format('Вложение превышает предел лояльности. Максимум сейчас: %s G',maximum_value); end if;
+   update fauxlore.state_treasuries set balance=balance-amount_value,updated_at=now()
+     where state_id=target_state and estate='Корона';
+   update fauxlore.state_treasuries set balance=balance+amount_value,updated_at=now()
+     where state_id=target_state and estate=estate_name;
+   update fauxlore.state_group_politics set loyalty=loyalty+bonus_value
+     where state_id=target_state and group_type='estate' and group_key=estate_name;
+   insert into fauxlore.estate_fiscal_events(state_id,estate,kind,year,turn,amount,loyalty_change,expires_year)
+     values(target_state,estate_name,'loyalty_investment',cal.year,cal.turn,amount_value,bonus_value,cal.year+5);
+   insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,'Корона',cal.year,cal.turn,'estate_loyalty_investment',-amount_value,0,
+       jsonb_build_object('estate',estate_name,'amount',amount_value)),
+       (target_state,estate_name,cal.year,cal.turn,'estate_loyalty_investment',amount_value,0,
+       jsonb_build_object('direction','received','loyalty_bonus',bonus_value));
+   result:=jsonb_build_object('estate',estate_name,'amount',amount_value,
+     'loyalty_bonus',bonus_value,'expires_year',cal.year+5);
+ else
+   if jsonb_typeof(payload->'war_id') is distinct from 'number' then
+     raise sqlstate '22023' using message='Выберите активную войну'; end if;
+   select * into war from fauxlore.military_wars where id=(payload->>'war_id')::bigint
+     and active and target_state in (attacker_id,defender_id) for share;
+   if not found then raise sqlstate '22023' using message='Военный налог доступен только во время активной войны'; end if;
+   if exists(select 1 from fauxlore.estate_fiscal_events where state_id=target_state
+     and war_id=war.id and estate=estate_name and kind='military_tax') then
+     raise sqlstate '22023' using message='Это сословие уже обложено военным налогом в этой войне'; end if;
+   if estate_balance<=0 then raise sqlstate '22023' using message='В казне сословия нет средств для военного налога'; end if;
+   tax_value:=round(estate_balance*.5,2);
+   bonus_value:=least(.20,loyalty_value);
+   update fauxlore.state_treasuries set balance=balance-tax_value,updated_at=now()
+     where state_id=target_state and estate=estate_name;
+   update fauxlore.state_treasuries set balance=balance+tax_value,updated_at=now()
+     where state_id=target_state and estate='Корона';
+   update fauxlore.state_group_politics set loyalty=greatest(0,loyalty-bonus_value)
+     where state_id=target_state and group_type='estate' and group_key=estate_name;
+   insert into fauxlore.estate_fiscal_events(state_id,estate,kind,war_id,year,turn,amount,
+     loyalty_change,recovery_remaining,active)
+     values(target_state,estate_name,'military_tax',war.id,cal.year,cal.turn,tax_value,-bonus_value,bonus_value,bonus_value>0);
+   insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,estate_name,cal.year,cal.turn,'estate_military_tax',-tax_value,0,
+       jsonb_build_object('war_id',war.id)),
+       (target_state,'Корона',cal.year,cal.turn,'estate_military_tax',tax_value,0,
+       jsonb_build_object('estate',estate_name,'war_id',war.id));
+   result:=jsonb_build_object('estate',estate_name,'war_id',war.id,
+     'amount',tax_value,'loyalty_loss',bonus_value,'recovery_per_turn',case when bonus_value>0 then .01 else 0 end);
+ end if;
+ update fauxlore.state_profiles set treasury=(select coalesce(sum(balance),0)
+   from fauxlore.state_treasuries where state_id=target_state) where state_id=target_state;
+ return result;
+end $function$;
+revoke all on function public.estate_fiscal_api(text,integer,jsonb) from public,anon;
+grant execute on function public.estate_fiscal_api(text,integer,jsonb) to authenticated;
+
+create or replace function fauxlore.advance_estate_fiscal_events()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare event_row fauxlore.estate_fiscal_events; restored numeric;
+begin
+ if new.year=old.year and new.turn=old.turn then return new; end if;
+ for event_row in select * from fauxlore.estate_fiscal_events where active order by id for update loop
+   if event_row.kind='loyalty_investment' and new.year>=event_row.expires_year then
+     update fauxlore.state_group_politics set loyalty=greatest(0,loyalty-event_row.loyalty_change)
+       where state_id=event_row.state_id and group_type='estate' and group_key=event_row.estate;
+     update fauxlore.estate_fiscal_events set active=false where id=event_row.id;
+   elsif event_row.kind='military_tax' then
+     restored:=least(.01,event_row.recovery_remaining);
+     update fauxlore.state_group_politics set loyalty=least(1,loyalty+restored)
+       where state_id=event_row.state_id and group_type='estate' and group_key=event_row.estate;
+     update fauxlore.estate_fiscal_events set recovery_remaining=recovery_remaining-restored,
+       active=(recovery_remaining-restored)>0 where id=event_row.id;
+   end if;
+ end loop;
+ return new;
+end $function$;
+revoke all on function fauxlore.advance_estate_fiscal_events() from public,anon,authenticated;
+create trigger zzzzz_estate_fiscal_events after update of year,turn on fauxlore.game_calendar
+  for each row execute function fauxlore.advance_estate_fiscal_events();
+
+-- Include balances and temporary loyalty effects in the reversible admin test turn.
+create or replace function fauxlore.capture_test_turn_estate_fiscal()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+   'estate_fiscal_events',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+     from fauxlore.estate_fiscal_events x));
+ return new;
+end $function$;
+revoke all on function fauxlore.capture_test_turn_estate_fiscal() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_estate_fiscal before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_estate_fiscal();
+
+create or replace function fauxlore.restore_test_turn_estate_fiscal()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+ if old.after_revision is null or jsonb_typeof(old.payload->'estate_fiscal_events')<>'array' then return old; end if;
+ lock table fauxlore.estate_fiscal_events in access exclusive mode;
+ delete from fauxlore.estate_fiscal_events where true;
+ insert into fauxlore.estate_fiscal_events overriding system value
+   select * from jsonb_populate_recordset(null::fauxlore.estate_fiscal_events,
+     old.payload->'estate_fiscal_events');
+ return old;
+end $function$;
+revoke all on function fauxlore.restore_test_turn_estate_fiscal() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_estate_fiscal before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_estate_fiscal();
+notify pgrst,'reload schema';
+
+-- 20261027151000_fiscal_event_war_cascade.sql
+alter table fauxlore.estate_fiscal_events drop constraint estate_fiscal_events_war_id_fkey;
+alter table fauxlore.estate_fiscal_events add constraint estate_fiscal_events_war_id_fkey
+  foreign key(war_id) references fauxlore.military_wars(id) on delete cascade;
+
+-- 20261027152000_fiscal_ledger_kinds.sql
+alter table fauxlore.state_budget_ledger drop constraint state_budget_ledger_kind_check;
+alter table fauxlore.state_budget_ledger add constraint state_budget_ledger_kind_check
+  check (kind in ('army_upkeep','debt_repayment','estate_loyalty_investment','estate_military_tax'));
+
+-- 20261027153000_fiscal_ledger_crown_rows.sql
+do $$
+declare definition text; old_text text; new_text text;
+begin
+ definition:=pg_get_functiondef('public.estate_fiscal_api(text,integer,jsonb)'::regprocedure);
+ old_text:=$old$insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,'Корона',cal.year,cal.turn,'estate_loyalty_investment',-amount_value,0,
+       jsonb_build_object('estate',estate_name,'amount',amount_value)),
+       (target_state,estate_name,cal.year,cal.turn,'estate_loyalty_investment',amount_value,0,
+       jsonb_build_object('direction','received','loyalty_bonus',bonus_value));$old$;
+ new_text:=$new$insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,'Корона',cal.year,cal.turn,'estate_loyalty_investment',-amount_value,0,
+       jsonb_build_object('estate',estate_name,'amount',amount_value));$new$;
+ if position(old_text in definition)=0 then raise exception 'Investment ledger source marker missing'; end if;
+ definition:=replace(definition,old_text,new_text);
+ old_text:=$old$insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,estate_name,cal.year,cal.turn,'estate_military_tax',-tax_value,0,
+       jsonb_build_object('war_id',war.id)),
+       (target_state,'Корона',cal.year,cal.turn,'estate_military_tax',tax_value,0,
+       jsonb_build_object('estate',estate_name,'war_id',war.id));$old$;
+ new_text:=$new$insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+     values(target_state,'Корона',cal.year,cal.turn,'estate_military_tax',tax_value,0,
+       jsonb_build_object('estate',estate_name,'war_id',war.id));$new$;
+ if position(old_text in definition)=0 then raise exception 'Military tax ledger source marker missing'; end if;
+ execute replace(definition,old_text,new_text);
+end $$;
+
+
+-- Migration: 20261027160000_military_formation_composition.sql
+-- Split, merge and transfer composition between co-located regular armies/fleets.
+create or replace function fauxlore.manage_formation_composition(action text,sid integer,payload jsonb)
+returns jsonb language plpgsql set search_path='' as $function$
+declare source_row fauxlore.military_formations; target_row fauxlore.military_formations;
+  unit_row fauxlore.military_unit_catalog; rec jsonb; source_key bigint; target_key bigint;
+  unit_key bigint; amount integer; current_amount integer; free_moved integer:=0;
+  moved_total integer:=0; remaining_total bigint; created_key bigint; created_name text;
+begin
+ if action='split_formation' then
+   source_key:=nullif(payload->>'formation_id','')::bigint;
+   select * into source_row from fauxlore.military_formations
+     where id=source_key and state_id=sid and active and kind='regular' for update;
+   if not found then raise sqlstate '22023' using message='Армия или флотилия не найдены'; end if;
+   if source_row.domain='naval' and exists(select 1 from fauxlore.colonization_missions
+      where status='active' and fleet_id=source_key) then
+     raise sqlstate '22023' using message='Флотилия занята колонизационной миссией'; end if;
+   if jsonb_typeof(payload->'units') is distinct from 'array' or jsonb_array_length(payload->'units')=0 then
+     raise sqlstate '22023' using message='Выберите части для выделения'; end if;
+   if exists(select 1 from jsonb_array_elements(payload->'units') x(value)
+      group by value->>'unit_id' having count(*)>1) then
+     raise sqlstate '22023' using message='Один тип войск можно указать только один раз'; end if;
+   created_name:=btrim(coalesce(payload->>'name',''));
+   if length(created_name)<2 or length(created_name)>100 then
+     raise sqlstate '22023' using message='Название нового формирования должно содержать от 2 до 100 символов'; end if;
+   insert into fauxlore.military_formations(state_id,name,domain,province_id)
+     values(sid,created_name,source_row.domain,source_row.province_id) returning id into created_key;
+   for rec in select value from jsonb_array_elements(payload->'units') loop
+     unit_key:=nullif(rec->>'unit_id','')::bigint;
+     amount:=coalesce((rec->>'quantity')::integer,0);
+     if amount<1 then raise sqlstate '22023' using message='Количество частей должно быть не меньше 1'; end if;
+     select * into unit_row from fauxlore.military_unit_catalog where id=unit_key;
+     if not found or (source_row.domain='naval' and unit_row.domain<>'naval')
+        or (source_row.domain='land' and unit_row.domain not in ('land','siege')) then
+       raise sqlstate '22023' using message='Тип войск не подходит этому формированию'; end if;
+     select quantity into current_amount from fauxlore.military_formation_units
+       where formation_id=source_key and unit_id=unit_key for update;
+     if not found or amount>current_amount then
+       raise sqlstate '22023' using message='В исходном формировании недостаточно выбранных частей'; end if;
+     if unit_row.name='Копейщик' then
+       free_moved:=free_moved+least(amount,greatest(0,source_row.free_upkeep_quantity-free_moved));
+     end if;
+     if amount=current_amount then
+       delete from fauxlore.military_formation_units where formation_id=source_key and unit_id=unit_key;
+     else
+       update fauxlore.military_formation_units set quantity=quantity-amount
+         where formation_id=source_key and unit_id=unit_key;
+     end if;
+     insert into fauxlore.military_formation_units(formation_id,unit_id,quantity)
+       values(created_key,unit_key,amount);
+     moved_total:=moved_total+amount;
+   end loop;
+   select coalesce(sum(quantity),0) into remaining_total from fauxlore.military_formation_units where formation_id=source_key;
+   if remaining_total<1 then raise sqlstate '22023' using message='В исходной армии или флотилии должна остаться хотя бы одна часть'; end if;
+   update fauxlore.military_formations set free_upkeep_quantity=greatest(0,free_upkeep_quantity-free_moved)
+     where id=source_key;
+   update fauxlore.military_formations set free_upkeep_quantity=free_moved where id=created_key;
+   return jsonb_build_object('source_id',source_key,'formation_id',created_key,'name',created_name,'units_moved',moved_total);
+ elsif action in ('merge_formations','transfer_units') then
+   source_key:=nullif(payload->>'source_formation_id','')::bigint;
+   target_key:=nullif(payload->>'target_formation_id','')::bigint;
+   if source_key is null or target_key is null or source_key=target_key then
+     raise sqlstate '22023' using message='Выберите два разных формирования'; end if;
+   perform 1 from fauxlore.military_formations where id in (source_key,target_key)
+     order by id for update;
+   select * into source_row from fauxlore.military_formations
+     where id=source_key and state_id=sid and active and kind='regular';
+   if not found then raise sqlstate '22023' using message='Исходная армия или флотилия не найдены'; end if;
+   select * into target_row from fauxlore.military_formations
+     where id=target_key and state_id=sid and active and kind='regular';
+   if not found then raise sqlstate '22023' using message='Целевая армия или флотилия не найдены'; end if;
+   if source_row.domain<>target_row.domain then
+     raise sqlstate '22023' using message='Можно объединять и пополнять только формирования одного типа'; end if;
+   if source_row.province_id<>target_row.province_id then
+     raise sqlstate '22023' using message='Оба формирования должны находиться в одной провинции'; end if;
+   if source_row.domain='naval' and exists(select 1 from fauxlore.colonization_missions
+      where status='active' and fleet_id in (source_key,target_key)) then
+     raise sqlstate '22023' using message='Флотилия занята колонизационной миссией'; end if;
+   if not exists(select 1 from fauxlore.military_formation_units where formation_id=source_key) then
+     raise sqlstate '22023' using message='В исходном формировании нет частей'; end if;
+   if action='merge_formations' then
+     select coalesce(sum(quantity),0)::integer into moved_total from fauxlore.military_formation_units where formation_id=source_key;
+     insert into fauxlore.military_formation_units(formation_id,unit_id,quantity)
+       select target_key,unit_id,quantity from fauxlore.military_formation_units where formation_id=source_key
+       on conflict(formation_id,unit_id) do update
+         set quantity=fauxlore.military_formation_units.quantity+excluded.quantity;
+     update fauxlore.military_formations set free_upkeep_quantity=free_upkeep_quantity+source_row.free_upkeep_quantity
+       where id=target_key;
+     delete from fauxlore.military_formation_units where formation_id=source_key;
+     update fauxlore.military_formations set active=false,leader_id=null,free_upkeep_quantity=0 where id=source_key;
+     return jsonb_build_object('source_id',source_key,'target_id',target_key,'units_moved',moved_total,'source_deactivated',true);
+   end if;
+   unit_key:=nullif(payload->>'unit_id','')::bigint;
+   amount:=coalesce((payload->>'quantity')::integer,0);
+   if amount<1 then raise sqlstate '22023' using message='Укажите количество частей не меньше 1'; end if;
+   select * into unit_row from fauxlore.military_unit_catalog where id=unit_key;
+   if not found or (source_row.domain='naval' and unit_row.domain<>'naval')
+      or (source_row.domain='land' and unit_row.domain not in ('land','siege')) then
+     raise sqlstate '22023' using message='Тип войск не подходит этому формированию'; end if;
+   select quantity into current_amount from fauxlore.military_formation_units
+     where formation_id=source_key and unit_id=unit_key for update;
+   if not found or amount>current_amount then
+     raise sqlstate '22023' using message='В исходном формировании недостаточно выбранных частей'; end if;
+   if unit_row.name='Копейщик' then
+     free_moved:=least(amount,source_row.free_upkeep_quantity);
+   end if;
+   if amount=current_amount then
+     delete from fauxlore.military_formation_units where formation_id=source_key and unit_id=unit_key;
+   else
+     update fauxlore.military_formation_units set quantity=quantity-amount
+       where formation_id=source_key and unit_id=unit_key;
+   end if;
+   insert into fauxlore.military_formation_units(formation_id,unit_id,quantity)
+     values(target_key,unit_key,amount)
+     on conflict(formation_id,unit_id) do update
+       set quantity=fauxlore.military_formation_units.quantity+excluded.quantity;
+   update fauxlore.military_formations set free_upkeep_quantity=greatest(0,free_upkeep_quantity-free_moved)
+     where id=source_key;
+   update fauxlore.military_formations set free_upkeep_quantity=free_upkeep_quantity+free_moved
+     where id=target_key;
+   select coalesce(sum(quantity),0) into remaining_total from fauxlore.military_formation_units where formation_id=source_key;
+   if remaining_total=0 then
+     update fauxlore.military_formations set active=false,leader_id=null,free_upkeep_quantity=0 where id=source_key;
+   end if;
+   return jsonb_build_object('source_id',source_key,'target_id',target_key,'unit_id',unit_key,
+     'quantity',amount,'source_deactivated',remaining_total=0);
+ end if;
+ raise sqlstate '22023' using message='Неизвестное действие с составом формирования';
+end
+$function$;
+revoke all on function fauxlore.manage_formation_composition(text,integer,jsonb) from public,anon,authenticated;
+
+do $$ declare fn text; marker text; replacement text; begin
+ fn:=pg_get_functiondef('fauxlore.military_actions_extra(text,integer,jsonb)'::regprocedure);
+ marker:=' if action=''create_formation'' then';
+ replacement:=' if action in (''split_formation'',''merge_formations'',''transfer_units'') then'||E'\n'||
+   '  return fauxlore.manage_formation_composition(action,sid,payload);'||E'\n'||
+   ' end if;'||E'\n'||marker;
+ if position(marker in fn)=0 then raise exception 'Military formation action insertion point missing'; end if;
+ execute replace(fn,marker,replacement);
+
+ fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+ marker:='''create_formation'',''rename_formation''';
+ replacement:='''split_formation'',''merge_formations'',''transfer_units'','||marker;
+ if position(marker in fn)=0 then raise exception 'Military API action dispatch insertion point missing'; end if;
+ execute replace(fn,marker,replacement);
+end $$;
+
+-- Protect the administrator's reversible test turn from silently deleting later composition changes.
+create trigger military_formations_live_revision
+  after insert or update or delete on fauxlore.military_formations
+  for each statement execute function fauxlore.bump_live_revision();
+create trigger military_formation_units_live_revision
+  after insert or update or delete on fauxlore.military_formation_units
+  for each statement execute function fauxlore.bump_live_revision();
+notify pgrst,'reload schema';
+
+
+-- Migration: 20261027170000_race_religion_assimilation.sql
+-- Province-level racial and religious assimilation toward each state's official groups.
+alter table fauxlore.provinces
+  add column if not exists race_assimilation_turns integer
+    check (race_assimilation_turns is null or race_assimilation_turns between 1 and 300),
+  add column if not exists race_assimilation_target_id integer,
+  add column if not exists religion_assimilation_turns integer
+    check (religion_assimilation_turns is null or religion_assimilation_turns between 1 and 300),
+  add column if not exists religion_assimilation_target_id integer;
+
+create or replace function fauxlore.assimilation_duration(status_value text)
+returns integer language sql immutable set search_path='' as $function$
+  select case status_value
+    when 'Признание' then 60
+    when 'Ассимиляция' then 10
+    when 'Истребление' then 5
+    else 30
+  end
+$function$;
+revoke all on function fauxlore.assimilation_duration(text) from public,anon,authenticated;
+
+create or replace function fauxlore.reset_province_assimilation_on_group_change()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare target_id integer;
+begin
+  if tg_op='UPDATE' and new.category_id is not distinct from old.category_id then return new; end if;
+  target_id:=case when tg_op='DELETE' then old.province_id else new.province_id end;
+  if tg_op='DELETE' then
+    if old.layer='races' then
+      update fauxlore.provinces set race_assimilation_turns=null,race_assimilation_target_id=null where id=target_id;
+    elsif old.layer='religions' then
+      update fauxlore.provinces set religion_assimilation_turns=null,religion_assimilation_target_id=null where id=target_id;
+    elsif old.layer='states' then
+      update fauxlore.provinces set race_assimilation_turns=null,race_assimilation_target_id=null,
+        religion_assimilation_turns=null,religion_assimilation_target_id=null where id=target_id;
+    end if;
+    return old;
+  end if;
+  if new.layer='races' then
+    update fauxlore.provinces set race_assimilation_turns=null,race_assimilation_target_id=null where id=target_id;
+  elsif new.layer='religions' then
+    update fauxlore.provinces set religion_assimilation_turns=null,religion_assimilation_target_id=null where id=target_id;
+  elsif new.layer='states' then
+    update fauxlore.provinces set race_assimilation_turns=null,race_assimilation_target_id=null,
+      religion_assimilation_turns=null,religion_assimilation_target_id=null where id=target_id;
+  end if;
+  return new;
+end
+$function$;
+revoke all on function fauxlore.reset_province_assimilation_on_group_change() from public,anon,authenticated;
+create trigger reset_province_assimilation_on_group_change
+  after insert or update or delete on fauxlore.province_values
+  for each row execute function fauxlore.reset_province_assimilation_on_group_change();
+
+create or replace function fauxlore.reset_state_assimilation_on_official_change()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if new.official_race_id is distinct from old.official_race_id then
+    update fauxlore.provinces p set race_assimilation_turns=null,race_assimilation_target_id=null
+    where exists(select 1 from fauxlore.province_values owner
+      where owner.province_id=p.id and owner.layer='states' and owner.category_id=new.state_id);
+  end if;
+  if new.official_religion_id is distinct from old.official_religion_id then
+    update fauxlore.provinces p set religion_assimilation_turns=null,religion_assimilation_target_id=null
+    where exists(select 1 from fauxlore.province_values owner
+      where owner.province_id=p.id and owner.layer='states' and owner.category_id=new.state_id);
+  end if;
+  return new;
+end
+$function$;
+revoke all on function fauxlore.reset_state_assimilation_on_official_change() from public,anon,authenticated;
+create trigger reset_state_assimilation_on_official_change
+  after update of official_race_id,official_religion_id on fauxlore.state_profiles
+  for each row execute function fauxlore.reset_state_assimilation_on_official_change();
+
+create or replace function fauxlore.process_province_assimilation()
+returns integer language plpgsql security definer set search_path='' as $function$
+declare province_row record; group_kind text; source_id integer; target_id integer;
+  status_value text; remaining integer; stored_target integer; changed integer:=0; touched boolean:=false;
+begin
+  for province_row in
+    select p.id,p.occupation,owner.category_id state_id,sp.official_race_id,sp.official_religion_id,
+      race.category_id race_id,religion.category_id religion_id,
+      p.race_assimilation_turns,p.race_assimilation_target_id,
+      p.religion_assimilation_turns,p.religion_assimilation_target_id
+    from fauxlore.provinces p
+    join fauxlore.province_values owner on owner.province_id=p.id and owner.layer='states'
+    join fauxlore.state_profiles sp on sp.state_id=owner.category_id
+    left join fauxlore.province_values race on race.province_id=p.id and race.layer='races'
+    left join fauxlore.province_values religion on religion.province_id=p.id and religion.layer='religions'
+    where p.kind='land'
+    order by p.id
+    for update of p
+  loop
+    foreach group_kind in array array['race','religion'] loop
+      if group_kind='race' then
+        source_id:=province_row.race_id;target_id:=province_row.official_race_id;
+        remaining:=province_row.race_assimilation_turns;stored_target:=province_row.race_assimilation_target_id;
+      else
+        source_id:=province_row.religion_id;target_id:=province_row.official_religion_id;
+        remaining:=province_row.religion_assimilation_turns;stored_target:=province_row.religion_assimilation_target_id;
+      end if;
+      if source_id is null or target_id is null then continue; end if;
+      if source_id=target_id then
+        if remaining is not null or stored_target is not null then
+          if group_kind='race' then
+            update fauxlore.provinces set race_assimilation_turns=null,race_assimilation_target_id=null where id=province_row.id;
+          else
+            update fauxlore.provinces set religion_assimilation_turns=null,religion_assimilation_target_id=null where id=province_row.id;
+          end if;
+          touched:=true;
+        end if;
+        continue;
+      end if;
+      -- Occupation suspends the owner's assimilation rather than advancing it.
+      if province_row.occupation is not null then continue; end if;
+      if remaining is null or stored_target is distinct from target_id then
+        select coalesce(gp.status,'Невмешательство') into status_value
+        from fauxlore.state_profiles sp
+        left join fauxlore.state_group_politics gp on gp.state_id=sp.state_id
+          and gp.group_type=group_kind and gp.group_key=source_id::text
+        where sp.state_id=province_row.state_id;
+        remaining:=fauxlore.assimilation_duration(coalesce(status_value,'Невмешательство'));
+      end if;
+      if remaining<=1 then
+        update fauxlore.province_values set category_id=target_id
+        where province_id=province_row.id and layer=case group_kind when 'race' then 'races' else 'religions' end
+          and category_id=source_id;
+        if found then changed:=changed+1; end if;
+      elsif group_kind='race' then
+        update fauxlore.provinces set race_assimilation_turns=remaining-1,
+          race_assimilation_target_id=target_id where id=province_row.id;
+        touched:=true;
+      else
+        update fauxlore.provinces set religion_assimilation_turns=remaining-1,
+          religion_assimilation_target_id=target_id where id=province_row.id;
+        touched:=true;
+      end if;
+    end loop;
+  end loop;
+  if touched or changed>0 then
+    update fauxlore._settings set value_json=to_jsonb((value_json#>>'{}')::bigint+1) where key='data_revision';
+  end if;
+  return changed;
+end
+$function$;
+revoke all on function fauxlore.process_province_assimilation() from public,anon,authenticated;
+
+create or replace function fauxlore.advance_province_assimilation()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if (new.year,new.turn) is not distinct from (old.year,old.turn) then return new; end if;
+  perform fauxlore.process_province_assimilation();
+  return new;
+end
+$function$;
+revoke all on function fauxlore.advance_province_assimilation() from public,anon,authenticated;
+create trigger zzzzzz_advance_province_assimilation after update of year,turn on fauxlore.game_calendar
+  for each row execute function fauxlore.advance_province_assimilation();
+
+-- Administrator can set an explicit timer; zero or null restores the automatic status duration.
+create or replace function fauxlore.set_province_assimilation(province_id integer,payload jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+#variable_conflict use_variable
+declare actor fauxlore.accounts; province_row fauxlore.provinces; state_id integer;
+  official_race integer; official_religion integer; race_id integer; religion_id integer;
+  race_turns integer; religion_turns integer;
+begin
+  actor:=fauxlore.current_account();
+  if actor.role<>'admin' then raise sqlstate '42501' using message='Изменять срок ассимиляции может только администратор'; end if;
+  if jsonb_typeof(payload) is distinct from 'object' or payload- array['race_turns','religion_turns']<>'{}'::jsonb
+    or not(payload ? 'race_turns') or not(payload ? 'religion_turns') then
+    raise sqlstate '22023' using message='Укажите сроки ассимиляции расы и религии'; end if;
+  select * into province_row from fauxlore.provinces where id=province_id and kind='land' for update;
+  if not found then raise sqlstate 'P0002' using message='Сухопутная провинция не найдена'; end if;
+  select owner.category_id,sp.official_race_id,sp.official_religion_id,race.category_id,religion.category_id
+    into state_id,official_race,official_religion,race_id,religion_id
+  from fauxlore.province_values owner join fauxlore.state_profiles sp on sp.state_id=owner.category_id
+  left join fauxlore.province_values race on race.province_id=province_id and race.layer='races'
+  left join fauxlore.province_values religion on religion.province_id=province_id and religion.layer='religions'
+  where owner.province_id=province_id and owner.layer='states';
+  if not found then raise sqlstate '22023' using message='Провинция должна принадлежать государству'; end if;
+  if jsonb_typeof(payload->'race_turns') not in ('number','null') or jsonb_typeof(payload->'religion_turns') not in ('number','null') then
+    raise sqlstate '22023' using message='Срок должен быть целым числом от 0 до 300'; end if;
+  race_turns:=case when payload->'race_turns'='null'::jsonb then 0 else (payload->>'race_turns')::integer end;
+  religion_turns:=case when payload->'religion_turns'='null'::jsonb then 0 else (payload->>'religion_turns')::integer end;
+  if race_turns not between 0 and 300 or religion_turns not between 0 and 300 then
+    raise sqlstate '22023' using message='Срок должен быть целым числом от 0 до 300'; end if;
+  if race_turns>0 and (race_id is null or race_id=official_race) then raise sqlstate '22023' using message='В этой провинции нет расы для ассимиляции'; end if;
+  if religion_turns>0 and (religion_id is null or religion_id=official_religion) then raise sqlstate '22023' using message='В этой провинции нет религии для ассимиляции'; end if;
+  update fauxlore.provinces set
+    race_assimilation_turns=nullif(race_turns,0),race_assimilation_target_id=case when race_turns>0 then official_race else null end,
+    religion_assimilation_turns=nullif(religion_turns,0),religion_assimilation_target_id=case when religion_turns>0 then official_religion else null end
+  where id=province_id returning * into province_row;
+  return to_jsonb(province_row);
+end
+$function$;
+revoke all on function fauxlore.set_province_assimilation(integer,jsonb) from public,anon,authenticated;
+
+-- Preserve province group assignments and countdowns in the reversible test-turn checkpoint.
+do $$
+declare definition text; marker text;
+begin
+  definition:=pg_get_functiondef('fauxlore.turn_snapshot_payload()'::regprocedure);
+  marker:='''game_calendar'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.game_calendar x)';
+  if position(marker in definition)=0 then raise exception 'Turn snapshot calendar marker missing for assimilation'; end if;
+  definition:=replace(definition,marker,
+    '''province_race_religion_values'',(select coalesce(jsonb_agg(jsonb_build_object(''province_id'',province_id,''layer'',layer,''category_id'',category_id) order by province_id,layer),''[]'') from fauxlore.province_values where layer in (''races'',''religions'')),'||chr(10)||
+    '    ''province_assimilation_state'',(select coalesce(jsonb_agg(jsonb_build_object(''id'',id,''race_assimilation_turns'',race_assimilation_turns,''race_assimilation_target_id'',race_assimilation_target_id,''religion_assimilation_turns'',religion_assimilation_turns,''religion_assimilation_target_id'',religion_assimilation_target_id) order by id),''[]'') from fauxlore.provinces),'||chr(10)||'    '||marker);
+  execute definition;
+end $$;
+
+create or replace function fauxlore.capture_test_turn_assimilation()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+    'province_race_religion_values',(select coalesce(jsonb_agg(jsonb_build_object('province_id',province_id,'layer',layer,'category_id',category_id) order by province_id,layer),'[]') from fauxlore.province_values where layer in ('races','religions')),
+    'province_assimilation_state',(select coalesce(jsonb_agg(jsonb_build_object('id',id,'race_assimilation_turns',race_assimilation_turns,'race_assimilation_target_id',race_assimilation_target_id,'religion_assimilation_turns',religion_assimilation_turns,'religion_assimilation_target_id',religion_assimilation_target_id) order by id),'[]') from fauxlore.provinces));
+  return new;
+end
+$function$;
+revoke all on function fauxlore.capture_test_turn_assimilation() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_assimilation before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_assimilation();
+
+create or replace function fauxlore.restore_test_turn_assimilation()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if old.after_revision is null or jsonb_typeof(old.payload->'province_race_religion_values')<>'array'
+    or jsonb_typeof(old.payload->'province_assimilation_state')<>'array' then return old; end if;
+  lock table fauxlore.provinces,fauxlore.province_values in access exclusive mode;
+  delete from fauxlore.province_values where layer in ('races','religions');
+  insert into fauxlore.province_values(province_id,layer,category_id)
+    select (item->>'province_id')::integer,item->>'layer',(item->>'category_id')::integer
+    from jsonb_array_elements(old.payload->'province_race_religion_values') item;
+  update fauxlore.provinces p set race_assimilation_turns=(saved->>'race_assimilation_turns')::integer,
+    race_assimilation_target_id=(saved->>'race_assimilation_target_id')::integer,
+    religion_assimilation_turns=(saved->>'religion_assimilation_turns')::integer,
+    religion_assimilation_target_id=(saved->>'religion_assimilation_target_id')::integer
+  from jsonb_array_elements(old.payload->'province_assimilation_state') saved where p.id=(saved->>'id')::integer;
+  update fauxlore._settings set value_json=to_jsonb((value_json#>>'{}')::bigint+1) where key='data_revision';
+  return old;
+end
+$function$;
+revoke all on function fauxlore.restore_test_turn_assimilation() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_assimilation before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_assimilation();
+
+do $$
+declare definition text; marker text; replacement text;
+begin
+  definition:=replace(pg_get_functiondef('fauxlore.api(text,text,jsonb,uuid)'::regprocedure),chr(13),'');
+  marker:='elsif path~''^admin/provinces/\d+$'' and method=''PATCH'' then'||chr(10)||
+    '    result:=fauxlore.edit_province(split_part(path,''/'',3)::integer,body);';
+  replacement:='elsif path~''^admin/provinces/\d+/assimilation$'' and method=''PATCH'' then'||chr(10)||
+    '    result:=fauxlore.set_province_assimilation(split_part(path,''/'',3)::integer,body);'||chr(10)||'  '||marker;
+  if position(marker in definition)=0 then raise exception 'Admin province route marker missing for assimilation'; end if;
+  execute replace(definition,marker,replacement);
+end $$;
+
+notify pgrst,'reload schema';
+
+
+-- Migration: 20261027171000_fix_race_religion_assimilation_admin_edit.sql
+-- Avoid ambiguity between the province id argument and province_values.province_id.
+create or replace function fauxlore.set_province_assimilation(province_id integer,payload jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+#variable_conflict use_variable
+declare actor fauxlore.accounts; province_row fauxlore.provinces; state_id integer;
+  official_race integer; official_religion integer; race_id integer; religion_id integer;
+  race_turns integer; religion_turns integer;
+begin
+  actor:=fauxlore.current_account();
+  if actor.role<>'admin' then raise sqlstate '42501' using message='Изменять срок ассимиляции может только администратор'; end if;
+  if jsonb_typeof(payload) is distinct from 'object' or payload-array['race_turns','religion_turns']<>'{}'::jsonb
+    or not(payload?'race_turns') or not(payload?'religion_turns') then
+    raise sqlstate '22023' using message='Укажите сроки ассимиляции расы и религии'; end if;
+  select * into province_row from fauxlore.provinces where id=province_id and kind='land' for update;
+  if not found then raise sqlstate 'P0002' using message='Сухопутная провинция не найдена'; end if;
+  select owner.category_id,sp.official_race_id,sp.official_religion_id,race.category_id,religion.category_id
+    into state_id,official_race,official_religion,race_id,religion_id
+  from fauxlore.province_values owner join fauxlore.state_profiles sp on sp.state_id=owner.category_id
+  left join fauxlore.province_values race on race.province_id=province_id and race.layer='races'
+  left join fauxlore.province_values religion on religion.province_id=province_id and religion.layer='religions'
+  where owner.province_id=province_id and owner.layer='states';
+  if not found then raise sqlstate '22023' using message='Провинция должна принадлежать государству'; end if;
+  if jsonb_typeof(payload->'race_turns') not in ('number','null') or jsonb_typeof(payload->'religion_turns') not in ('number','null') then
+    raise sqlstate '22023' using message='Срок должен быть целым числом от 0 до 300'; end if;
+  race_turns:=case when payload->'race_turns'='null'::jsonb then 0 else (payload->>'race_turns')::integer end;
+  religion_turns:=case when payload->'religion_turns'='null'::jsonb then 0 else (payload->>'religion_turns')::integer end;
+  if race_turns not between 0 and 300 or religion_turns not between 0 and 300 then
+    raise sqlstate '22023' using message='Срок должен быть целым числом от 0 до 300'; end if;
+  if race_turns>0 and (race_id is null or race_id=official_race) then raise sqlstate '22023' using message='В этой провинции нет расы для ассимиляции'; end if;
+  if religion_turns>0 and (religion_id is null or religion_id=official_religion) then raise sqlstate '22023' using message='В этой провинции нет религии для ассимиляции'; end if;
+  update fauxlore.provinces set
+    race_assimilation_turns=nullif(race_turns,0),race_assimilation_target_id=case when race_turns>0 then official_race else null end,
+    religion_assimilation_turns=nullif(religion_turns,0),religion_assimilation_target_id=case when religion_turns>0 then official_religion else null end
+  where id=province_id returning * into province_row;
+  return to_jsonb(province_row);
+end
+$function$;
+revoke all on function fauxlore.set_province_assimilation(integer,jsonb) from public,anon,authenticated;
+
+
+-- Migration: 20261027180000_military_map_layer.sql
+-- Expose only military formations visible under the army.md fog-of-war rules.
+create or replace function public.military_map_api()
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare
+  actor fauxlore.accounts;
+  actor_states integer[];
+  visible_provinces integer[];
+  neighbors jsonb;
+  all_visible boolean;
+begin
+  actor:=fauxlore.current_account();
+  all_visible:=actor.role='admin';
+  select coalesce(array_agg(state_id order by state_id),'{}'::integer[]) into actor_states
+    from fauxlore.account_states where account_id=actor.id;
+  if all_visible then
+    visible_provinces:=null;
+  else
+    select coalesce(array_agg(distinct visible.province_id),'{}'::integer[]) into visible_provinces
+    from (
+      select pv.province_id
+      from fauxlore.province_values pv
+      where pv.layer='states' and pv.category_id=any(actor_states)
+      union
+      select neighbor.value::integer
+      from fauxlore.province_values pv
+      cross join fauxlore.map_adjacency graph
+      cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->pv.province_id::text,'[]'::jsonb)) neighbor(value)
+      where pv.layer='states' and pv.category_id=any(actor_states)
+      union
+      select f.province_id
+      from fauxlore.military_formations f
+      where f.active and f.state_id=any(actor_states)
+      union
+      select neighbor.value::integer
+      from fauxlore.military_formations f
+      cross join fauxlore.map_adjacency graph
+      cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->f.province_id::text,'[]'::jsonb)) neighbor(value)
+      where f.active and f.state_id=any(actor_states)
+    ) visible;
+  end if;
+  return jsonb_build_object(
+    'formations',(select coalesce(jsonb_agg(jsonb_build_object(
+       'id',f.id,'name',f.name,'domain',f.domain,'kind',f.kind,'province_id',f.province_id,
+       'province_name',p.name,'x',(p.center->>0)::numeric,'y',(p.center->>1)::numeric,
+       'state_id',f.state_id,'state_name',state.name,'state_color',state.color,
+       'leader_name',leader.name,'units',coalesce((select jsonb_agg(jsonb_build_object('unit_id',u.id,'name',u.name,'quantity',fu.quantity) order by u.name)
+          from fauxlore.military_formation_units fu join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+          where fu.formation_id=f.id),'[]'::jsonb),
+       'total_quantity',coalesce((select sum(fu.quantity) from fauxlore.military_formation_units fu where fu.formation_id=f.id),0)
+     ) order by f.province_id,f.id),'[]'::jsonb)
+     from fauxlore.military_formations f
+     join fauxlore.provinces p on p.id=f.province_id
+     join fauxlore.map_categories state on state.layer='states' and state.id=f.state_id
+     left join fauxlore.military_leaders leader on leader.id=f.leader_id
+     where f.active and (all_visible or f.state_id=any(actor_states) or f.province_id=any(visible_provinces))
+    ),
+    'garrisons',(select coalesce(jsonb_agg(jsonb_build_object(
+       'token_type','garrison','province_id',g.province_id,'province_name',p.name,
+       'x',(p.center->>0)::numeric,'y',(p.center->>1)::numeric,
+       'state_id',g.state_id,'state_name',state.name,'state_color',state.color,
+       'fort_level',g.fort_level,'wall_level',g.wall_level,
+       'units',coalesce((select jsonb_agg(jsonb_build_object('unit_id',u.id,'name',u.name,'quantity',gu.quantity) order by u.name)
+          from fauxlore.garrison_units gu join fauxlore.military_unit_catalog u on u.id=gu.unit_id
+          where gu.province_id=g.province_id),'[]'::jsonb),
+       'total_quantity',coalesce((select sum(gu.quantity) from fauxlore.garrison_units gu where gu.province_id=g.province_id),0)
+     ) order by g.province_id),'[]'::jsonb)
+     from fauxlore.garrison_sites g
+     join fauxlore.provinces p on p.id=g.province_id
+     join fauxlore.map_categories state on state.layer='states' and state.id=g.state_id
+     where (all_visible or g.state_id=any(actor_states) or g.province_id=any(visible_provinces))
+       and exists(select 1 from fauxlore.garrison_units gu where gu.province_id=g.province_id)
+    ),
+    'fog_of_war',not all_visible
+  );
+end
+$function$;
+revoke all on function public.military_map_api() from public,anon;
+grant execute on function public.military_map_api() to authenticated;
+notify pgrst,'reload schema';
+-- Make active fortification and port projects visible to players, notify their
+-- owners when work starts/completes, and give ports a one-turn construction phase.
+
+create table if not exists fauxlore.military_port_projects (
+  id bigint generated always as identity primary key,
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  sea_province_id integer not null references fauxlore.provinces(id),
+  marker_x double precision not null,
+  marker_y double precision not null,
+  cost numeric(14,2) not null default 10000,
+  turns_remaining smallint not null default 1 check (turns_remaining >= 0),
+  started_year integer not null,
+  started_turn integer not null,
+  completed_year integer,
+  completed_turn integer,
+  status text not null default 'building' check (status in ('building','completed'))
+);
+create unique index if not exists military_port_one_active_project
+  on fauxlore.military_port_projects(sea_province_id) where status='building';
+create index if not exists military_port_projects_state_idx
+  on fauxlore.military_port_projects(state_id,status);
+alter table fauxlore.military_port_projects enable row level security;
+revoke all on fauxlore.military_port_projects from public,anon,authenticated;
+
+create or replace function fauxlore.military_start_port_construction(sid integer,payload jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; province_key integer; x_value double precision; y_value double precision;
+        balance_value numeric; project_key bigint; year_value integer; turn_value integer; province_name text;
+begin
+  actor:=fauxlore.current_account();
+  if actor.role<>'admin' and not exists(
+    select 1 from fauxlore.account_states where account_id=actor.id and state_id=sid
+  ) then raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+  province_key:=(payload->>'province_id')::integer;
+  x_value:=(payload->>'x')::double precision;
+  y_value:=(payload->>'y')::double precision;
+  select p.name into province_name from fauxlore.provinces p
+   where p.id=province_key and p.kind='sea'
+     and x_value>=(p.bbox->>0)::double precision and x_value<(p.bbox->>2)::double precision
+     and y_value>=(p.bbox->>1)::double precision and y_value<(p.bbox->>3)::double precision;
+  if not found then raise sqlstate '22023' using message='Укажите точку внутри морской провинции'; end if;
+  if exists(select 1 from fauxlore.map_markers where province_id=province_key and type='port') then
+    raise sqlstate '22023' using message='В этой провинции уже есть порт'; end if;
+  if exists(select 1 from fauxlore.military_port_projects where sea_province_id=province_key and status='building') then
+    raise sqlstate '22023' using message='В этой провинции уже строится порт'; end if;
+  if not exists(select 1 from fauxlore.map_adjacency a
+      cross join lateral jsonb_array_elements_text(a.neighbors->province_key::text) n(value)
+      join fauxlore.province_values v on v.province_id=n.value::integer and v.layer='states' and v.category_id=sid
+      join fauxlore.provinces p on p.id=v.province_id and p.kind='land' where a.singleton) then
+    raise sqlstate '22023' using message='Нужен контролируемый соседний берег'; end if;
+  select balance into balance_value from fauxlore.state_treasuries
+   where state_id=sid and estate='Корона' for update;
+  if coalesce(balance_value,0)<10000 then raise sqlstate '22023' using message='Для порта нужно 10 000 G'; end if;
+  select year,turn into year_value,turn_value from fauxlore.game_calendar where singleton;
+  insert into fauxlore.military_port_projects(state_id,sea_province_id,marker_x,marker_y,cost,turns_remaining,started_year,started_turn)
+   values(sid,province_key,x_value,y_value,10000,1,year_value,turn_value) returning id into project_key;
+  update fauxlore.state_treasuries set balance=balance-10000,updated_at=now()
+   where state_id=sid and estate='Корона';
+  update fauxlore.state_profiles set treasury=treasury-10000 where state_id=sid;
+  insert into fauxlore.notifications(account_id,kind,title,message)
+   select a.account_id,'construction','Строительство началось',
+     'Началось строительство порта в провинции «'||province_name||'». Завершение — после следующего хода.'
+   from fauxlore.account_states a where a.state_id=sid;
+  return jsonb_build_object('project_id',project_key,'cost',10000,'turns',1);
+end
+$function$;
+revoke all on function fauxlore.military_start_port_construction(integer,jsonb) from public,anon,authenticated;
+
+do $migration$
+declare definition text; start_marker text; end_marker text; first_pos integer; second_pos integer;
+begin
+  definition:=pg_get_functiondef('fauxlore.military_actions_extra(text,integer,jsonb)'::regprocedure);
+  start_marker:=' elsif action=''build_port'' then';
+  end_marker:=' elsif action=''hire_leader'' then';
+  first_pos:=position(start_marker in definition);
+  second_pos:=position(end_marker in definition);
+  if first_pos=0 or second_pos<=first_pos then raise exception 'Port build action block was not found'; end if;
+  definition:=substring(definition from 1 for first_pos-1)||
+    ' elsif action=''build_port'' then'||E'\n  return fauxlore.military_start_port_construction(sid,payload);\n'||
+    substring(definition from second_pos);
+  execute definition;
+end
+$migration$;
+
+create or replace function fauxlore.complete_military_port_projects()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare project_row fauxlore.military_port_projects; marker_key bigint; province_name text;
+begin
+  if new.year=old.year and new.turn=old.turn then return new; end if;
+  for project_row in select * from fauxlore.military_port_projects where status='building' order by id for update loop
+    select name into province_name from fauxlore.provinces where id=project_row.sea_province_id;
+    insert into fauxlore.map_markers(province_id,x,y,type,name,state_id)
+      values(project_row.sea_province_id,project_row.marker_x,project_row.marker_y,'port','Порт '||province_name,project_row.state_id)
+      returning id into marker_key;
+    insert into fauxlore.military_port_builds(state_id,sea_province_id,marker_id,cost)
+      values(project_row.state_id,project_row.sea_province_id,marker_key,project_row.cost);
+    update fauxlore.military_port_projects set status='completed',turns_remaining=0,
+      completed_year=new.year,completed_turn=new.turn where id=project_row.id;
+    insert into fauxlore.notifications(account_id,kind,title,message)
+      select a.account_id,'construction','Строительство завершено',
+        'Порт в провинции «'||province_name||'» построен и готов к использованию.'
+      from fauxlore.account_states a where a.state_id=project_row.state_id;
+  end loop;
+  return new;
+end
+$function$;
+revoke all on function fauxlore.complete_military_port_projects() from public,anon,authenticated;
+create trigger military_port_complete_on_turn after update of year,turn on fauxlore.game_calendar
+  for each row execute function fauxlore.complete_military_port_projects();
+
+create or replace function fauxlore.notify_garrison_project_started()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare province_name text; title_value text;
+begin
+  select name into province_name from fauxlore.provinces where id=new.province_id;
+  title_value:=case when new.kind='fort' then 'Крепость' else 'Городские стены' end;
+  insert into fauxlore.notifications(account_id,kind,title,message)
+    select a.account_id,'construction','Строительство началось',
+      'Началось строительство: '||title_value||' в провинции «'||province_name||'». Осталось ходов: '||new.turns_remaining||'.'
+    from fauxlore.account_states a where a.state_id=new.state_id;
+  return new;
+end
+$function$;
+revoke all on function fauxlore.notify_garrison_project_started() from public,anon,authenticated;
+create trigger garrison_project_started after insert on fauxlore.garrison_projects
+  for each row execute function fauxlore.notify_garrison_project_started();
+
+create or replace function fauxlore.capture_test_turn_port_projects()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+    'military_port_projects',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+      from fauxlore.military_port_projects x));
+  return new;
+end
+$function$;
+revoke all on function fauxlore.capture_test_turn_port_projects() from public,anon,authenticated;
+create trigger turn_test_snapshot_capture_port_projects before insert on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.capture_test_turn_port_projects();
+
+create or replace function fauxlore.restore_test_turn_port_projects()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if jsonb_typeof(old.payload->'military_port_projects')<>'array' then return old; end if;
+  lock table fauxlore.military_port_projects in access exclusive mode;
+  delete from fauxlore.military_port_projects;
+  insert into fauxlore.military_port_projects overriding system value
+    select * from jsonb_populate_recordset(null::fauxlore.military_port_projects,old.payload->'military_port_projects');
+  return old;
+end
+$function$;
+revoke all on function fauxlore.restore_test_turn_port_projects() from public,anon,authenticated;
+create trigger turn_test_snapshot_restore_port_projects before delete on fauxlore.turn_test_snapshot
+  for each row execute function fauxlore.restore_test_turn_port_projects();
+
+-- Expose active works alongside military tokens. The result remains filtered by
+-- the same province visibility rules as the military map layer.
+create or replace function public.military_map_api()
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; actor_states integer[]; visible_provinces integer[]; all_visible boolean;
+begin
+  actor:=fauxlore.current_account();
+  all_visible:=actor.role='admin';
+  select coalesce(array_agg(state_id order by state_id),'{}'::integer[]) into actor_states
+    from fauxlore.account_states where account_id=actor.id;
+  if all_visible then visible_provinces:=null;
+  else
+    select coalesce(array_agg(distinct visible.province_id),'{}'::integer[]) into visible_provinces
+    from (
+      select pv.province_id from fauxlore.province_values pv
+       where pv.layer='states' and pv.category_id=any(actor_states)
+      union
+      select neighbor.value::integer from fauxlore.province_values pv
+       cross join fauxlore.map_adjacency graph
+       cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->pv.province_id::text,'[]'::jsonb)) neighbor(value)
+       where pv.layer='states' and pv.category_id=any(actor_states)
+      union
+      select f.province_id from fauxlore.military_formations f where f.active and f.state_id=any(actor_states)
+      union
+      select neighbor.value::integer from fauxlore.military_formations f
+       cross join fauxlore.map_adjacency graph
+       cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->f.province_id::text,'[]'::jsonb)) neighbor(value)
+       where f.active and f.state_id=any(actor_states)
+    ) visible;
+  end if;
+  return jsonb_build_object(
+    'formations',(select coalesce(jsonb_agg(jsonb_build_object(
+       'id',f.id,'name',f.name,'domain',f.domain,'kind',f.kind,'province_id',f.province_id,
+       'province_name',p.name,'x',(p.center->>0)::numeric,'y',(p.center->>1)::numeric,
+       'state_id',f.state_id,'state_name',state.name,'state_color',state.color,
+       'leader_name',leader.name,'units',coalesce((select jsonb_agg(jsonb_build_object('unit_id',u.id,'name',u.name,'quantity',fu.quantity) order by u.name)
+          from fauxlore.military_formation_units fu join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+          where fu.formation_id=f.id),'[]'::jsonb),
+       'total_quantity',coalesce((select sum(fu.quantity) from fauxlore.military_formation_units fu where fu.formation_id=f.id),0)
+     ) order by f.province_id,f.id),'[]'::jsonb)
+     from fauxlore.military_formations f join fauxlore.provinces p on p.id=f.province_id
+      join fauxlore.map_categories state on state.layer='states' and state.id=f.state_id
+      left join fauxlore.military_leaders leader on leader.id=f.leader_id
+     where f.active and (all_visible or f.state_id=any(actor_states) or f.province_id=any(visible_provinces))),
+    'garrisons',(select coalesce(jsonb_agg(jsonb_build_object(
+       'token_type','garrison','province_id',g.province_id,'province_name',p.name,
+       'x',(p.center->>0)::numeric,'y',(p.center->>1)::numeric,'state_id',g.state_id,
+       'state_name',state.name,'state_color',state.color,'fort_level',g.fort_level,'wall_level',g.wall_level,
+       'units',coalesce((select jsonb_agg(jsonb_build_object('unit_id',u.id,'name',u.name,'quantity',gu.quantity) order by u.name)
+          from fauxlore.garrison_units gu join fauxlore.military_unit_catalog u on u.id=gu.unit_id
+          where gu.province_id=g.province_id),'[]'::jsonb),
+       'total_quantity',coalesce((select sum(gu.quantity) from fauxlore.garrison_units gu where gu.province_id=g.province_id),0)
+     ) order by g.province_id),'[]'::jsonb)
+     from fauxlore.garrison_sites g join fauxlore.provinces p on p.id=g.province_id
+      join fauxlore.map_categories state on state.layer='states' and state.id=g.state_id
+     where (all_visible or g.state_id=any(actor_states) or g.province_id=any(visible_provinces))
+       and exists(select 1 from fauxlore.garrison_units gu where gu.province_id=g.province_id)),
+    'constructions',(select coalesce(jsonb_agg(project order by project->>'province_id',project->>'kind'),'[]'::jsonb)
+      from (
+        select jsonb_build_object('id',pr.id,'kind',pr.kind,'province_id',pr.province_id,'province_name',p.name,
+          'name',case when pr.kind='fort' then case when pr.target_level=1 then 'Форт' else 'Крепость' end
+                     else 'Городские стены' end,
+          'target_level',pr.target_level,'turns_remaining',pr.turns_remaining,'cost',pr.cost,
+          'x',coalesce(pr.marker_x,(p.center->>0)::double precision),'y',coalesce(pr.marker_y,(p.center->>1)::double precision),
+          'state_id',pr.state_id,'state_name',state.name,'state_color',state.color,'object_type','fortress') as project
+        from fauxlore.garrison_projects pr join fauxlore.provinces p on p.id=pr.province_id
+          join fauxlore.map_categories state on state.layer='states' and state.id=pr.state_id
+        where pr.status='building' and (all_visible or pr.state_id=any(actor_states) or pr.province_id=any(visible_provinces))
+        union all
+        select jsonb_build_object('id',pr.id,'kind','port','province_id',pr.sea_province_id,'province_name',p.name,
+          'name','Порт','target_level',1,'turns_remaining',pr.turns_remaining,'cost',pr.cost,
+          'x',pr.marker_x,'y',pr.marker_y,'state_id',pr.state_id,'state_name',state.name,
+          'state_color',state.color,'object_type','port') as project
+        from fauxlore.military_port_projects pr join fauxlore.provinces p on p.id=pr.sea_province_id
+          join fauxlore.map_categories state on state.layer='states' and state.id=pr.state_id
+        where pr.status='building' and (all_visible or pr.state_id=any(actor_states) or pr.sea_province_id=any(visible_provinces))
+      ) active_projects),
+    'fog_of_war',not all_visible
+  );
+end
+$function$;
+revoke all on function public.military_map_api() from public,anon;
+grant execute on function public.military_map_api() to authenticated;
+notify pgrst,'reload schema';
+
+-- Test-turn rollback must also restore completed construction markers and the
+-- port registry. No live test turn may be active when adding snapshot fields.
+do $migration$ begin
+  if exists(select 1 from fauxlore.turn_test_snapshot where singleton=true) then
+    raise exception 'Rollback the active test turn before extending construction snapshots';
+  end if;
+end $migration$;
+
+create or replace function fauxlore.capture_test_turn_port_projects()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object(
+    'military_port_projects',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+      from fauxlore.military_port_projects x),
+    'military_port_builds',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+      from fauxlore.military_port_builds x),
+    'construction_markers',(select coalesce(jsonb_agg(to_jsonb(x) order by id),'[]'::jsonb)
+      from fauxlore.map_markers x where x.type in ('fortress','port')));
+  return new;
+end
+$function$;
+revoke all on function fauxlore.capture_test_turn_port_projects() from public,anon,authenticated;
+
+create or replace function fauxlore.restore_test_turn_port_projects()
+returns trigger language plpgsql security definer set search_path='' as $function$
+begin
+  if jsonb_typeof(old.payload->'military_port_projects') is distinct from 'array'
+    or jsonb_typeof(old.payload->'military_port_builds') is distinct from 'array'
+    or jsonb_typeof(old.payload->'construction_markers') is distinct from 'array' then return old; end if;
+  lock table fauxlore.military_port_projects,fauxlore.military_port_builds,fauxlore.map_markers in access exclusive mode;
+  delete from fauxlore.military_port_builds;
+  delete from fauxlore.map_markers where type in ('fortress','port');
+  delete from fauxlore.military_port_projects;
+  insert into fauxlore.map_markers overriding system value
+    select * from jsonb_populate_recordset(null::fauxlore.map_markers,old.payload->'construction_markers');
+  insert into fauxlore.military_port_builds overriding system value
+    select * from jsonb_populate_recordset(null::fauxlore.military_port_builds,old.payload->'military_port_builds');
+  insert into fauxlore.military_port_projects overriding system value
+    select * from jsonb_populate_recordset(null::fauxlore.military_port_projects,old.payload->'military_port_projects');
+  return old;
+end
+$function$;
+revoke all on function fauxlore.restore_test_turn_port_projects() from public,anon,authenticated;
+
+notify pgrst,'reload schema';
+
+-- Coordinate army movement and turn weather.
+-- Coordinate movement for land armies. Coordinates use the map's 1 px = 1 km scale.
+alter table fauxlore.military_formations
+  add column if not exists position_x double precision,
+  add column if not exists position_y double precision;
+
+update fauxlore.military_formations f
+set position_x=(p.center->>0)::double precision,
+    position_y=(p.center->>1)::double precision
+from fauxlore.provinces p
+where p.id=f.province_id and (f.position_x is null or f.position_y is null);
+
+alter table fauxlore.military_formations
+  alter column position_x set not null,
+  alter column position_y set not null;
+
+create table if not exists fauxlore.military_movement_orders (
+  formation_id bigint primary key references fauxlore.military_formations(id) on delete cascade,
+  state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+  route jsonb not null check(jsonb_typeof(route)='array' and jsonb_array_length(route) between 2 and 5000),
+  next_index integer not null default 1 check(next_index>=1),
+  segment_progress numeric(12,4) not null default 0 check(segment_progress>=0),
+  issued_by bigint not null references fauxlore.accounts(id),
+  issued_year integer not null,
+  issued_turn integer not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists military_movement_state_idx on fauxlore.military_movement_orders(state_id,formation_id);
+alter table fauxlore.military_movement_orders enable row level security;
+revoke all on fauxlore.military_movement_orders from public,anon,authenticated;
+
+create table if not exists fauxlore.province_weather (
+  province_id integer primary key references fauxlore.provinces(id) on delete cascade,
+  weather text not null,
+  roll numeric(7,4) not null check(roll>=0 and roll<100),
+  year integer not null,
+  turn integer not null
+);
+alter table fauxlore.province_weather enable row level security;
+revoke all on fauxlore.province_weather from public,anon,authenticated;
+
+create or replace function fauxlore.weather_for_climate(climate_name text,warm_turn boolean,roll_value numeric)
+returns text language plpgsql immutable set search_path='' as $function$
+declare climate_value text:=lower(coalesce(climate_name,'умеренный'));
+begin
+  if climate_value like '%холод%' then
+    if warm_turn then return case when roll_value<35 then 'clear' when roll_value<60 then 'rain' when roll_value<75 then 'fog' when roll_value<90 then 'wind' else 'calm' end;
+    else return case when roll_value<40 then 'snow' when roll_value<60 then 'clear' when roll_value<75 then 'fog' when roll_value<90 then 'wind' else 'thaw' end; end if;
+  elsif climate_value like '%троп%' then
+    if warm_turn then return case when roll_value<25 then 'clear' when roll_value<60 then 'heavy_rain' when roll_value<75 then 'drought' when roll_value<80 then 'fog' when roll_value<90 then 'wind' else 'calm' end;
+    else return case when roll_value<30 then 'clear' when roll_value<60 then 'heavy_rain' when roll_value<70 then 'drought' when roll_value<80 then 'fog' when roll_value<90 then 'wind' else 'calm' end; end if;
+  elsif climate_value like '%пустын%' then
+    if warm_turn then return case when roll_value<40 then 'clear' when roll_value<70 then 'heat' when roll_value<90 then 'drought' else 'wind' end;
+    else return case when roll_value<55 then 'clear' when roll_value<70 then 'cold' when roll_value<85 then 'drought' else 'wind' end; end if;
+  elsif warm_turn then
+    return case when roll_value<30 then 'clear' when roll_value<50 then 'rain' when roll_value<60 then 'drought' when roll_value<70 then 'fog' when roll_value<80 then 'wind' when roll_value<90 then 'calm' else 'autumn' end;
+  else
+    return case when roll_value<25 then 'clear' when roll_value<40 then 'snow' when roll_value<60 then 'rain' when roll_value<80 then 'mud' when roll_value<90 then 'fog' else 'wind' end;
+  end if;
+end
+$function$;
+revoke all on function fauxlore.weather_for_climate(text,boolean,numeric) from public,anon,authenticated;
+
+create or replace function fauxlore.refresh_province_weather(year_value integer,turn_value integer)
+returns void language plpgsql security definer set search_path='' as $function$
+begin
+  with regional_rolls as (
+    select floor((p.center->>0)::numeric/500) cell_x,floor((p.center->>1)::numeric/500) cell_y,random()*100 regional_roll
+    from fauxlore.provinces p group by 1,2
+  ), rolls as (
+    select p.id,coalesce(c.name,'Умеренный') climate_name,
+      regional_rolls.regional_roll*.75+random()*100*.25 roll_value
+    from fauxlore.provinces p
+    left join fauxlore.province_values pv on pv.province_id=p.id and pv.layer='climate'
+    left join fauxlore.map_categories c on c.layer='climate' and c.id=pv.category_id
+    join regional_rolls on regional_rolls.cell_x=floor((p.center->>0)::numeric/500)
+      and regional_rolls.cell_y=floor((p.center->>1)::numeric/500)
+  )
+  insert into fauxlore.province_weather(province_id,weather,roll,year,turn)
+    select id,fauxlore.weather_for_climate(climate_name,mod(turn_value,2)=1,roll_value::numeric),roll_value,year_value,turn_value from rolls
+  on conflict(province_id) do update set weather=excluded.weather,roll=excluded.roll,year=excluded.year,turn=excluded.turn;
+  return;
+end
+$function$;
+revoke all on function fauxlore.refresh_province_weather(integer,integer) from public,anon,authenticated;
+
+create or replace function fauxlore.advance_weather_on_calendar() returns trigger
+language plpgsql security definer set search_path='' as $function$
+begin
+  perform fauxlore.refresh_province_weather(new.year,new.turn);
+  return new;
+end
+$function$;
+revoke all on function fauxlore.advance_weather_on_calendar() from public,anon,authenticated;
+drop trigger if exists zzzzzza_refresh_province_weather on fauxlore.game_calendar;
+create trigger zzzzzza_refresh_province_weather after update of year,turn on fauxlore.game_calendar
+for each row when (new.year is distinct from old.year or new.turn is distinct from old.turn)
+execute function fauxlore.advance_weather_on_calendar();
+
+create or replace function fauxlore.military_road_factor(x_value double precision,y_value double precision)
+returns numeric language plpgsql stable security definer set search_path='' as $function$
+declare road_row record; segment_value jsonb; i integer; ax double precision; ay double precision; bx double precision; by_value double precision;
+  dx double precision; dy double precision; t double precision; distance_value double precision; best numeric:=1;
+begin
+  for road_row in select type,segments from fauxlore.map_roads loop
+    for segment_value in select value from jsonb_array_elements(road_row.segments) loop
+      if jsonb_array_length(segment_value)<2 then continue; end if;
+      for i in 0..jsonb_array_length(segment_value)-2 loop
+        ax:=(segment_value->i->>0)::double precision; ay:=(segment_value->i->>1)::double precision;
+        bx:=(segment_value->(i+1)->>0)::double precision; by_value:=(segment_value->(i+1)->>1)::double precision;
+        dx:=bx-ax; dy:=by_value-ay;
+        if dx*dx+dy*dy=0 then t:=0; else t:=greatest(0,least(1,((x_value-ax)*dx+(y_value-ay)*dy)/(dx*dx+dy*dy))); end if;
+        distance_value:=sqrt((x_value-(ax+t*dx))^2+(y_value-(ay+t*dy))^2);
+        if distance_value<=3 then
+          best:=least(best,case road_row.type when 'trail' then .90 when 'highway' then .80 else .70 end);
+        end if;
+      end loop;
+    end loop;
+  end loop;
+  return best;
+end
+$function$;
+revoke all on function fauxlore.military_road_factor(double precision,double precision) from public,anon,authenticated;
+
+create or replace function fauxlore.military_movement_api(action text,formation_key bigint,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; formation_row fauxlore.military_formations; current_calendar fauxlore.game_calendar;
+  route_value jsonb:=payload->'route'; route_point jsonb; province_row fauxlore.provinces; previous_province integer;
+  region_value jsonb; x_value numeric; y_value numeric; road_value numeric; owner_id integer; occupier_id integer; i integer;
+begin
+  actor:=fauxlore.current_account();
+  select * into formation_row from fauxlore.military_formations where id=formation_key and active for update;
+  if not found or formation_row.domain<>'land' then raise sqlstate '22023' using message='Сухопутная армия не найдена'; end if;
+  if actor.role<>'admin' and not exists(select 1 from fauxlore.account_states where account_id=actor.id and state_id=formation_row.state_id) then
+    raise sqlstate '42501' using message='Нет доступа к этой армии';
+  end if;
+  if action='cancel' then
+    delete from fauxlore.military_movement_orders where military_movement_orders.formation_id=formation_key;
+    return jsonb_build_object('cancelled',true,'formation_id',formation_key);
+  elsif action<>'set_order' then
+    raise sqlstate '22023' using message='Неизвестное действие движения армии';
+  end if;
+  if jsonb_typeof(route_value) is distinct from 'array' or jsonb_array_length(route_value)<2 or jsonb_array_length(route_value)>5000 then
+    raise sqlstate '22023' using message='Маршрут должен содержать от 2 до 5000 точек'; end if;
+  select * into current_calendar from fauxlore.game_calendar where singleton=true;
+  select value_json into region_value from fauxlore._settings where key='region';
+  previous_province:=formation_row.province_id;
+  for i in 0..jsonb_array_length(route_value)-1 loop
+    route_point:=route_value->i;
+    if jsonb_typeof(route_point) is distinct from 'object' or jsonb_typeof(route_point->'x') is distinct from 'number'
+       or jsonb_typeof(route_point->'y') is distinct from 'number' or jsonb_typeof(route_point->'province_id') is distinct from 'number' then
+      raise sqlstate '22023' using message='Некорректная точка маршрута'; end if;
+    x_value:=(route_point->>'x')::numeric;y_value:=(route_point->>'y')::numeric;
+    if x_value<(region_value->>0)::numeric or y_value<(region_value->>1)::numeric
+       or x_value>=(region_value->>2)::numeric or y_value>=(region_value->>3)::numeric then
+      raise sqlstate '22023' using message='Точка маршрута находится вне игровой области'; end if;
+    select * into province_row from fauxlore.provinces where id=(route_point->>'province_id')::integer and kind='land';
+    if not found or x_value<(province_row.bbox->>0)::numeric or x_value>=(province_row.bbox->>2)::numeric
+       or y_value<(province_row.bbox->>1)::numeric or y_value>=(province_row.bbox->>3)::numeric then
+      raise sqlstate '22023' using message='Координаты должны находиться внутри сухопутной провинции'; end if;
+    if i=0 then
+      if province_row.id<>formation_row.province_id or abs(x_value-formation_row.position_x)>1 or abs(y_value-formation_row.position_y)>1 then
+        raise sqlstate '22023' using message='Маршрут должен начинаться у текущего положения армии'; end if;
+    elsif previous_province<>province_row.id and not exists(
+      select 1 from fauxlore.map_adjacency graph
+      cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->previous_province::text,'[]'::jsonb)) neighbor(value)
+      where graph.singleton and neighbor.value::integer=province_row.id) then
+      raise sqlstate '22023' using message='Маршрут перескакивает через соседнюю провинцию';
+    end if;
+    select pv.category_id into owner_id from fauxlore.province_values pv where pv.province_id=province_row.id and pv.layer='states';
+    select c.id into occupier_id from fauxlore.map_categories c where c.layer='states' and lower(c.name)=lower(province_row.occupation);
+    if coalesce(occupier_id,owner_id) is not null and coalesce(occupier_id,owner_id)<>formation_row.state_id
+       and not exists(select 1 from fauxlore.military_wars w where w.active and
+         ((w.attacker_id=formation_row.state_id and w.defender_id=coalesce(occupier_id,owner_id)) or
+          (w.defender_id=formation_row.state_id and w.attacker_id=coalesce(occupier_id,owner_id))))
+       and not exists(select 1 from fauxlore.military_diplomacy d where d.kind='passage' and d.status='accepted' and
+         ((d.from_state_id=formation_row.state_id and d.to_state_id=coalesce(occupier_id,owner_id)) or
+          (d.to_state_id=formation_row.state_id and d.from_state_id=coalesce(occupier_id,owner_id)))) then
+      raise sqlstate '42501' using message='Нет права прохода через провинцию «'||province_row.name||'»';
+    end if;
+    road_value:=fauxlore.military_road_factor(x_value::double precision,y_value::double precision);
+    if province_row.terrain_type='high_mountains' and road_value>=1 then raise sqlstate '22023' using message='Маршрут пересекает непроходимые высокие горы без перевала'; end if;
+    route_value:=jsonb_set(route_value,array[i::text],route_point||jsonb_build_object('road_factor',road_value));
+    previous_province:=province_row.id;
+  end loop;
+  if route_value->0->>'province_id'<>formation_row.province_id::text then raise sqlstate '22023' using message='Начальная провинция маршрута изменилась'; end if;
+  insert into fauxlore.military_movement_orders(formation_id,state_id,route,next_index,segment_progress,issued_by,issued_year,issued_turn)
+    values(formation_key,formation_row.state_id,route_value,1,0,actor.id,current_calendar.year,current_calendar.turn)
+  on conflict(formation_id) do update set state_id=excluded.state_id,route=excluded.route,next_index=1,segment_progress=0,
+    issued_by=excluded.issued_by,issued_year=excluded.issued_year,issued_turn=excluded.issued_turn,created_at=now();
+  return jsonb_build_object('formation_id',formation_key,'route_points',jsonb_array_length(route_value),'issued_year',current_calendar.year,'issued_turn',current_calendar.turn);
+end
+$function$;
+revoke all on function fauxlore.military_movement_api(text,bigint,jsonb) from public,anon;
+grant execute on function fauxlore.military_movement_api(text,bigint,jsonb) to authenticated;
+
+create or replace function public.military_movement_api(action text,formation_key bigint,payload jsonb default '{}'::jsonb)
+returns jsonb language sql security invoker set search_path='' as $function$
+  select fauxlore.military_movement_api(action,formation_key,payload)
+$function$;
+revoke all on function public.military_movement_api(text,bigint,jsonb) from public,anon;
+grant execute on function public.military_movement_api(text,bigint,jsonb) to authenticated;
+
+create or replace function fauxlore.resolve_military_movement(year_value integer,turn_value integer)
+returns integer language plpgsql security definer set search_path='' as $function$
+declare order_row fauxlore.military_movement_orders; formation_row fauxlore.military_formations; point_value jsonb; province_row fauxlore.provinces;
+  idx integer; count_points integer; budget numeric; base_budget numeric; terrain_factor numeric; weather_factor numeric; road_factor numeric;
+  segment_length numeric; remaining_length numeric; segment_cost numeric; fraction_value numeric; start_x numeric; start_y numeric; end_x numeric; end_y numeric;
+  moved_count integer:=0; maneuver_level integer;
+begin
+  base_budget:=case when mod(turn_value,2)=1 then 800 else 400 end;
+  for order_row in select * from fauxlore.military_movement_orders order by formation_id for update loop
+    select * into formation_row from fauxlore.military_formations where id=order_row.formation_id and active for update;
+    if not found then delete from fauxlore.military_movement_orders where formation_id=order_row.formation_id; continue; end if;
+    budget:=base_budget;
+    select least(6,greatest(0,coalesce((l.skills->>'Маневренность')::integer,0))) into maneuver_level
+      from fauxlore.military_leaders l where l.id=formation_row.leader_id and l.status='active';
+    budget:=budget*(1+floor(coalesce(maneuver_level,0)/2)*.10);
+    idx:=order_row.next_index;count_points:=jsonb_array_length(order_row.route);
+    while idx<count_points and budget>0 loop
+      point_value:=order_row.route->idx;
+      end_x:=(point_value->>'x')::numeric;end_y:=(point_value->>'y')::numeric;
+      start_x:=formation_row.position_x;start_y:=formation_row.position_y;
+      segment_length:=sqrt((end_x-start_x)^2+(end_y-start_y)^2);
+      if segment_length<.0001 then
+        formation_row.position_x:=end_x;formation_row.position_y:=end_y;formation_row.province_id:=(point_value->>'province_id')::integer;idx:=idx+1;continue;
+      end if;
+      select * into province_row from fauxlore.provinces where id=(point_value->>'province_id')::integer;
+      terrain_factor:=case province_row.terrain_type when 'forest' then 1.25 when 'hills' then 1.5 when 'marsh' then 2 when 'mountains' then 2.5 when 'high_mountains' then 4 else 1 end;
+      select case weather when 'rain' then 1.2 when 'heavy_rain' then 1.5 when 'mud' then 1.5 when 'snow' then 1.5 when 'thaw' then 1.2 when 'wind' then 1.05 when 'heat' then 1.15 when 'storm' then 2 else 1 end
+        into weather_factor from fauxlore.province_weather where province_id=province_row.id and year=year_value and turn=turn_value;
+      weather_factor:=coalesce(weather_factor,1);
+      road_factor:=coalesce((point_value->>'road_factor')::numeric,1);
+      remaining_length:=segment_length;
+      segment_cost:=remaining_length*terrain_factor*weather_factor*road_factor;
+      if province_row.terrain_type='high_mountains' and road_factor>=1 then budget:=0;exit; end if;
+      if segment_cost<=budget then
+        budget:=budget-segment_cost;formation_row.position_x:=end_x;formation_row.position_y:=end_y;
+        formation_row.province_id:=(point_value->>'province_id')::integer;order_row.segment_progress:=0;idx:=idx+1;
+      else
+        fraction_value:=budget/(terrain_factor*weather_factor*road_factor);
+        formation_row.position_x:=start_x+(end_x-start_x)*(fraction_value/segment_length);
+        formation_row.position_y:=start_y+(end_y-start_y)*(fraction_value/segment_length);
+        order_row.segment_progress:=0;budget:=0;
+      end if;
+    end loop;
+    update fauxlore.military_formations set province_id=formation_row.province_id,position_x=formation_row.position_x,position_y=formation_row.position_y where id=formation_row.id;
+    if idx>=count_points then delete from fauxlore.military_movement_orders where formation_id=order_row.formation_id;
+    else update fauxlore.military_movement_orders set next_index=idx,segment_progress=order_row.segment_progress where formation_id=order_row.formation_id; end if;
+    moved_count:=moved_count+1;
+  end loop;
+  return moved_count;
+end
+$function$;
+revoke all on function fauxlore.resolve_military_movement(integer,integer) from public,anon,authenticated;
+
+-- Create initial weather state for the active year and turn.
+do $$ declare cal fauxlore.game_calendar; begin select * into cal from fauxlore.game_calendar where singleton=true; perform fauxlore.refresh_province_weather(cal.year,cal.turn); end $$;
+
+-- Add the movement phase before the established economic phase inside the atomic turn.
+do $$ declare fn text; marker text; replacement text; begin
+  fn:=replace(pg_get_functiondef('fauxlore.turn_api(text,text,jsonb,uuid)'::regprocedure),chr(13),'');
+  marker:='select config into cfg from fauxlore.economy_parameters where singleton=true for share;';
+  replacement:=marker||E'\n  perform fauxlore.resolve_military_movement(calendar_row.year,calendar_row.turn);';
+  if position(marker in fn)=0 then raise exception 'Military movement phase insertion point missing from turn_api'; end if;
+  execute replace(fn,marker,replacement);
+end $$;
+
+-- Publish the army's exact coordinate and current route only inside the existing fog-of-war result.
+do $$ declare fn text; old_fragment text; new_fragment text; begin
+  fn:=replace(pg_get_functiondef('public.military_map_api()'::regprocedure),chr(13),'');
+  old_fragment:='''province_name'',p.name,''x'',(p.center->>0)::numeric,''y'',(p.center->>1)::numeric,';
+  new_fragment:='''province_name'',p.name,''x'',f.position_x,''y'',f.position_y,'||
+    '''movement_order'',(select jsonb_build_object(''route'',mo.route,''next_index'',mo.next_index,''segment_progress'',mo.segment_progress) from fauxlore.military_movement_orders mo where mo.formation_id=f.id),';
+  if position(old_fragment in fn)=0 then raise exception 'Military map coordinate insertion point missing'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end $$;
+
+-- Coordinate and queued-movement state must be included in the administrator's reversible test turn.
+do $$ declare fn text; old_fragment text; new_fragment text; begin
+  fn:=replace(pg_get_functiondef('fauxlore.turn_snapshot_payload()'::regprocedure),chr(13),'');
+  old_fragment:='''game_calendar'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.game_calendar x)';
+  new_fragment:=old_fragment||','||E'\n    '||'''military_formations'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.military_formations x),'||E'\n    '||
+    '''military_movement_orders'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.military_movement_orders x),'||E'\n    '||
+    '''province_weather'',(select coalesce(jsonb_agg(to_jsonb(x) order by to_jsonb(x)::text),''[]'') from fauxlore.province_weather x)';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn snapshot payload extension point missing'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end $$;
+
+do $$ declare fn text; old_fragment text; new_fragment text; begin
+  fn:=replace(pg_get_functiondef('fauxlore.test_turn_api(text,text,jsonb,uuid)'::regprocedure),chr(13),'');
+  old_fragment:='''game_calendar'',(select coalesce(jsonb_agg(to_jsonb(x),''[]'') from fauxlore.game_calendar x)';
+  -- The capture query uses a different aggregate shape from turn_snapshot_payload; match the exact checked-in expression.
+  old_fragment:='''game_calendar'',(select coalesce(jsonb_agg(to_jsonb(x)),''[]'') from fauxlore.game_calendar x)';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn before-payload extension point missing'; end if;
+  new_fragment:=old_fragment||','||E'\n      '||'''military_formations'',(select coalesce(jsonb_agg(to_jsonb(x)),''[]'') from fauxlore.military_formations x),'||E'\n      '||
+    '''military_movement_orders'',(select coalesce(jsonb_agg(to_jsonb(x)),''[]'') from fauxlore.military_movement_orders x),'||E'\n      '||
+    '''province_weather'',(select coalesce(jsonb_agg(to_jsonb(x)),''[]'') from fauxlore.province_weather x)';
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='fauxlore.state_budget_ledger,fauxlore.trade_settlements,fauxlore.trade_market_settlements,fauxlore.trade_interzone_settlements,fauxlore.turn_economy_reports,fauxlore.game_calendar in access exclusive mode;';
+  new_fragment:='fauxlore.state_budget_ledger,fauxlore.trade_settlements,fauxlore.trade_market_settlements,fauxlore.trade_interzone_settlements,fauxlore.turn_economy_reports,fauxlore.game_calendar,'||
+    'fauxlore.military_formations,fauxlore.military_movement_orders,fauxlore.province_weather in access exclusive mode;';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn rollback lock extension point missing'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='delete from fauxlore.notifications where true; delete from fauxlore.state_birth_events where true;';
+  new_fragment:='delete from fauxlore.military_movement_orders where true; delete from fauxlore.province_weather where true;'||E'\n    '||old_fragment;
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn rollback delete extension point missing'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='''game_calendar'']) loop execute format(''alter table fauxlore.%I disable trigger user'',t);';
+  new_fragment:='''game_calendar'',''military_formations'',''military_movement_orders'',''province_weather'']) loop execute format(''alter table fauxlore.%I disable trigger user'',t);';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn trigger-suppression extension point missing'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='''game_calendar'']) loop execute format(''alter table fauxlore.%I enable trigger user'',t);';
+  new_fragment:='''game_calendar'',''military_formations'',''military_movement_orders'',''province_weather'']) loop execute format(''alter table fauxlore.%I enable trigger user'',t);';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn trigger-restoration extension point missing'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='if t=''state_profiles'' or t=''game_calendar'' then';
+  new_fragment:='if t=''military_formations'' then'||E'\n        '||
+    'execute format(''update fauxlore.%1$I target set province_id=saved.province_id,position_x=saved.position_x,position_y=saved.position_y from jsonb_populate_recordset(null::fauxlore.%1$I,$1) saved where target.id=saved.id'',t) using snap_row;'||E'\n      '||
+    'elsif t=''state_profiles'' or t=''game_calendar'' then';
+  if position(old_fragment in fn)=0 then raise exception 'Test-turn formation restore extension point missing'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end $$;
+
+create trigger military_movement_orders_live_revision after insert or update or delete on fauxlore.military_movement_orders
+  for each statement execute function fauxlore.bump_live_revision();
+create trigger province_weather_live_revision after insert or update or delete on fauxlore.province_weather
+  for each statement execute function fauxlore.bump_live_revision();
+
+-- Weather is prepared for the next calendar state; movement resolves before taxation at the start of each turn.
+select pg_notify('pgrst','reload schema');
+-- Naval coordinate movement, route forecasts and actionable stop reasons.
+alter table fauxlore.military_movement_orders
+  add column if not exists stop_reason text,
+  add column if not exists resolved_year integer,
+  add column if not exists resolved_turn integer;
+alter table fauxlore.province_weather
+  add column if not exists wind_degrees smallint not null default 0
+    check(wind_degrees between 0 and 359);
+update fauxlore.province_weather set wind_degrees=floor(random()*360)::smallint;
+
+create or replace function fauxlore.military_port_accessible(state_value integer,sea_province integer)
+returns boolean language sql stable security definer set search_path='' as $function$
+  select exists(
+    select 1 from fauxlore.map_markers marker
+    join fauxlore.map_adjacency graph on graph.singleton
+    cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->sea_province::text,'[]'::jsonb)) near_land(value)
+    join fauxlore.provinces land on land.id=near_land.value::integer and land.kind='land'
+    left join fauxlore.province_values owner_value on owner_value.province_id=land.id and owner_value.layer='states'
+    left join fauxlore.map_categories owner_state on owner_state.layer='states' and owner_state.id=owner_value.category_id
+    left join fauxlore.map_categories occupier on occupier.layer='states' and lower(occupier.name)=lower(land.occupation)
+    where marker.type='port' and marker.province_id=sea_province
+      and (marker.state_id=state_value or coalesce(occupier.id,owner_state.id)=state_value
+        or exists(select 1 from fauxlore.military_diplomacy passage
+          where passage.kind='passage' and passage.status='accepted'
+            and ((passage.from_state_id=state_value and passage.to_state_id=coalesce(occupier.id,owner_state.id))
+              or (passage.to_state_id=state_value and passage.from_state_id=coalesce(occupier.id,owner_state.id)))))
+  )
+$function$;
+revoke all on function fauxlore.military_port_accessible(integer,integer) from public,anon,authenticated;
+
+create or replace function fauxlore.military_open_sea(sea_province integer)
+returns boolean language sql stable security definer set search_path='' as $function$
+  select p.kind='sea' and not exists(
+    select 1 from fauxlore.map_adjacency graph
+    cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->p.id::text,'[]'::jsonb)) n(value)
+    join fauxlore.provinces land on land.id=n.value::integer and land.kind='land'
+    where graph.singleton
+  ) from fauxlore.provinces p where p.id=sea_province
+$function$;
+revoke all on function fauxlore.military_open_sea(integer) from public,anon,authenticated;
+
+create or replace function fauxlore.refresh_province_weather(year_value integer,turn_value integer)
+returns void language plpgsql security definer set search_path='' as $function$
+begin
+  with regional_rolls as (
+    select floor((p.center->>0)::numeric/500) cell_x,floor((p.center->>1)::numeric/500) cell_y,
+      random()*100 regional_roll,random()*360 regional_wind
+    from fauxlore.provinces p group by 1,2
+  ), rolls as (
+    select p.id,coalesce(c.name,'Умеренный') climate_name,
+      regional_rolls.regional_roll*.75+random()*100*.25 roll_value,
+      mod(round(regional_rolls.regional_wind+(random()*60-30)+360)::integer,360)::smallint wind_value
+    from fauxlore.provinces p
+    left join fauxlore.province_values pv on pv.province_id=p.id and pv.layer='climate'
+    left join fauxlore.map_categories c on c.layer='climate' and c.id=pv.category_id
+    join regional_rolls on regional_rolls.cell_x=floor((p.center->>0)::numeric/500)
+      and regional_rolls.cell_y=floor((p.center->>1)::numeric/500)
+  )
+  insert into fauxlore.province_weather(province_id,weather,roll,year,turn,wind_degrees)
+    select id,fauxlore.weather_for_climate(climate_name,mod(turn_value,2)=1,roll_value::numeric),
+      roll_value,year_value,turn_value,wind_value from rolls
+  on conflict(province_id) do update set weather=excluded.weather,roll=excluded.roll,year=excluded.year,
+    turn=excluded.turn,wind_degrees=excluded.wind_degrees;
+end
+$function$;
+revoke all on function fauxlore.refresh_province_weather(integer,integer) from public,anon,authenticated;
+do $$ declare cal fauxlore.game_calendar; begin
+  select * into cal from fauxlore.game_calendar where singleton=true;
+  perform fauxlore.refresh_province_weather(cal.year,cal.turn);
+end $$;
+
+-- Newly created formations start at the geometric centre of their base province.
+create or replace function fauxlore.set_military_formation_position()
+returns trigger language plpgsql security definer set search_path='' as $function$
+declare center_value jsonb;
+begin
+  if new.position_x is null or new.position_y is null then
+    select center into center_value from fauxlore.provinces where id=new.province_id;
+    if not found then raise sqlstate '22023' using message='Провинция формирования не найдена'; end if;
+    new.position_x:=coalesce(new.position_x,(center_value->>0)::double precision);
+    new.position_y:=coalesce(new.position_y,(center_value->>1)::double precision);
+  end if;
+  return new;
+end
+$function$;
+revoke all on function fauxlore.set_military_formation_position() from public,anon,authenticated;
+drop trigger if exists military_formations_set_position on fauxlore.military_formations;
+create trigger military_formations_set_position before insert on fauxlore.military_formations
+  for each row execute function fauxlore.set_military_formation_position();
+
+create or replace function fauxlore.military_movement_api(action text,formation_key bigint,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; formation_row fauxlore.military_formations; current_calendar fauxlore.game_calendar;
+  route_value jsonb:=payload->'route'; route_point jsonb; province_row fauxlore.provinces; previous_province integer;
+  region_value jsonb; x_value numeric; y_value numeric; road_value numeric; owner_id integer; occupier_id integer; i integer;
+  expected_kind text; destination_id integer; open_sea boolean;
+begin
+  actor:=fauxlore.current_account();
+  select * into formation_row from fauxlore.military_formations where id=formation_key and active for update;
+  if not found or formation_row.domain not in ('land','naval') then raise sqlstate '22023' using message='Формирование не найдено'; end if;
+  if actor.role<>'admin' and not exists(select 1 from fauxlore.account_states where account_id=actor.id and state_id=formation_row.state_id) then
+    raise sqlstate '42501' using message='Нет доступа к этому формированию';
+  end if;
+  if action='cancel' then
+    if formation_row.domain='naval' and not fauxlore.military_port_accessible(formation_row.state_id,formation_row.province_id) then
+      raise sqlstate '22023' using message='Флот в море: задайте курс до доступного порта, чтобы завершить плавание';
+    end if;
+    delete from fauxlore.military_movement_orders where military_movement_orders.formation_id=formation_key;
+    return jsonb_build_object('cancelled',true,'formation_id',formation_key);
+  elsif action<>'set_order' then raise sqlstate '22023' using message='Неизвестное действие движения'; end if;
+  if jsonb_typeof(route_value) is distinct from 'array' or jsonb_array_length(route_value)<2 or jsonb_array_length(route_value)>5000 then
+    raise sqlstate '22023' using message='Маршрут должен содержать от 2 до 5000 точек'; end if;
+  select * into current_calendar from fauxlore.game_calendar where singleton=true;
+  select value_json into region_value from fauxlore._settings where key='region';
+  expected_kind:=case formation_row.domain when 'naval' then 'sea' else 'land' end;
+  if formation_row.domain='naval' and not exists(select 1 from fauxlore.military_movement_orders where formation_id=formation_key)
+     and not fauxlore.military_port_accessible(formation_row.state_id,formation_row.province_id) then
+    raise sqlstate '22023' using message='Флотилия должна начинать плавание в доступном порту';
+  end if;
+  previous_province:=formation_row.province_id;
+  for i in 0..jsonb_array_length(route_value)-1 loop
+    route_point:=route_value->i;
+    if jsonb_typeof(route_point) is distinct from 'object' or jsonb_typeof(route_point->'x') is distinct from 'number'
+       or jsonb_typeof(route_point->'y') is distinct from 'number' or jsonb_typeof(route_point->'province_id') is distinct from 'number' then
+      raise sqlstate '22023' using message='Некорректная точка маршрута'; end if;
+    x_value:=(route_point->>'x')::numeric;y_value:=(route_point->>'y')::numeric;
+    if x_value<(region_value->>0)::numeric or y_value<(region_value->>1)::numeric
+       or x_value>=(region_value->>2)::numeric or y_value>=(region_value->>3)::numeric then
+      raise sqlstate '22023' using message='Точка маршрута находится вне игровой области'; end if;
+    select * into province_row from fauxlore.provinces where id=(route_point->>'province_id')::integer and kind=expected_kind;
+    if not found or x_value<(province_row.bbox->>0)::numeric or x_value>=(province_row.bbox->>2)::numeric
+       or y_value<(province_row.bbox->>1)::numeric or y_value>=(province_row.bbox->>3)::numeric then
+      raise sqlstate '22023' using message=case formation_row.domain when 'naval' then 'Маршрут флотилии должен проходить по морю' else 'Координаты должны находиться внутри сухопутной провинции' end; end if;
+    if i=0 then
+      if province_row.id<>formation_row.province_id or abs(x_value-formation_row.position_x)>1 or abs(y_value-formation_row.position_y)>1 then
+        raise sqlstate '22023' using message='Маршрут должен начинаться у текущего положения формирования'; end if;
+    elsif previous_province<>province_row.id and not exists(
+      select 1 from fauxlore.map_adjacency graph
+      cross join lateral jsonb_array_elements_text(coalesce(graph.neighbors->previous_province::text,'[]'::jsonb)) neighbor(value)
+      where graph.singleton and neighbor.value::integer=province_row.id) then
+      raise sqlstate '22023' using message='Маршрут перескакивает через несоседнюю провинцию';
+    end if;
+    if formation_row.domain='land' then
+      select pv.category_id into owner_id from fauxlore.province_values pv where pv.province_id=province_row.id and pv.layer='states';
+      select c.id into occupier_id from fauxlore.map_categories c where c.layer='states' and lower(c.name)=lower(province_row.occupation);
+      if coalesce(occupier_id,owner_id) is not null and coalesce(occupier_id,owner_id)<>formation_row.state_id
+         and not exists(select 1 from fauxlore.military_wars w where w.active and
+           ((w.attacker_id=formation_row.state_id and w.defender_id=coalesce(occupier_id,owner_id)) or
+            (w.defender_id=formation_row.state_id and w.attacker_id=coalesce(occupier_id,owner_id))))
+         and not exists(select 1 from fauxlore.military_diplomacy d where d.kind='passage' and d.status='accepted' and
+           ((d.from_state_id=formation_row.state_id and d.to_state_id=coalesce(occupier_id,owner_id)) or
+            (d.to_state_id=formation_row.state_id and d.from_state_id=coalesce(occupier_id,owner_id)))) then
+        raise sqlstate '42501' using message='Нет права прохода через провинцию «'||province_row.name||'»';
+      end if;
+      road_value:=fauxlore.military_road_factor(x_value::double precision,y_value::double precision);
+      if province_row.terrain_type='high_mountains' and road_value>=1 then raise sqlstate '22023' using message='Маршрут пересекает непроходимые высокие горы без перевала'; end if;
+    else
+      open_sea:=fauxlore.military_open_sea(province_row.id);
+      if open_sea and exists(select 1 from fauxlore.military_formation_units fu
+        join fauxlore.military_unit_catalog u on u.id=fu.unit_id where fu.formation_id=formation_key and u.name='Галера' and fu.quantity>0) then
+        raise sqlstate '22023' using message='Галера не может пересекать открытое море';
+      end if;
+      road_value:=1;
+    end if;
+    route_value:=jsonb_set(route_value,array[i::text],route_point||jsonb_build_object('road_factor',road_value));
+    previous_province:=province_row.id;
+  end loop;
+  if route_value->0->>'province_id'<>formation_row.province_id::text then raise sqlstate '22023' using message='Начальная провинция маршрута изменилась'; end if;
+  if formation_row.domain='naval' then
+    destination_id:=(route_value->(jsonb_array_length(route_value)-1)->>'province_id')::integer;
+    if not fauxlore.military_port_accessible(formation_row.state_id,destination_id) then
+      raise sqlstate '22023' using message='Маршрут флотилии должен завершаться в порту с правом базирования';
+    end if;
+  end if;
+  insert into fauxlore.military_movement_orders(formation_id,state_id,route,next_index,segment_progress,issued_by,issued_year,issued_turn,stop_reason,resolved_year,resolved_turn)
+    values(formation_key,formation_row.state_id,route_value,1,0,actor.id,current_calendar.year,current_calendar.turn,null,null,null)
+  on conflict(formation_id) do update set state_id=excluded.state_id,route=excluded.route,next_index=1,segment_progress=0,
+    issued_by=excluded.issued_by,issued_year=excluded.issued_year,issued_turn=excluded.issued_turn,stop_reason=null,resolved_year=null,resolved_turn=null,created_at=now();
+  return jsonb_build_object('formation_id',formation_key,'route_points',jsonb_array_length(route_value),'issued_year',current_calendar.year,'issued_turn',current_calendar.turn);
+end
+$function$;
+revoke all on function fauxlore.military_movement_api(text,bigint,jsonb) from public,anon;
+grant execute on function fauxlore.military_movement_api(text,bigint,jsonb) to authenticated;
+
+create or replace function fauxlore.resolve_military_movement(year_value integer,turn_value integer)
+returns integer language plpgsql security definer set search_path='' as $function$
+declare order_row fauxlore.military_movement_orders; formation_row fauxlore.military_formations; point_value jsonb; province_row fauxlore.provinces;
+  idx integer; count_points integer; budget numeric; base_budget numeric; terrain_factor numeric; weather_factor numeric; road_factor numeric;
+  segment_length numeric; remaining_length numeric; segment_cost numeric; fraction_value numeric; start_x numeric; start_y numeric; end_x numeric; end_y numeric;
+  moved_count integer:=0; maneuver_level integer; weather_value text; wind_degrees integer; heading_degrees numeric; wind_dot numeric;
+  sea_zones integer; stop_reason_value text; open_sea boolean;
+begin
+  base_budget:=case when mod(turn_value,2)=1 then 800 else 400 end;
+  for order_row in select * from fauxlore.military_movement_orders order by formation_id for update loop
+    select * into formation_row from fauxlore.military_formations where id=order_row.formation_id and active for update;
+    if not found then delete from fauxlore.military_movement_orders where formation_id=order_row.formation_id; continue; end if;
+    budget:=case when formation_row.domain='naval' then case when mod(turn_value,2)=1 then 2000 else 1200 end else base_budget end;
+    select least(6,greatest(0,coalesce((l.skills->>(case when formation_row.domain='naval' then 'Навигация' else 'Маневренность' end))::integer,0))) into maneuver_level
+      from fauxlore.military_leaders l where l.id=formation_row.leader_id and l.status='active';
+    budget:=budget*(1+floor(coalesce(maneuver_level,0)/2)*.10);
+    idx:=order_row.next_index;count_points:=jsonb_array_length(order_row.route);sea_zones:=0;stop_reason_value:=null;
+    while idx<count_points and budget>0 loop
+      point_value:=order_row.route->idx;
+      end_x:=(point_value->>'x')::numeric;end_y:=(point_value->>'y')::numeric;
+      start_x:=formation_row.position_x;start_y:=formation_row.position_y;
+      select * into province_row from fauxlore.provinces where id=(point_value->>'province_id')::integer;
+      if formation_row.domain='naval' and province_row.id<>formation_row.province_id then
+        if sea_zones>=12 then stop_reason_value:='За ход пройдено предельное число морских провинций (12)';exit; end if;
+        sea_zones:=sea_zones+1;
+      end if;
+      segment_length:=sqrt((end_x-start_x)^2+(end_y-start_y)^2);
+      if segment_length<.0001 then
+        formation_row.position_x:=end_x;formation_row.position_y:=end_y;formation_row.province_id:=(point_value->>'province_id')::integer;idx:=idx+1;continue;
+      end if;
+      select weather,wind_degrees into weather_value,wind_degrees from fauxlore.province_weather
+        where province_id=province_row.id and year=year_value and turn=turn_value;
+      if formation_row.domain='naval' then
+        open_sea:=fauxlore.military_open_sea(province_row.id);
+        terrain_factor:=case when open_sea then 3 else 1 end;road_factor:=1;
+        heading_degrees:=degrees(atan2((end_y-start_y)::double precision,(end_x-start_x)::double precision));
+        wind_dot:=cos(radians(heading_degrees-coalesce(wind_degrees,0)));
+        weather_factor:=case weather_value when 'storm' then 2 when 'snow' then 1.25 when 'heavy_rain' then 1.3 when 'rain' then 1.1 else 1 end;
+        if weather_value='wind' then weather_factor:=weather_factor*case when wind_dot>.5 then .8 when wind_dot<-.5 then 1.25 else 1 end; end if;
+        if open_sea and exists(select 1 from fauxlore.military_formation_units fu join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+          where fu.formation_id=formation_row.id and u.name='Галера' and fu.quantity>0) then stop_reason_value:='Галера не может идти по открытому морю';exit; end if;
+      else
+        terrain_factor:=case province_row.terrain_type when 'forest' then 1.25 when 'hills' then 1.5 when 'marsh' then 2 when 'mountains' then 2.5 when 'high_mountains' then 4 else 1 end;
+        weather_factor:=case weather_value when 'rain' then 1.2 when 'heavy_rain' then 1.5 when 'mud' then 1.5 when 'snow' then 1.5 when 'thaw' then 1.2 when 'wind' then 1.05 when 'heat' then 1.15 when 'storm' then 2 else 1 end;
+        road_factor:=coalesce((point_value->>'road_factor')::numeric,1);
+      end if;
+      weather_factor:=coalesce(weather_factor,1);remaining_length:=segment_length;
+      segment_cost:=remaining_length*terrain_factor*weather_factor*road_factor;
+      if formation_row.domain='land' and province_row.terrain_type='high_mountains' and road_factor>=1 then
+        stop_reason_value:='Остановлено перед непроходимыми высокими горами без перевала';budget:=0;exit;
+      end if;
+      if segment_cost<=budget then
+        budget:=budget-segment_cost;formation_row.position_x:=end_x;formation_row.position_y:=end_y;
+        formation_row.province_id:=(point_value->>'province_id')::integer;order_row.segment_progress:=0;idx:=idx+1;
+      else
+        fraction_value:=budget/(terrain_factor*weather_factor*road_factor);
+        formation_row.position_x:=start_x+(end_x-start_x)*(fraction_value/segment_length);
+        formation_row.position_y:=start_y+(end_y-start_y)*(fraction_value/segment_length);
+        order_row.segment_progress:=0;budget:=0;
+        stop_reason_value:='Исчерпана дальность движения на этот ход';
+      end if;
+    end loop;
+    if idx<count_points and stop_reason_value is null and budget<=0 then stop_reason_value:='Исчерпана дальность движения на этот ход'; end if;
+    update fauxlore.military_formations set province_id=formation_row.province_id,position_x=formation_row.position_x,position_y=formation_row.position_y where id=formation_row.id;
+    if idx>=count_points then delete from fauxlore.military_movement_orders where formation_id=order_row.formation_id;
+    else update fauxlore.military_movement_orders set next_index=idx,segment_progress=order_row.segment_progress,
+      stop_reason=coalesce(stop_reason_value,'Маршрут продолжится в следующем ходу'),resolved_year=year_value,resolved_turn=turn_value
+      where formation_id=order_row.formation_id; end if;
+    moved_count:=moved_count+1;
+  end loop;
+  return moved_count;
+end
+$function$;
+revoke all on function fauxlore.resolve_military_movement(integer,integer) from public,anon,authenticated;
+
+-- Return forecast conditions only for provinces inside the existing military fog of war.
+do $$ declare fn text; old_fragment text; new_fragment text; begin
+  fn:=replace(pg_get_functiondef('public.military_map_api()'::regprocedure),chr(13),'');
+  old_fragment:='''movement_order'',(select jsonb_build_object(''route'',mo.route,''next_index'',mo.next_index,''segment_progress'',mo.segment_progress) from fauxlore.military_movement_orders mo where mo.formation_id=f.id),';
+  new_fragment:='''movement_order'',(select jsonb_build_object(''route'',mo.route,''next_index'',mo.next_index,''segment_progress'',mo.segment_progress,''stop_reason'',mo.stop_reason,''resolved_year'',mo.resolved_year,''resolved_turn'',mo.resolved_turn) from fauxlore.military_movement_orders mo where mo.formation_id=f.id),';
+  if position(old_fragment in fn)=0 then raise exception 'Could not extend movement order map payload'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='''leader_name'',leader.name,''units'',coalesce(';
+  new_fragment:='''leader_name'',leader.name,''maneuver_level'',coalesce((leader.skills->>(case when f.domain=''naval'' then ''Навигация'' else ''Маневренность'' end))::integer,0),''is_port'',case when f.domain=''naval'' then fauxlore.military_port_accessible(f.state_id,f.province_id) else false end,''units'',coalesce(';
+  if position(old_fragment in fn)=0 then raise exception 'Could not add movement skills and port state to map payload'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:='''fog_of_war'',not all_visible';
+  new_fragment:='''calendar'',(select jsonb_build_object(''year'',year,''turn'',turn) from fauxlore.game_calendar where singleton),''movement_conditions'',(select coalesce(jsonb_object_agg(p.id::text,jsonb_build_object(''name'',p.name,''kind'',p.kind,''terrain_type'',p.terrain_type,''weather'',w.weather,''wind_degrees'',w.wind_degrees,''open_sea'',case when p.kind=''sea'' then fauxlore.military_open_sea(p.id) else false end,''has_port'',exists(select 1 from fauxlore.map_markers marker where marker.type=''port'' and marker.province_id=p.id))),''{}''::jsonb) from fauxlore.provinces p left join fauxlore.province_weather w on w.province_id=p.id where all_visible or p.id=any(visible_provinces)),''fog_of_war'',not all_visible';
+  if position(old_fragment in fn)=0 then raise exception 'Could not add movement forecast map payload'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end $$;
+
+select pg_notify('pgrst','reload schema');
+
+do $migration$
+declare
+  fn text;
+  old_fragment text;
+  new_fragment text;
+begin
+  fn:=replace(pg_get_functiondef('fauxlore.resolve_military_movement(integer,integer)'::regprocedure),chr(13),'');
+  old_fragment:='select weather,wind_degrees into weather_value,wind_degrees from fauxlore.province_weather'||E'\n        '||
+    'where province_id=province_row.id and year=year_value and turn=turn_value;';
+  new_fragment:='select w.weather,w.wind_degrees into weather_value,wind_degrees from fauxlore.province_weather w'||E'\n        '||
+    'where w.province_id=province_row.id and w.year=year_value and w.turn=turn_value;';
+  if position(old_fragment in fn)=0 then
+    if position(new_fragment in fn)>0 then return; end if;
+    raise exception 'Could not qualify movement weather columns';
+  end if;
+  execute replace(fn,old_fragment,new_fragment);
+end
+$migration$;
+
+select pg_notify('pgrst','reload schema');

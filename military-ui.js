@@ -1,5 +1,5 @@
-import {militaryApi,militiaApi,garrisonApi} from './supabase-api.js?v=garrison-placement-20261026';
-import {renderGarrisonPanel} from './garrison-ui.js?v=garrison-placement-20261026';
+import {militaryApi,militiaApi,garrisonApi} from './supabase-api.js?v=formation-composition-20261027';
+import {renderGarrisonPanel} from './garrison-ui.js?v=military-map-layer-20261027';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=value=>Math.floor(Number(value)||0).toLocaleString('ru-RU');
@@ -13,7 +13,7 @@ let activeMilitaryTab='Обзор';
 
 async function run(host,action,stateId,payload,notify,refresh){
   const buttons=[...host.querySelectorAll('button')];buttons.forEach(button=>button.disabled=true);
-  try{const result=await militaryApi(action,stateId,payload);window.dispatchEvent(new Event('state:resources-changed'));notify?.('Действие выполнено');await refresh();return result;}
+  try{const result=await militaryApi(action,stateId,payload);window.dispatchEvent(new Event('state:resources-changed'));window.dispatchEvent(new Event('map:refresh'));notify?.('Действие выполнено');await refresh();return result;}
   catch(error){notify?.(error.message);buttons.forEach(button=>button.disabled=false);return null;}
 }
 
@@ -34,6 +34,17 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
     const placesFor=domain=>domain==='naval'?ports:ownedCities;
     const upkeepOf=(f,item)=>Math.floor(Number(item.upkeep||0)*Math.max(0,Number(item.quantity)-(item.name==='Копейщик'?Math.min(Number(item.quantity),Number(f.free_upkeep_quantity||0)):0)));
     const regular=data.formations.filter(f=>f.kind==='regular');
+    const compositionControls=f=>{
+      if(f.kind!=='regular')return '';
+      const unitOptions=f.units.map(unit=>`<option value="${Number(unit.unit_id)}" data-quantity="${Number(unit.quantity)}">${escape(unit.name)} · ${fmt(unit.quantity)}</option>`).join('');
+      const targets=regular.filter(other=>Number(other.id)!==Number(f.id)&&other.domain===f.domain&&Number(other.province_id)===Number(f.province_id));
+      const targetOptions=targets.map(other=>`<option value="${Number(other.id)}">${escape(other.name)}</option>`).join('');
+      if(!f.units.length)return '<details class="military-composition-details"><summary>Управление составом</summary><p class="hint">В формировании нет частей.</p></details>';
+      const splitName=`${f.name} — отделение`.slice(0,100);
+      const totalUnits=Number(f.units.reduce((n,u)=>n+Number(u.quantity),0));
+      const splitMax=Math.min(Number(f.units[0].quantity),Math.max(0,totalUnits-1));
+      return `<details class="military-composition-details"><summary>Разделить, перевести или объединить</summary><div class="military-composition-controls"><p class="hint">Передавать состав и объединять можно только с формированиями того же типа в этой же провинции. Флоты в колонизационной миссии временно заблокированы.</p><form class="inline-actions" data-composition-split="${Number(f.id)}" data-total-units="${totalUnits}"><strong>Разделить</strong><select name="unit_id" data-composition-unit aria-label="Части для выделения">${unitOptions}</select><input name="quantity" type="number" min="1" max="${splitMax}" value="1" aria-label="Количество частей для выделения"><input name="name" minlength="2" maxlength="100" required value="${escape(splitName)}" aria-label="Название нового формирования"><button type="submit" ${totalUnits<2?'disabled':''}>Выделить в новое</button></form>${targets.length?`<form class="inline-actions" data-composition-transfer="${Number(f.id)}"><strong>Перевести часть состава</strong><select name="unit_id" data-composition-unit aria-label="Тип передаваемых частей">${unitOptions}</select><input name="quantity" type="number" min="1" max="${Number(f.units[0].quantity)}" value="1" aria-label="Количество передаваемых частей"><select name="target_formation_id" aria-label="Куда перевести части">${targetOptions}</select><button type="submit">Перевести</button></form><form class="inline-actions" data-composition-merge="${Number(f.id)}"><strong>Объединить с</strong><select name="target_formation_id" aria-label="Целевое формирование">${targetOptions}</select><button type="submit">Объединить</button></form>`:'<p class="hint">Для перевода состава или объединения создайте вторую армию или флотилию этого же типа в этой провинции.</p>'}</div></details>`;
+    };
     const leaders=data.leaders,activeLeaders=leaders.filter(l=>l.status==='active');
     const generals=leaders.filter(l=>l.domain==='land').length,admirals=leaders.filter(l=>l.domain==='naval').length;
     const armyUpkeep=data.formations.filter(f=>f.kind==='regular'&&f.domain==='land').reduce((sum,f)=>sum+f.units.reduce((n,u)=>n+upkeepOf(f,u),0),0);
@@ -54,7 +65,7 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
     const overview=`<div class="military-overview"><aside class="military-overview-side"><section class="state-dashboard-card"><h4>Традиции</h4><p>Военные <strong>${fmt(data.traditions?.land)}%</strong></p><p>Морские <strong>${fmt(data.traditions?.naval)}%</strong></p></section><section class="state-dashboard-card"><h4>Рекруты</h4><p>Доступно <strong>${fmt(data.recruits)}</strong></p><p>Лимит <strong>${fmt(data.recruitment?.recruit_limit)}</strong></p><p>Прирост / ход <strong>${fmt(data.recruitment?.recruit_growth)}</strong></p></section><section class="state-dashboard-card"><h4>Полководцы</h4><p>Доступно <strong>${fmt(Math.max(0,Number(data.leader_limit||0)-leaders.length))}</strong></p><p>Лимит <strong>${fmt(data.leader_limit)}</strong></p><p>Генералы <strong>${generals}</strong></p><p>Адмиралы <strong>${admirals}</strong></p></section><section class="state-dashboard-card"><h4>Расходы / ход</h4>${expenseRows}<p>Всего <strong>${money(upkeep)} G</strong></p></section></aside><div class="military-overview-main">${hirePanel}</div></div>`;
     const formationRows=data.formations.map((f,formationIndex)=>{
       const units=f.units.length?f.units:[null],leaderOptions=activeLeaders.filter(l=>l.domain===f.domain).map(l=>`<option value="${l.id}" ${Number(f.leader_id)===Number(l.id)?'selected':''}>${escape(l.name)}</option>`).join('');
-      const heading=`<tr class="military-formation-heading"><th colspan="7"><form class="military-rename-formation" data-rename-formation="${f.id}"><input name="name" maxlength="100" minlength="2" required value="${escape(f.name)}" aria-label="Название формирования"><button type="submit">Сохранить</button></form></th></tr>`;
+      const heading=`<tr class="military-formation-heading"><th colspan="7"><div class="military-formation-heading-content"><form class="military-rename-formation" data-rename-formation="${f.id}"><input name="name" maxlength="100" minlength="2" required value="${escape(f.name)}" aria-label="Название формирования"><button type="submit">Сохранить</button></form>${compositionControls(f)}</div></th></tr>`;
       const separator=formationIndex?'<tr class="military-formation-gap"><td colspan="7"></td></tr>':'';
       return separator+heading+units.map((unit,index)=>`<tr>${index===0?`<td rowspan="${units.length}">${escape(provinceName(f.province_id))}</td><td rowspan="${units.length}">${f.kind==='regular'?`<select data-assign-leader="${f.id}"><option value="">Без полководца</option>${leaderOptions}</select>`:'—'}</td>`:''}<td>${unit?escape(unit.name):'—'}</td><td>${unit?escape(domains[data.catalog.find(c=>Number(c.id)===Number(unit.unit_id))?.domain]||'Часть'):'—'}</td><td>${unit?fmt(unit.quantity):'—'}</td><td>${unit?fmt(unit.upkeep):'—'}${unit?' G':''}</td><td>${unit?fmt(f.kind==='mercenary'&&index===0?Number(data.mercenaries.find(g=>Number(g.id)===Number(f.mercenary_group_id))?.price||0):upkeepOf(f,unit)):'—'}${unit?' G':''}</td></tr>`).join('');
     }).join('');
@@ -88,6 +99,28 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
       domainSelect?.addEventListener('change',updateCreateLocations);updateCreateLocations();
       createForm?.addEventListener('submit',event=>{event.preventDefault();const body=Object.fromEntries(new FormData(createForm));void run(host,'create_formation',stateId,{domain:body.domain,name:body.name,province_id:Number(body.province_id)},notify,refresh);});
       host.querySelectorAll('[data-rename-formation]').forEach(form=>form.addEventListener('submit',event=>{event.preventDefault();void run(host,'rename_formation',stateId,{formation_id:Number(form.dataset.renameFormation),name:form.elements.name.value},notify,refresh);}));
+      host.querySelectorAll('[data-composition-unit]').forEach(select=>select.addEventListener('change',()=>{
+        const option=select.selectedOptions[0],quantity=select.form?.elements.quantity;
+        if(!quantity)return;
+        const selectedLimit=Number(option?.dataset.quantity)||0;
+        const isSplit=Boolean(select.form.matches('[data-composition-split]'));
+        const total=Number(select.form.dataset.totalUnits)||selectedLimit;
+        quantity.max=String(isSplit?Math.min(selectedLimit,Math.max(0,total-1)):selectedLimit);
+        if(Number(quantity.value)>Number(quantity.max))quantity.value=quantity.max;
+        if(Number(quantity.value)<1&&Number(quantity.max)>=1)quantity.value='1';
+      }));
+      host.querySelectorAll('[data-composition-split]').forEach(form=>form.addEventListener('submit',event=>{
+        event.preventDefault();const body=Object.fromEntries(new FormData(form));
+        void run(host,'split_formation',stateId,{formation_id:Number(form.dataset.compositionSplit),name:body.name,units:[{unit_id:Number(body.unit_id),quantity:Number(body.quantity)}]},notify,refresh);
+      }));
+      host.querySelectorAll('[data-composition-transfer]').forEach(form=>form.addEventListener('submit',event=>{
+        event.preventDefault();const body=Object.fromEntries(new FormData(form));
+        void run(host,'transfer_units',stateId,{source_formation_id:Number(form.dataset.compositionTransfer),target_formation_id:Number(body.target_formation_id),unit_id:Number(body.unit_id),quantity:Number(body.quantity)},notify,refresh);
+      }));
+      host.querySelectorAll('[data-composition-merge]').forEach(form=>form.addEventListener('submit',event=>{
+        event.preventDefault();const body=Object.fromEntries(new FormData(form));
+        void run(host,'merge_formations',stateId,{source_formation_id:Number(form.dataset.compositionMerge),target_formation_id:Number(body.target_formation_id)},notify,refresh);
+      }));
       host.querySelectorAll('[data-assign-leader]').forEach(select=>select.onchange=()=>void run(host,'assign_leader',stateId,{formation_id:Number(select.dataset.assignLeader),leader_id:select.value||null},notify,refresh));
     }
     if(activeMilitaryTab==='Полководцы'){

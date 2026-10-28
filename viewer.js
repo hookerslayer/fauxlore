@@ -8,6 +8,7 @@ const html = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 const canvas = $('map'), labels = $('labels'), ctx = labels.getContext('2d');
 const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: false });
 const view = { x: 0, y: 0, scale: 1, min: 0.01, max: 12 };
+let viewportWidth=window.innerWidth,viewportHeight=window.innerHeight;
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
@@ -153,7 +154,8 @@ function setupGL() {
   uniform sampler2D uFogVisibility;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
   uniform vec4 uRegion;
-  uniform float uScale,uDpr;
+  uniform float uScale;
+  uniform vec2 uDpr;
   uniform int uTileSize,uColumns,uSelected,uRouteIds[50],uRouteCount;
   uniform bool uPick,uShowOccupation,uFogEnabled;
   out vec4 color;
@@ -172,7 +174,7 @@ function setupGL() {
     return kind==3?2:kind;
   }
   void main(){
-    vec2 screen=vec2(gl_FragCoord.x,uViewport.y-gl_FragCoord.y)/uDpr;
+    vec2 screen=vec2(gl_FragCoord.x/uDpr.x,(uViewport.y-gl_FragCoord.y)/uDpr.y);
     ivec2 p=ivec2(floor(uPick?uPickPoint:(screen-uOffset)/uScale));
     if(any(lessThan(vec2(p),uRegion.xy))||any(greaterThanEqual(vec2(p),uRegion.zw))){
       color=uPick?vec4(0.,0.,0.,1.):vec4(.063,.063,.063,1.);return;
@@ -350,7 +352,7 @@ function updateLayerColors(){
 function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
   gl.uniform2f(loc.Offset, view.x, view.y); gl.uniform1f(loc.Scale, view.scale);
-  gl.uniform1f(loc.Dpr, canvas.width/innerWidth); gl.uniform1i(loc.Selected, selected);
+  gl.uniform2f(loc.Dpr, canvas.width/viewportWidth, canvas.height/viewportHeight); gl.uniform1i(loc.Selected, selected);
   gl.uniform1i(loc.FogEnabled,activeSettings.layer==='military'&&!!mapMilitary?.fog_of_war);
   const routeHighlights=[...tradeRouteIds,...colonizationRouteIds].slice(0,50);
   gl.uniform1iv(loc.RouteIds,Int32Array.from(Array.from({length:50},(_,i)=>Number(routeHighlights[i])||0)));
@@ -368,7 +370,7 @@ function tileRange(){
   // can exceed the compact zoomed-in cache and evict tiles that are still
   // visible, producing rectangular gaps while the camera is moving.
   const worldLeft=-view.x/view.scale, worldTop=-view.y/view.scale;
-  const worldRight=(innerWidth-view.x)/view.scale, worldBottom=(innerHeight-view.y)/view.scale;
+  const worldRight=(viewportWidth-view.x)/view.scale, worldBottom=(viewportHeight-view.y)/view.scale;
   const left=Math.max(Math.floor(region[0]/tileSize),Math.floor(worldLeft/tileSize)), top=Math.max(Math.floor(region[1]/tileSize),Math.floor(worldTop/tileSize));
   const right=Math.min(Math.ceil(region[2]/tileSize)-1,Math.ceil(worldRight/tileSize)-1), bottom=Math.min(Math.ceil(region[3]/tileSize)-1,Math.ceil(worldBottom/tileSize)-1);
   const result=[]; for(let y=top;y<=bottom;y++)for(let x=left;x<=right;x++)result.push([x,y]); return result;
@@ -391,7 +393,7 @@ function draw() {
   drawLabels(); drawMeasurements(); updateScale();
   if(selectedMarkerPopup){
     const x=selectedMarkerPopup.x*view.scale+view.x,y=selectedMarkerPopup.y*view.scale+view.y;
-    window.dispatchEvent(new CustomEvent('map:marker-position',{detail:{id:selectedMarkerPopup.id,x,y,visible:x>=0&&x<=innerWidth&&y>=0&&y<=innerHeight}}));
+    window.dispatchEvent(new CustomEvent('map:marker-position',{detail:{id:selectedMarkerPopup.id,x,y,visible:x>=0&&x<=viewportWidth&&y>=0&&y<=viewportHeight}}));
   }
 }
 function getThematicComponents(layer){
@@ -454,7 +456,7 @@ function thematicLabelPlacement(component){
       for(const offset of [-fontSize*.5,0,fontSize*.5]){
         const wx=point.x+nx*offset,wy=point.y+ny*offset,tx=Math.floor(wx/tileSize),ty=Math.floor(wy/tileSize);
         if(wx<region[0]||wy<region[1]||wx>=region[2]||wy>=region[3]){fits=false;break;}
-        const sx=wx*view.scale+view.x,sy=wy*view.scale+view.y;if(sx<0||sx>innerWidth||sy<0||sy>innerHeight)continue;
+        const sx=wx*view.scale+view.x,sy=wy*view.scale+view.y;if(sx<0||sx>viewportWidth||sy<0||sy>viewportHeight)continue;
         if(!tileCache.has(`${tx},${ty}`)){waiting=true;fits=false;break;}
         const id=pickProvinceId(wx*view.scale+view.x,wy*view.scale+view.y),province=provinces.get(id);
         if(!province||String(province.layers?.[component.layer]?.id)!==String(component.categoryId)){fits=false;break;}
@@ -478,9 +480,9 @@ function drawThematicLabel(component,placement,paint=true){
   const outline=Math.max(.75,fontSize*.06);ctx.restore();return{left:minX-outline,right:maxX+outline,top:minY-outline,bottom:maxY+outline};
 }
 function drawLabels() {
-  const dpr = labels.width/innerWidth;
+  const dprX = labels.width/viewportWidth,dprY=labels.height/viewportHeight;
   // Markers are part of the map composition: their anchors, icon sizes, and label offsets all follow map zoom.
-  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,innerWidth,innerHeight);
+  ctx.setTransform(dprX,0,0,dprY,0,0); ctx.clearRect(0,0,viewportWidth,viewportHeight);
   drawRoads();
   drawTradeRoutes();
   const showMarkers=Object.keys(markerIcons).some(type=>activeSettings.markers?.[type])&&mapMarkers.length>0||activeSettings.markers?.capital||activeSettings.markers?.city;
@@ -506,7 +508,7 @@ function drawLabels() {
         const size=(MARKER_HEIGHT[marker.type]||10)*view.scale,image=markerIcons[marker.type];
         const imageRatio=image?.naturalWidth&&image?.naturalHeight?image.naturalWidth/image.naturalHeight:1;
         const iconWidth=size*imageRatio;
-        if(mx<-iconWidth||my<-size||mx>innerWidth+iconWidth||my>innerHeight+size)return;
+        if(mx<-iconWidth||my<-size||mx>viewportWidth+iconWidth||my>viewportHeight+size)return;
         if(image?.complete&&image.naturalWidth){ctx.drawImage(image,mx-iconWidth/2,my-size/2,iconWidth,size);labelRects.push({left:mx-iconWidth/2-2,right:mx+iconWidth/2+2,top:my-size/2-2,bottom:my+size/2+2});}
         const name=markerRows.includes(marker)?marker.name:null;
         if(name){
@@ -517,7 +519,7 @@ function drawLabels() {
           ctx.strokeText(name,left,my);ctx.fillText(name,left,my);const width=ctx.measureText(name).width;labelRects.push({left:left-2,right:left+width+2,top:my-labelSize/2-2,bottom:my+labelSize/2+2});
         }
       });
-    if (x < -30 || y < -10 || x > innerWidth+30 || y > innerHeight+10) continue;
+    if (x < -30 || y < -10 || x > viewportWidth+30 || y > viewportHeight+10) continue;
     if (occupied.has(key) && p.id !== selected) continue;
     const text=showIds?String(p.id):(!hasVisibleMarker||!activeSettings.markers?.names)&&activeSettings.information.provinces?p.name:'';
     if(!text)continue;
@@ -529,11 +531,11 @@ function drawLabels() {
     const components=getThematicComponents(layer);
     for(const component of components){
       const [minX,minY,maxX,maxY]=component.bounds.map((value,index)=>value*view.scale+(index%2===0?view.x:view.y));
-      if(maxX<0||minX>innerWidth||maxY<0||minY>innerHeight)continue;
+      if(maxX<0||minX>viewportWidth||maxY<0||minY>viewportHeight)continue;
       if(!component.labelPlacement&&!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame<2){layoutsThisFrame++;const placement=thematicLabelPlacement(component);if(placement===undefined)component.labelWaiting=true;else if(placement?.deferred)component.labelDeferredScale=view.scale;else component.labelPlacement=placement||{hidden:true};}
       if(!component.labelPlacement){if(!component.labelWaiting&&component.labelDeferredScale!==view.scale&&layoutsThisFrame>=2)pendingLabelLayout=true;continue;}
       const rect=drawThematicLabel(component,component.labelPlacement,false);if(!rect)continue;
-      if(rect.right<0||rect.left>innerWidth||rect.bottom<0||rect.top>innerHeight)continue;
+      if(rect.right<0||rect.left>viewportWidth||rect.bottom<0||rect.top>viewportHeight)continue;
       const key=`${Math.floor((rect.left+rect.right)/84)},${Math.floor((rect.top+rect.bottom)/36)}`;
       if(occupied.has(key)||labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4))continue;
       occupied.add(key);labelRects.push(rect);drawThematicLabel(component,component.labelPlacement,true);
@@ -553,7 +555,7 @@ function drawLabels() {
       const province=provinces.get(Number(item.province_id));if(!province)continue;
       const x=Number(item.x??province.center[0])*view.scale+view.x,y=Number(item.y??province.center[1])*view.scale+view.y;
       const r=MILITARY_TOKEN_RADIUS*view.scale,padding=matchMedia('(pointer:coarse)').matches?Math.max(MILITARY_TOKEN_HIT_PADDING*view.scale,22-r):MILITARY_TOKEN_HIT_PADDING*view.scale;
-      if(x<-240||y<-240||x>innerWidth+240||y>innerHeight+240)continue;
+      if(x<-240||y<-240||x>viewportWidth+240||y>viewportHeight+240)continue;
       const color=/^#[0-9a-f]{6}$/i.test(item.state_color)?item.state_color:'#6e7669';
       ctx.save();ctx.fillStyle='#fff';ctx.strokeStyle=color;ctx.lineWidth=1*view.scale;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.stroke();const icon=tintedMilitaryIcon(item.token_type,color),iconSize=r*1.8;if(icon)ctx.drawImage(icon,x-iconSize/2,y-iconSize/2,iconSize,iconSize);ctx.restore();
       militaryHitTargets.push({left:x-r-padding,right:x+r+padding,top:y-r-padding,bottom:y+r+padding,x,y,item});
@@ -562,7 +564,7 @@ function drawLabels() {
   constructionHitTargets=[];
   for(const item of mapMilitary.constructions||[]){
     const x=Number(item.x)*view.scale+view.x,y=Number(item.y)*view.scale+view.y;
-    if(!Number.isFinite(x)||!Number.isFinite(y)||x<-32||y<-32||x>innerWidth+32||y>innerHeight+32)continue;
+    if(!Number.isFinite(x)||!Number.isFinite(y)||x<-32||y<-32||x>viewportWidth+32||y>viewportHeight+32)continue;
     const size=Math.max(16,Math.min(26,18*view.scale)),image=markerIcons[item.object_type==='port'?'port':'fortress'];
     if(image?.complete&&image.naturalWidth){const width=size*image.naturalWidth/image.naturalHeight;ctx.save();ctx.globalAlpha=.42;ctx.drawImage(image,x-width/2,y-size/2,width,size);ctx.restore();}
     ctx.save();ctx.fillStyle='#111612ed';ctx.strokeStyle=/^#[0-9a-f]{6}$/i.test(item.state_color)?item.state_color:'#e7c667';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x+size*.38,y-size*.34,7,0,Math.PI*2);ctx.fill();ctx.stroke();
@@ -766,12 +768,15 @@ window.addEventListener('colonization:route-pick',e=>{colonizationRouteMode=Bool
 window.addEventListener('colonization:route-progress',e=>{colonizationRouteIds=(e.detail?.ids||[]).slice(0,40).map(Number);schedule();});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&colonizationRouteMode){colonizationRouteMode=false;colonizationRouteIds=[];window.dispatchEvent(new CustomEvent('colonization:route-cancelled'));schedule();}else if(e.key==='Escape'&&tradeRouteMode){tradeRouteMode=false;window.dispatchEvent(new CustomEvent('trade:route-cancelled'));schedule();}});
 function resize() {
-  const oldW = canvas.width/(canvas.dataset.dpr || 1), oldH = canvas.height/(canvas.dataset.dpr || 1);
+  const oldW = Number(canvas.dataset.cssWidth)||viewportWidth, oldH = Number(canvas.dataset.cssHeight)||viewportHeight;
+  const rect=canvas.getBoundingClientRect();
+  viewportWidth=rect.width||window.innerWidth;viewportHeight=rect.height||window.innerHeight;
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  canvas.width = labels.width = Math.round(innerWidth*dpr); canvas.height = labels.height = Math.round(innerHeight*dpr);
+  canvas.width = labels.width = Math.round(viewportWidth*dpr); canvas.height = labels.height = Math.round(viewportHeight*dpr);
   canvas.dataset.dpr = dpr;
-  view.min = Math.min(innerWidth/(region[2]-region[0]),innerHeight/(region[3]-region[1]));
-  if (ready) { view.x += (innerWidth-oldW)/2; view.y += (innerHeight-oldH)/2; clampView(); }
+  canvas.dataset.cssWidth=viewportWidth;canvas.dataset.cssHeight=viewportHeight;
+  view.min = Math.min(viewportWidth/(region[2]-region[0]),viewportHeight/(region[3]-region[1]));
+  if (ready) { view.x += (viewportWidth-oldW)/2; view.y += (viewportHeight-oldH)/2; clampView(); }
   schedule();
 }
 function clampView() {
@@ -779,18 +784,15 @@ function clampView() {
   const clampAxis = (v,start,end,screen) => (end-start)*view.scale <= screen
     ? (screen-(start+end)*view.scale)/2
     : Math.max(screen-end*view.scale,Math.min(-start*view.scale,v));
-  view.x = clampAxis(view.x,region[0],region[2],innerWidth); view.y = clampAxis(view.y,region[1],region[3],innerHeight);
+  view.x = clampAxis(view.x,region[0],region[2],viewportWidth); view.y = clampAxis(view.y,region[1],region[3],viewportHeight);
 }
 function fit() {
-  // Portrait phones otherwise fit the whole square map to the narrow width,
-  // leaving most of the tall viewport unused and making provinces unreadable.
-  const mobilePortrait=matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
-  view.scale = Math.min(view.max,view.min*(mobilePortrait?1.3:1));
-  view.x = (innerWidth-(region[0]+region[2])*view.scale)/2;
-  view.y = (innerHeight-(region[1]+region[3])*view.scale)/2;
+  view.scale = view.min;
+  view.x = (viewportWidth-(region[0]+region[2])*view.scale)/2;
+  view.y = (viewportHeight-(region[1]+region[3])*view.scale)/2;
   clampView();schedule();
 }
-function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
+function zoom(factor,x=viewportWidth/2,y=viewportHeight/2) {
   if (!ready) return;
   const next = Math.max(view.min,Math.min(view.max,view.scale*factor));
   const ratio = next/view.scale; view.x = x-(x-view.x)*ratio; view.y = y-(y-view.y)*ratio; view.scale = next;
@@ -827,10 +829,10 @@ function select(id, focus=false) {
   if (focus) {
     const [bx0,by0,bx1,by1] = p.bbox;
     const [x0,y0,x1,y1] = [Math.max(bx0,region[0]),Math.max(by0,region[1]),Math.min(bx1,region[2]-1),Math.min(by1,region[3]-1)];
-    const panelSpace = innerWidth > 600 ? 340 : 128;
-    view.scale = Math.max(view.min,Math.min(view.max, (innerWidth-panelSpace)/Math.max(x1-x0+1,40)*.65, innerHeight/Math.max(y1-y0+1,40)*.65));
-    view.x = (innerWidth+(innerWidth > 600 ? 290 : 0))/2 - (x0+x1)/2*view.scale;
-    view.y = innerHeight/2 - (y0+y1)/2*view.scale;
+    const panelSpace = viewportWidth > 600 ? 340 : 128;
+    view.scale = Math.max(view.min,Math.min(view.max, (viewportWidth-panelSpace)/Math.max(x1-x0+1,40)*.65, viewportHeight/Math.max(y1-y0+1,40)*.65));
+    view.x = (viewportWidth+(viewportWidth > 600 ? 290 : 0))/2 - (x0+x1)/2*view.scale;
+    view.y = viewportHeight/2 - (y0+y1)/2*view.scale;
     clampView();
   }
   schedule();
@@ -970,10 +972,11 @@ window.addEventListener('map:tool',e=>{if(e.detail&&roadDraft)cancelRoad();toolM
 window.addEventListener('map:finish',finishArea);
 window.addEventListener('map:undo',()=>{toolPoints.pop();areaClosed=false;toolResult(`Точек: ${toolPoints.length}`);schedule();});
 window.addEventListener('map:clear-tool',()=>{toolPoints=[];areaClosed=false;toolResult('Измерение очищено');schedule();});
-window.addEventListener('map:coordinate',e=>{const[x,y]=e.detail;if(x<region[0]||x>=region[2]||y<region[1]||y>=region[3]){status('Точка находится вне игровой области',4000);return;}view.scale=Math.max(view.scale,1);view.x=innerWidth/2-x*view.scale;view.y=innerHeight/2-y*view.scale;clampView();schedule();});
+window.addEventListener('map:coordinate',e=>{const[x,y]=e.detail;if(x<region[0]||x>=region[2]||y<region[1]||y>=region[3]){status('Точка находится вне игровой области',4000);return;}view.scale=Math.max(view.scale,1);view.x=viewportWidth/2-x*view.scale;view.y=viewportHeight/2-y*view.scale;clampView();schedule();});
 window.addEventListener('map:copy-coordinates',async()=>{if(!lastPoint){status('Сначала выберите точку на карте',3000);return;}try{await navigator.clipboard.writeText(lastPoint.map(v=>v.toFixed(2)).join(', '));status('Координаты скопированы',2500);}catch{status('Не удалось скопировать координаты',3000);}});
 $('clear-selection').onclick=()=>{selected=0;$('selection').hidden=true;window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:null}));window.dispatchEvent(new CustomEvent('map:garrison-info',{detail:null}));schedule();};
 window.addEventListener('resize',resize);
+window.visualViewport?.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');

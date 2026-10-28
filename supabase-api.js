@@ -214,6 +214,27 @@ export async function adminResourcesApi(action, targetState = null, resource = n
   return data;
 }
 
+export async function adminModifiersApi(action, payload = {}) {
+  const db = await client();
+  const {data,error}=await db.rpc('admin_modifiers_api',{action,payload});
+  if(error){const failure=new Error(error.message||'Не удалось выполнить операцию с модификаторами');failure.code=error.code;throw failure;}
+  return data;
+}
+
+export async function wallApi(action,payload={}){
+  const db=await client();
+  const {data,error}=await db.rpc('wall_api',{action,payload});
+  if(error)throw new Error(error.message||'Операция со Стеной не выполнена');
+  return data;
+}
+
+export async function wallVerdictManyApi(payload){
+  const db=await client();
+  const {data,error}=await db.rpc('wall_verdict_many',{payload});
+  if(error)throw new Error(error.message||'Не удалось сохранить вердикт');
+  return data;
+}
+
 export async function hasAuthenticatedSession() {
   const db = await client();
   const { data, error } = await db.auth.getSession();

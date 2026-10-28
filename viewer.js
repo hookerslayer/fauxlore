@@ -782,7 +782,13 @@ function clampView() {
   view.x = clampAxis(view.x,region[0],region[2],innerWidth); view.y = clampAxis(view.y,region[1],region[3],innerHeight);
 }
 function fit() {
-  view.scale = view.min; view.x = (innerWidth-(region[0]+region[2])*view.scale)/2; view.y = (innerHeight-(region[1]+region[3])*view.scale)/2; schedule();
+  // Portrait phones otherwise fit the whole square map to the narrow width,
+  // leaving most of the tall viewport unused and making provinces unreadable.
+  const mobilePortrait=matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
+  view.scale = Math.min(view.max,view.min*(mobilePortrait?1.3:1));
+  view.x = (innerWidth-(region[0]+region[2])*view.scale)/2;
+  view.y = (innerHeight-(region[1]+region[3])*view.scale)/2;
+  clampView();schedule();
 }
 function zoom(factor,x=innerWidth/2,y=innerHeight/2) {
   if (!ready) return;

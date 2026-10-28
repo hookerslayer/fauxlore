@@ -766,3 +766,5 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .rules-table-wrap th{background:var(--ui-surface-hover);color:var(--ui-accent)}
 .rules-reader-article img{max-width:100%;height:auto}
 @media(max-width:800px){.rules-reader-layout{grid-template-columns:1fr}.rules-reader-nav{display:none}.rules-reader-picker{display:grid;gap:5px;position:sticky;top:8px;z-index:1;padding:9px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-bg);font-size:12px;color:var(--ui-muted)}.rules-reader-picker select{width:100%;min-height:42px;padding:7px 10px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-raised);color:var(--ui-text);font-size:14px}.rules-reader-article{padding:14px}.rules-table-wrap table{width:max-content;min-width:100%}.rules-table-wrap th,.rules-table-wrap td{min-width:105px}}
+
+.wall-post{position:relative}.wall-delete{position:absolute;top:8px;right:8px;width:auto;padding:5px 9px;color:#ef8b83;border-color:#7f403b}.wall-delete:hover{background:#542b28}

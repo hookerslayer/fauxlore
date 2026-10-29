@@ -598,7 +598,7 @@ function showMap(fromHistory=false){
   $('app-page').hidden=true;document.body.dataset.view='map';closeDrawer();closeUtilityPopover();updateTopNavigation('map');
   $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
   if(!fromHistory&&location.hash!=='#view=map')history.pushState({section:'map'},'',routeHash('map'));
-  document.title='Fauxlore — карта';
+  document.title='Карта — Sixième Terre';
   queueLayout();
 }
 function renderMenu(section='Статистика',fromHistory=false){
@@ -628,7 +628,7 @@ function renderMenu(section='Статистика',fromHistory=false){
   $('app-page').scrollTop=0;
   const nextHash=routeHash(section,section==='Государства'?(pendingStateNavigation?.stateId||lastAdminStateId):null,pendingStateNavigation?.tab||lastAdminStateTab);
   if(!fromHistory&&location.hash!==nextHash)history.pushState({section},'',nextHash);
-  document.title=`${isState?(section==='Статистика'?'Обзор':section):section} — Fauxlore`;
+  document.title=`${isState?(section==='Статистика'?'Обзор':section):section} — Sixième Terre`;
   if(section==='Профиль')renderProfile(content);
   else if(section==='Стена')void renderWall(content,user,()=>window.dispatchEvent(new Event('state:resources-changed')));
   else if(section==='Государства'&&user?.role==='admin')renderStatesMenu(content);
@@ -1218,7 +1218,7 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
   if(isAdmin){
     const pageTitle=$('page-heading')?.querySelector('h1');
     if(pageTitle)pageTitle.textContent=state.name;
-    document.title=`${state.name} — Fauxlore`;
+    document.title=`${state.name} — Sixième Terre`;
   }
   const ownedProvinces=provinces.filter(p=>Number(p.layers?.states?.id)===Number(state.id));
   const population=ownedProvinces.reduce((sum,p)=>sum+Number(p.population||0),0);
@@ -1581,7 +1581,7 @@ function renderStatesContent(host,selectedId=null,tab='Статистика',cre
   }
   const pageTitle=$('page-heading')?.querySelector('h1');
   if(pageTitle)pageTitle.textContent='Государство';
-  document.title='Государство — Fauxlore';
+  document.title='Государство — Sixième Terre';
   const stateList=stateRows.map(row=>`<button class="state-list-row" type="button" data-open-state="${row.id}"><span class="state-color" style="background:${escape(row.color)}"></span><span>${escape(row.name)}</span><small>${row.players?.length?'Игрок':row.is_npc?'NPC':'Без владельца'} · ${Number(row.province_count)} пров.</small></button>`).join('');
   const principleFields=Object.entries({authority:'Источник власти',structure:'Структура владения',economy:'Экономический уклад',military:'Военная доктрина'}).map(([key,label])=>`<label class="field"><span>${label}</span><select name="${key}" required>${PRINCIPLES[key].map(value=>`<option value="${escape(value)}">${escape(value)}</option>`).join('')}</select></label>`).join('');
   host.innerHTML=`<div class="state-menu stack"><div class="state-menu-heading"><h3>Государства</h3><button id="state-create-toggle" type="button">${create?'Список государств':'Создать NPC государство'}</button></div>${create?`<form id="state-create-form" class="stack"><label class="field"><span>Название</span><input name="name" maxlength="100" required></label><label class="field"><span>Цвет</span><input name="color" type="color" value="#ac805d" required></label>${principleFields}<label class="field"><span>Официальная раса</span><select name="race_id" required>${categories.filter(c=>c.layer==='races').map(c=>`<option value="${c.id}">${escape(c.name)}</option>`).join('')}</select></label><label class="field"><span>Официальная религия</span><select name="religion_id" required>${categories.filter(c=>c.layer==='religions').map(c=>`<option value="${c.id}">${escape(c.name)}</option>`).join('')}</select></label><h4>Начальный правитель</h4><label class="field"><span>Имя</span><input name="ruler_name" maxlength="100" required></label><label class="field"><span>Фамилия</span><input name="ruler_surname" maxlength="120" required></label><label class="field"><span>Пол</span><select name="ruler_gender"><option>Мужской</option><option>Женский</option><option>Иной</option></select></label><label class="field"><span>Титул</span><input name="ruler_title" maxlength="100" required></label><label class="field"><span>Возраст (16–250)</span><input name="ruler_age" type="number" min="16" max="250" value="30" required></label><p id="state-form-preview" class="hint"></p><p id="state-form-message" class="form-message" role="status"></p><button class="primary" type="submit">Создать государство</button></form>`:`<div class="state-list">${stateList||'<p class="hint">Государства ещё не созданы.</p>'}</div>`}</div>`;

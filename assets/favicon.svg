@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="5" fill="#111410"/>
-  <rect x="1.5" y="1.5" width="29" height="29" rx="5" fill="none" stroke="#8f7848"/>
-  <text x="16" y="24" text-anchor="middle" fill="#e8c65a" font-family="Georgia,serif" font-size="23" font-weight="700">F</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="285 185 430 430" fill="none">
+  <rect x="285" y="185" width="430" height="430" rx="42" fill="#111410"/>
+  <path d="M366.67 400L300.003 300H300.001L366.667 200L433.334 300H433.337L366.67 400Z" fill="#e7c667"/>
+  <path d="M500.006 400L433.339 300H433.337L500.003 200L566.67 300H566.673L500.006 400Z" fill="#e7c667"/>
+  <path d="M633.334 400L566.667 300H566.665L633.331 200L699.998 300H700.001L633.334 400Z" fill="#e7c667"/>
+  <path d="M366.67 600L300.003 500H300.001L366.667 400L433.334 500H433.337L366.67 600Z" fill="#e7c667"/>
+  <path d="M500.006 600L433.339 500H433.337L500.003 400L566.67 500H566.673L500.006 600Z" fill="#e7c667"/>
+  <path d="M633.334 600L566.667 500H566.665L633.331 400L699.998 500H700.001L633.334 600Z" fill="#e7c667"/>
+  <rect x="300" y="200" width="400" height="400" stroke="#e7c667" stroke-width="10"/>
 </svg>

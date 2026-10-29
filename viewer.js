@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=rules-reader-20261028';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=rules-headings-20261029';
 import {militaryMapApi} from './supabase-api.js?v=admin-modifiers-20261028';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';

@@ -3,7 +3,7 @@ import {PRINCIPLES,governmentName,principleConflict} from './state-principles.js
 import {calculateProvinceEconomy,calculateProvinceEstateTaxes,calculateProvinceValue,calculateStateProduction,calculateStatePolitics,calculateInternalTradeForecast,calculateTradeZoneForecast,distributeTradeZoneIncome,getEconomyConfig,setEconomyConfig,GROUP_STATUS_EFFECTS,GROUP_STATUS_LOYALTY_MODIFIERS,ESTATE_INFLUENCE_FACTORS} from './economy.js?v=20261025173000';
 import {estatePopulation} from './estate-demography.js';
 import {renderWall} from './wall.js?v=wall-comments-20261028';
-import {renderRules} from './rules.js?v=rules-reader-20261028';
+import {renderRules} from './rules.js?v=rules-headings-20261029';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=mobile-audit-20261028';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};

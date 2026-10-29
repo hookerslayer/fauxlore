@@ -30,12 +30,14 @@ function getRenderer() {
 }
 
 function splitChapters(markdown) {
-  const headings = [...markdown.matchAll(/^## ([1-9]\d*)\. (.+)$/gm)];
+  const headings = [...markdown.matchAll(/^## (.+)$/gm)]
+    .filter(heading => heading[1].trim() !== 'Содержание');
   if (!headings.length) throw new Error('В документе не найдены главы правил.');
   const pages = [{ key: 'overview', title: 'Обзор', markdown: markdown.slice(0, headings[0].index).trim() }];
   headings.forEach((heading, index) => {
     const end = headings[index + 1]?.index ?? markdown.length;
-    pages.push({ key: heading[1], title: heading[2].trim(), markdown: markdown.slice(heading.index, end).trim() });
+    const title = heading[1].trim();
+    pages.push({ key: slug(title), title, markdown: markdown.slice(heading.index, end).trim() });
   });
   return pages;
 }
@@ -125,7 +127,7 @@ export async function renderRules(host) {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.chapter = page.key;
-      button.textContent = page.key === 'overview' ? page.title : `${page.key}. ${page.title}`;
+      button.textContent = page.title;
       button.addEventListener('click', () => void showPage(page.key));
       nav.append(button);
       picker.add(new Option(button.textContent, page.key));
@@ -161,7 +163,7 @@ export async function renderRules(host) {
     const link = event.target.closest('a[href^="#"]');
     if (!link) return;
     const anchor = decodeURIComponent(link.getAttribute('href').slice(1));
-    const page = pages.find(item => slug(`${item.key}. ${item.title}`) === anchor);
+    const page = pages.find(item => item.key === anchor);
     if (page) {
       event.preventDefault();
       void showPage(page.key);

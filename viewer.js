@@ -1,7 +1,7 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=capital-edit-20261030';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=politics-modifiers-20261030';
 import {militaryMapApi} from './supabase-api.js?v=admin-modifiers-20261028';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
-import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
+import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=politics-modifiers-20261030';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
 const html = value => String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

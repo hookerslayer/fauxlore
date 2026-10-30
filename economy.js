@@ -243,12 +243,18 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
     }
   }
   const estateEconomicWeights={...estateWeights};
+  const listedModifiers=Array.isArray(stateContext?.permanent_modifiers)?stateContext.permanent_modifiers:null;
+  const modifierTotal=(key,predicate=()=>true)=>listedModifiers
+    ?listedModifiers.filter(item=>item.key===key&&item.target_province_id==null&&predicate(item)).reduce((sum,item)=>sum+(Number(item.value)||0),0)
+    :null;
   for(const name of ESTATE_NAMES){
     const status=rowsByKey.get(`estate:${name}`)?.status;
     estateWeights[name]*=ESTATE_INFLUENCE_FACTORS[status]??1;
     const principles=stateContext?.principles||state?.principles||{};
-    if(name==='Крестьяне'&&principles.economy==='Крепостничество')estateWeights[name]*=.9;
-    if(name==='Крестьяне'&&principles.economy==='Работорговля')estateWeights[name]*=.8;
+    if(name==='Крестьяне'){
+      const modifier=modifierTotal('peasant_influence');
+      estateWeights[name]*=Math.max(0,1+(modifier??((principles.economy==='Крепостничество'?-.10:0)+(principles.economy==='Работорговля'?-.20:0))));
+    }
   }
   const totalWeight=ESTATE_NAMES.reduce((sum,name)=>sum+estateWeights[name],0);
   const estateInfluence={};
@@ -267,11 +273,14 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
     const rateRatio=burden.baseline?burden.actual/burden.baseline:1;
     const taxAdjustment=(rateRatio-1)*Number(activeConfig.taxLoyaltySensitivity??.5);
     const bonus=['Знать','Духовенство'].includes(name)?Math.min(effects.corruptionLoyaltyCap,corruption/effects.corruptionLoyaltyDivisor):0;
-    const principleLoyalty=(principles.authority==='Клир'?.10:0)
+    const fallbackLoyalty=(principles.authority==='Клир'?.10:0)
       +(principles.authority==='Вече'&&name==='Крестьяне'?.10:0)
       +(principles.economy==='Крепостничество'&&name==='Знать'?.10:0)
       -(principles.economy==='Крепостничество'&&name==='Крестьяне'?.10:0)
       -(principles.economy==='Работорговля'&&name==='Крестьяне'?.10:0);
+    const principleLoyalty=listedModifiers
+      ?modifierTotal('estate_loyalty')+(name==='Знать'?modifierTotal('nobility_loyalty'):0)+(name==='Крестьяне'?modifierTotal('peasant_loyalty'):0)
+      :fallbackLoyalty;
     const loyalty=clamp01(Number(row?.loyalty??.5)+influence-ambition-taxAdjustment+bonus+principleLoyalty);
     estateInfluence[name]=influence;
     estateLoyalty[name]=loyalty;
@@ -295,11 +304,13 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
       const row=rowsByKey.get(`${groupType}:${categoryId}`);
       const groupName=(provinces||[]).find(p=>p.layers?.[field]?.id!=null&&String(p.layers[field].id)===String(categoryId))?.layers?.[field]?.name;
       let principleLoyalty=0;
-      if(groupType==='race'&&activeElfFaith&&groupName!=='Эльфы'&&['Невмешательство','Ассимиляция','Истребление'].includes(row?.status))principleLoyalty-=.10;
-      if(groupType==='religion'&&activeOrthodoxy&&groupName!=='Правоверие'&&['Невмешательство','Ассимиляция','Истребление'].includes(row?.status))principleLoyalty-=.10;
+      if(['Невмешательство','Ассимиляция','Истребление'].includes(row?.status||'Невмешательство')){
+        if(listedModifiers)principleLoyalty=modifierTotal(groupType==='race'?'other_race_loyalty':'other_religion_loyalty',item=>item.source_kind==='admin'||item.source!==groupName);
+        else if(groupType==='race'&&activeElfFaith&&groupName!=='Эльфы'||groupType==='religion'&&activeOrthodoxy&&groupName!=='Правоверие')principleLoyalty=-.10;
+      }
       const loyalty=clamp01(Number(row?.loyalty??.5)+(GROUP_STATUS_LOYALTY_MODIFIERS[row?.status]??0)+principleLoyalty);
       (groupType==='race'?raceLoyalty:religionLoyalty)[categoryId]=loyalty;
-      (groupType==='race'?raceModifierBreakdown:religionModifierBreakdown)[categoryId]={status:row?.status||'Невмешательство',baseLoyalty:Number(row?.loyalty??.5),loyaltyModifier:GROUP_STATUS_LOYALTY_MODIFIERS[row?.status]??0,effectiveLoyalty:loyalty,population:populations.get(categoryId)||0,totalPopulation};
+      (groupType==='race'?raceModifierBreakdown:religionModifierBreakdown)[categoryId]={status:row?.status||'Невмешательство',baseLoyalty:Number(row?.loyalty??.5),loyaltyModifier:GROUP_STATUS_LOYALTY_MODIFIERS[row?.status]??0,permanentLoyalty:principleLoyalty,effectiveLoyalty:loyalty,population:populations.get(categoryId)||0,totalPopulation};
       return loyalty;
     });
     Object.assign(groupType==='race'?raceStability:religionStability,values);

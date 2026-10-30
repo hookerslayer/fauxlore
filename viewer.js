@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=st-brand-20261029';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=capital-edit-20261030';
 import {militaryMapApi} from './supabase-api.js?v=admin-modifiers-20261028';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 import {calculateProvinceEconomy,calculateProvinceValue,setEconomyConfig} from './economy.js?v=20261025173000';
@@ -692,7 +692,7 @@ function mapClick(x,y){
     if(applicationPlacement.mode==='capital'&&!applicationPlacement.ids.includes(id)){status('Столица должна находиться в выбранной провинции',3000);return;}
     if(applicationPlacement.mode==='provinces'&&!province.layers?.trade){status('Нельзя выбрать провинцию без назначенной торговой зоны',3500);return;}
     if(applicationPlacement.mode==='provinces'&&(province.layers?.states||province.application_pending)){status('Провинция занята или зарезервирована',3000);return;}
-    window.dispatchEvent(new CustomEvent('application:province-picked',{detail:province}));return;
+    window.dispatchEvent(new CustomEvent('application:province-picked',{detail:{...province,x:p[0],y:p[1]}}));return;
   }
   if(portPlacement){
     const id=pickProvinceId(x,y);
@@ -881,6 +881,13 @@ function pickMarker(x,y){
   }
   return nearest;
 }
+let markerMoveDraft=null,markerDragPointer=null;
+function previewMarkerPosition(x,y){
+  if(!markerMoveDraft)return;
+  markerMoveDraft.x=x;markerMoveDraft.y=y;
+  mapMarkers=mapMarkers.map(marker=>Number(marker.id)===markerMoveDraft.id?{...marker,x,y}:marker);
+  window.dispatchEvent(new CustomEvent('map:marker-move-preview',{detail:{id:markerMoveDraft.id,x,y}}));schedule();
+}
 const pointers = new Map(); let gesture = null, moved = false;
 function snapshotGesture() {
   const points=[...pointers.values()];
@@ -890,12 +897,19 @@ function snapshotGesture() {
 }
 canvas.addEventListener('pointerdown',e => {
   if (!ready || (e.pointerType==='mouse' && e.button!==0)) return;
+  if(markerMoveDraft&&Number(pickMarker(e.clientX,e.clientY)?.id)===markerMoveDraft.id){
+    markerDragPointer=e.pointerId;canvas.setPointerCapture(e.pointerId);canvas.classList.add('dragging-marker');return;
+  }
   window.dispatchEvent(new Event('map:close-military-popup'));
   canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(pointers.size===1)moved=false; else moved=true;
   snapshotGesture(); canvas.classList.add('dragging');
 });
 canvas.addEventListener('pointermove',e => {
+  if(markerDragPointer===e.pointerId&&markerMoveDraft){
+    if(Number(pickProvinceId(e.clientX,e.clientY))===markerMoveDraft.province_id){previewMarkerPosition((e.clientX-view.x)/view.scale,(e.clientY-view.y)/view.scale);}
+    return;
+  }
   if(!pointers.has(e.pointerId)||!gesture)return;
   pointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const points=[...pointers.values()];
   const center=points.length>1?{x:(points[0].x+points[1].x)/2,y:(points[0].y+points[1].y)/2}:points[0];
@@ -907,6 +921,7 @@ canvas.addEventListener('pointermove',e => {
   clampView(); schedule();
 });
 function endPointer(e) {
+  if(markerDragPointer===e.pointerId){markerDragPointer=null;canvas.classList.remove('dragging-marker');return;}
   if(!pointers.has(e.pointerId))return;
   const click=!moved&&pointers.size===1&&e.type==='pointerup'; pointers.delete(e.pointerId);
   if(!pointers.size)canvas.classList.remove('dragging');
@@ -924,6 +939,20 @@ window.addEventListener('admin:editing',()=>{if(selected)select(selected);});
 window.addEventListener('map:admin-paint',e=>{adminPaint=e.detail||null;if(adminPaint)status('Нанесение включено: нажимайте на сухопутные провинции',3000);});
 let markerPlacement=null;
 window.addEventListener('map:place-marker',e=>{markerPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!markerPlacement);if(markerPlacement)status('Щёлкните по точке провинции для размещения маркера',0);else status('',0);});
+window.addEventListener('map:marker-move-start',e=>{
+  const marker=e.detail;if(!isAdmin()||!marker)return;
+  markerMoveDraft={id:Number(marker.id),province_id:Number(marker.province_id),original_x:Number(marker.x),original_y:Number(marker.y),x:Number(marker.x),y:Number(marker.y)};
+  selectedMarkerPopup=null;canvas.classList.add('moving-marker');status('Зажмите маркер и перетащите его внутри той же провинции. Затем нажмите «Сохранить».',0);
+});
+window.addEventListener('map:marker-move-cancel',()=>{
+  if(!markerMoveDraft)return;
+  previewMarkerPosition(markerMoveDraft.original_x,markerMoveDraft.original_y);
+  markerMoveDraft=null;markerDragPointer=null;canvas.classList.remove('moving-marker','dragging-marker');status('Перемещение маркера отменено',2500);
+});
+window.addEventListener('map:marker-move-saved',e=>{
+  const marker=e.detail;if(marker)mapMarkers=mapMarkers.map(item=>Number(item.id)===Number(marker.id)?{...item,...marker}:item);
+  markerMoveDraft=null;markerDragPointer=null;canvas.classList.remove('moving-marker','dragging-marker');schedule();
+});
 window.addEventListener('map:place-port',e=>{portPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!portPlacement);if(portPlacement)status('Щёлкните по точке внутри выбранной морской провинции · Esc — отмена',0);else status('',0);});
 window.addEventListener('map:place-fort',e=>{fortPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!fortPlacement);if(fortPlacement)status('Выберите точку крепости внутри провинции · Esc — отмена',0);else status('',0);});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&portPlacement){portPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:port-placement-cancelled'));status('Размещение порта отменено',2500);}if(e.key==='Escape'&&fortPlacement){fortPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:fort-placement-cancelled'));status('Размещение крепости отменено',2500);}});
@@ -964,6 +993,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeou
 window.addEventListener('focus',()=>{if(!document.hidden)void syncMapInBackground();});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
 window.addEventListener('map:marker-renamed',e=>{const marker=e.detail;if(!marker)return;mapMarkers=mapMarkers.map(item=>Number(item.id)===Number(marker.id)?{...item,...marker}:item);if(Number(selectedMarkerPopup?.id)===Number(marker.id))selectedMarkerPopup={...selectedMarkerPopup,...marker};schedule();});
+window.addEventListener('map:refreshed',()=>{if(markerMoveDraft)mapMarkers=mapMarkers.map(item=>Number(item.id)===markerMoveDraft.id?{...item,x:markerMoveDraft.x,y:markerMoveDraft.y}:item);schedule();});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;schedule();});
 window.addEventListener('map:close-marker-popup',()=>{selectedMarkerPopup=null;});
 window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});

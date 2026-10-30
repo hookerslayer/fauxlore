@@ -1,5 +1,5 @@
-import {militaryApi,militaryBattleApi,navalBattlePreviewApi,militaryTransportApi,militarySiegeApi,militarySiegeStormApi,militiaApi,garrisonApi} from './supabase-api.js?v=server-projection12-20261030';
-import {renderGarrisonPanel} from './garrison-ui.js?v=server-projection12-20261030';
+import {militaryApi,militaryBattleApi,navalBattlePreviewApi,militaryTransportApi,militarySiegeApi,militarySiegeStormApi,militiaApi,garrisonApi} from './supabase-api.js?v=server-boundary-final-20261030';
+import {renderGarrisonPanel} from './garrison-ui.js?v=server-boundary-final-20261030';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=value=>Math.floor(Number(value)||0).toLocaleString('ru-RU');
@@ -246,15 +246,13 @@ function renderMilitiaPanel(host,militia,military,{stateId,notify,onMapChange}){
   const canRequest=!['pending','approved','active'].includes(call?.status)&&!cooldown&&Number(preview.total)>0;
   const unitEntries=Object.entries(plan.units||{}).filter(([,quantity])=>Number(quantity)>0);
   const navalEntries=(plan.naval_fleets||[]).flatMap(fleet=>Number(fleet.cogs)>0?[['Когг',Number(fleet.cogs)]]:[]);
-  const navalCrew=(plan.naval_fleets||[]).reduce((sum,fleet)=>sum+Number(fleet.crew_recruits||0),0);
-  const landUpkeep=unitEntries.reduce((sum,[name,quantity])=>sum+Number(quantity)*Number(military.catalog.find(unit=>unit.name===name&&unit.state_id==null)?.upkeep||0),0);
-  const navalUpkeep=navalEntries.reduce((sum,[name,quantity])=>sum+Number(quantity)*Number(military.catalog.find(unit=>unit.name===name&&unit.state_id==null)?.upkeep||0),0);
-  const upkeep=landUpkeep+navalUpkeep;
+  const navalCrew=Number(plan.naval_crew_recruits||0);
+  const activeFunding=military.upkeep_breakdown?.militia_by_estate;
+  const fundingSource=active?(activeFunding||{}):(plan.funding_by_estate||{});
+  const upkeep=Number(active?military.upkeep_breakdown?.militia:plan.upkeep||0);
   const contributions=Object.entries(plan.contributions||{}).filter(([,quantity])=>Number(quantity)>0);
-  const burg=Number(plan.contributions?.Горожане||0),peas=Number(plan.contributions?.Крестьяне||0);
-  const burgherCost=burg+peas?Math.floor(upkeep*.6*burg/(burg+peas)):0;
-  const peasantCost=burg+peas?Math.floor(upkeep*.6*peas/(burg+peas)):0;
-  const funding=plan.doctrine==='Фирд'?`Горожане: ${fmt(burgherCost)} G · Крестьяне: ${fmt(peasantCost)} G · Корона: ${fmt(landUpkeep-burgherCost-peasantCost+navalUpkeep)} G`:plan.doctrine==='Сословная армия'?`Знать: ${fmt(Math.floor(landUpkeep*.7))} G · Корона: ${fmt(landUpkeep-Math.floor(landUpkeep*.7)+navalUpkeep)} G`:`Корона: ${fmt(upkeep)} G`;
+  const funding=Object.entries(fundingSource).filter(([,amount])=>Number(amount)>0)
+    .map(([estate,amount])=>`${escape(estate)}: ${fmt(amount)} G`).join(' · ')||`Корона: ${fmt(upkeep)} G`;
   host.innerHTML=`<section class="application-panel stack"><div><h4>Сословное ополчение</h4><p class="hint">${escape(title)}${cooldown?' · Новый созыв доступен после завершения текущего хода.':''}</p></div><div class="state-dashboard-card"><p>Доктрина <strong>${escape(plan.doctrine||'—')}</strong></p><p>Мобилизационный пул <strong>${fmt(plan.total)} человек</strong></p>${navalCrew>0?`<p>Экипаж коггов <strong>${fmt(navalCrew)} рекрутов</strong></p>`:""}<p>Коэффициент мобилизации <strong>× ${escape(plan.coefficient)}</strong></p><p>Расчётное содержание <strong>${fmt(upkeep)} G / ход</strong></p><p class="hint">${escape(funding)}</p></div><p class="hint">${active?'Показаны данные созванного ополчения.':'Прогноз обновится при начале следующего хода с учётом населения, контроля и оккупации.'} Лояльность учитывается на уровне государства.</p><div class="inline-actions">${active?'<button type="button" data-militia-disband>Распустить ополчение</button>':`<button type="button" class="primary" data-militia-request ${canRequest?'':'disabled'}>Созвать ополчение</button>`}</div>${!active&&!canRequest&&!cooldown&&Number(preview.total)<1?'<p class="hint">Нет доступного мобилизационного пула.</p>':''}<p class="form-message" data-militia-message aria-live="polite"></p></section><section class="application-panel"><h4>Состав по юнитам</h4><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Юнит</th><th>Количество</th></tr></thead><tbody>${[...unitEntries,...navalEntries].map(([name,quantity])=>`<tr><td>${escape(name)}</td><td>${fmt(quantity)}</td></tr>`).join('')||'<tr><td colspan="2">Нет доступных юнитов.</td></tr>'}</tbody></table></div></section><section class="application-panel"><h4>Провинции и сословия</h4><p class="hint">${contributions.map(([name,quantity])=>`${escape(name)}: ${fmt(quantity)}`).join(' · ')||'Вкладов нет.'}</p><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Провинция</th><th>Людей</th></tr></thead><tbody>${(plan.provinces||[]).map(p=>`<tr><td>${escape(p.name)}</td><td>${fmt(p.total)}</td></tr>`).join('')||'<tr><td colspan="2">Нет подконтрольных провинций с доступным населением.</td></tr>'}</tbody></table></div></section>`;
   const submit=async(action,confirmation)=>{
     if(!window.confirm(confirmation))return;

@@ -107,6 +107,17 @@ export async function stateProvinceProjectionApi(stateId, view = 'provinces') {
   return data;
 }
 
+export async function governmentFormPreviewApi(chosen) {
+  const db = await client();
+  const {data, error} = await db.rpc('government_form_preview_api', {chosen});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось определить форму правления');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function militaryMovementApi(action, formationId, payload = {}) {
   const db = await client();
   const {data, error} = await db.rpc('military_movement_api', {

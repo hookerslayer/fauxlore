@@ -137,13 +137,14 @@ Deno.serve(async request => {
           market_income: marketIncome, zone_income_by_estate: distributeTradeZoneIncome(marketIncome),
           tax_forecast: taxForecast, zones};
         if(view==='finance'){
-          const [taxRates,agreements,garrisonData,colonyData]=await Promise.all([
+          const [taxRates,agreements,garrisonData,colonyData,militaryData]=await Promise.all([
             read(`${prefix}/states/${stateId}/tax-rates`),read('my/trade-agreements'),
             readRpc('garrison_api',{action:'snapshot',target_state:stateId,province_key:null,payload:{}}),
             readRpc('colonization_api',{action:'snapshot',target_state:stateId,payload:{}}),
+            readRpc('military_api',{action:'snapshot',target_state:stateId,payload:{}}),
           ]);
           projection.finance=buildFinanceProjection({stateId,taxForecast,tradeProjection:projection,
-            agreements,garrisonData,colonyData,taxRates,indicators});
+            agreements,garrisonData,colonyData,taxRates,indicators,militaryData});
         }
         return json(200,projection);
       }

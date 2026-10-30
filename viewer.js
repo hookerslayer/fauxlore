@@ -1,5 +1,5 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=server-projection12-20261030';
-import {militaryMapApi,militaryMovementApi,provinceProjectionApi} from './supabase-api.js?v=server-projection12-20261030';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=server-boundary-final-20261030';
+import {militaryMapApi,militaryMovementApi,provinceProjectionApi} from './supabase-api.js?v=server-boundary-final-20261030';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);

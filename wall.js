@@ -1,4 +1,4 @@
-import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=server-projection12-20261030';
+import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=server-boundary-final-20261030';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=value=>new Date(value).toLocaleString('ru-RU');

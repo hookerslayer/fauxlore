@@ -16898,3 +16898,525 @@ begin
 end
 $migration$;
 notify pgrst,'reload schema';
+
+-- Applied migration: 20261030142506_private_map_economy_inputs.sql
+-- Keep state financial inputs out of the public map response. The client may
+-- receive them only for a state it controls; an administrator may inspect all.
+do $migration$
+declare definition text;
+begin
+  if to_regprocedure('fauxlore.map_payload_unfiltered()') is null then
+    definition := pg_get_functiondef('fauxlore.map_payload()'::regprocedure);
+    definition := replace(definition, 'FUNCTION fauxlore.map_payload()',
+      'FUNCTION fauxlore.map_payload_unfiltered()');
+    if definition = pg_get_functiondef('fauxlore.map_payload()'::regprocedure) then
+      raise exception 'Could not copy the map payload function';
+    end if;
+    execute definition;
+  end if;
+end
+$migration$;
+
+revoke all on function fauxlore.map_payload_unfiltered() from public, anon, authenticated;
+
+create or replace function fauxlore.map_payload() returns jsonb
+language plpgsql stable security definer set search_path='' as $function$
+declare
+  result jsonb := fauxlore.map_payload_unfiltered();
+  account_row fauxlore.accounts;
+  allowed_states integer[] := '{}'::integer[];
+  provinces jsonb;
+  categories jsonb;
+begin
+  if auth.uid() is not null then
+    account_row := fauxlore.current_account();
+    if account_row.role = 'admin' then return result; end if;
+    select coalesce(array_agg(state_id), '{}'::integer[]) into allowed_states
+    from fauxlore.account_states where account_id=account_row.id;
+  end if;
+
+  select coalesce(jsonb_agg(
+    case when province->'layers'->'states' is null
+      or (province->'layers'->'states'->>'id')::integer = any(allowed_states)
+      then province
+      else jsonb_set(province, '{layers,states}',
+        coalesce(province->'layers'->'states','{}'::jsonb)
+          - 'crime' - 'corruption' - 'estate_tax_rates', true)
+    end
+    - case when exists (
+      select 1 from fauxlore.map_categories state
+      where state.layer='states' and state.id=any(allowed_states)
+        and lower(state.name)=lower(province->>'occupation')
+    ) then '__none__' else 'occupation_estate_tax_rates' end
+    - case when exists (
+      select 1 from fauxlore.map_categories state
+      where state.layer='states' and state.id=any(allowed_states)
+        and lower(state.name)=lower(province->>'occupation')
+    ) then '__none__' else 'occupation_crime' end
+    - case when exists (
+      select 1 from fauxlore.map_categories state
+      where state.layer='states' and state.id=any(allowed_states)
+        and lower(state.name)=lower(province->>'occupation')
+    ) then '__none__' else 'occupation_corruption' end
+    order by (province->>'id')::integer), '[]'::jsonb)
+    into provinces from jsonb_array_elements(result->'provinces') province;
+
+  select coalesce(jsonb_agg(
+    case when (category->>'id')::integer = any(allowed_states)
+      or category->>'layer'<>'states' then category
+      else category - 'crime' - 'corruption' - 'estate_tax_rates' end
+    order by category->>'layer', (category->>'id')::integer), '[]'::jsonb)
+    into categories from jsonb_array_elements(result->'categories') category;
+
+  return jsonb_set(jsonb_set(result,'{provinces}',provinces),'{categories}',categories);
+end
+$function$;
+
+revoke all on function fauxlore.map_payload() from public, anon, authenticated;
+
+
+-- Applied migration: 20261030142625_revoke_anonymous_garrison_rpc.sql
+-- Garrison data is available only after the database identifies an account.
+revoke execute on function public.garrison_api(text,integer,integer,jsonb) from anon;
+
+-- Applied migration: 20261030142803_minimize_public_province_fields.sql
+-- Legacy stored/internal province columns are not part of the map contract.
+do $migration$
+declare definition text; marker text;
+begin
+  definition:=pg_get_functiondef('fauxlore.map_payload()'::regprocedure);
+  marker:='  return jsonb_set(jsonb_set(result,''{provinces}'',provinces),''{categories}'',categories);';
+  if position(marker in definition)=0 then raise exception 'Map payload return statement changed'; end if;
+  definition:=replace(definition,marker,
+    '  select coalesce(jsonb_agg(province - ''taxes'' - ''production'' - ''tension'' - ''belonging'' - ''seed_area'' order by (province->>''id'')::integer), ''[]''::jsonb)'||chr(10)||
+    '    into provinces from jsonb_array_elements(provinces) province;'||chr(10)||marker);
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030143053_read_only_map_identity.sql
+-- Opening the public map must not create/link accounts or reject a new session.
+do $migration$
+declare definition text; old_line text; new_line text;
+begin
+  definition:=pg_get_functiondef('fauxlore.map_payload()'::regprocedure);
+  old_line:='    account_row := fauxlore.current_account();';
+  new_line:='    select * into account_row from fauxlore.accounts where auth_user_id=auth.uid();';
+  if position(old_line in definition)=0 then raise exception 'Map identity lookup changed'; end if;
+  execute replace(definition,old_line,new_line);
+end
+$migration$;
+
+-- Applied migration: 20261030143426_public_map_field_allowlist.sql
+-- New database columns must not become public merely because map_payload uses
+-- to_jsonb(provinces). Publish an explicit allowlist after authorization.
+do $migration$
+declare definition text; old_line text; new_line text;
+begin
+  definition:=pg_get_functiondef('fauxlore.map_payload()'::regprocedure);
+  old_line:='  select coalesce(jsonb_agg(province - ''taxes'' - ''production'' - ''tension'' - ''belonging'' - ''seed_area'' order by (province->>''id'')::integer), ''[]''::jsonb)'||chr(10)||
+            '    into provinces from jsonb_array_elements(provinces) province;';
+  new_line:='  select coalesce(jsonb_agg((select coalesce(jsonb_object_agg(field.key,field.value),''{}''::jsonb)'||chr(10)||
+            '      from jsonb_each(province) field where field.key=any(array['||
+            '''id'',''kind'',''name'',''center'',''bbox'',''area'',''population'',''development'',''province_type'',''trade_status'',''control'',''occupation'',''terrain_type'',''has_capital_marker'',''has_city_marker'',''layers'',''occupation_color'',''application_pending'',''race_assimilation_target_id'',''race_assimilation_turns'',''religion_assimilation_target_id'',''religion_assimilation_turns'',''occupation_estate_tax_rates'',''occupation_crime'',''occupation_corruption'']))'||
+            ' order by (province->>''id'')::integer),''[]''::jsonb)'||chr(10)||
+            '    into provinces from jsonb_array_elements(provinces) province;';
+  if position(old_line in definition)=0 then raise exception 'Map province projection changed'; end if;
+  execute replace(definition,old_line,new_line);
+end
+$migration$;
+
+-- Applied migration: 20261030150448_projection_source_service_only.sql
+-- The projection worker needs the complete map to calculate market-wide
+-- forecasts. Its raw source is never callable with a browser credential.
+create or replace function public.projection_source_api()
+returns jsonb language sql stable security definer set search_path='' as $$
+  select fauxlore.map_payload_unfiltered()
+$$;
+revoke all on function public.projection_source_api() from public, anon, authenticated;
+grant execute on function public.projection_source_api() to service_role;
+
+-- Applied migration: 20261030151640_colonization_read_only_preview.sql
+
+-- Reuse the attempt's authorization, resource and route checks for a read-only preview.
+do $migration$
+declare
+  definition text;
+  guard_marker text := 'if action<>''attempt'' or jsonb_typeof(payload) is distinct from ''object'' then';
+  roll_marker text := 'roll_value:=floor(random()*101)::integer;';
+begin
+  definition := pg_get_functiondef('fauxlore.colonization_api(text,integer,jsonb)'::regprocedure);
+  if position(guard_marker in definition)=0 or position(roll_marker in definition)=0 then
+    raise exception 'Colonization preview insertion points changed';
+  end if;
+  definition := replace(definition, guard_marker,
+    'if action not in (''attempt'',''preview'') or jsonb_typeof(payload) is distinct from ''object'' then');
+  definition := replace(definition, roll_marker,
+    'if action=''preview'' then
+      gold_bonus:=least(15,greatest(0,((gold_value-gold_base)/1000)*5));
+      recruit_bonus:=least(15,greatest(0,((recruits_value-50)/100)*5));
+      return jsonb_build_object(''gold'',gold_value,''recruits'',recruits_value,
+        ''gold_base'',gold_base,''gold_bonus'',gold_bonus,
+        ''recruit_bonus'',recruit_bonus,''route_penalty'',path_penalty,
+        ''sea'',sea_value,''province_id'',target_key);
+    end if;
+    ' || roll_marker);
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030152106_military_movement_server_preview.sql
+
+-- Calculate the read-only route forecast from the same server weather, terrain
+-- mask and road factors used when a movement order is resolved.
+create or replace function fauxlore.military_movement_preview(formation_key bigint, route_value jsonb)
+returns jsonb language plpgsql stable security definer set search_path='' as $function$
+declare
+  formation_row fauxlore.military_formations;
+  province_row fauxlore.provinces;
+  calendar_row fauxlore.game_calendar;
+  point_a jsonb;
+  point_b jsonb;
+  index_value integer;
+  maneuver_level integer;
+  weather_value text;
+  wind_degrees integer;
+  heading_degrees numeric;
+  wind_dot numeric;
+  terrain_factor numeric;
+  weather_factor numeric;
+  road_factor numeric;
+  segment_length numeric;
+  budget numeric;
+  total_distance numeric:=0;
+  total_cost numeric:=0;
+  sea_zones integer:=0;
+  terrain_names text[]:='{}';
+  weather_names text[]:='{}';
+  terrain_name text;
+begin
+  select * into formation_row from fauxlore.military_formations where id=formation_key and active;
+  select * into calendar_row from fauxlore.game_calendar where singleton=true;
+  budget:=case when formation_row.domain='naval' then case when mod(calendar_row.turn,2)=1 then 2000 else 1200 end
+    else case when mod(calendar_row.turn,2)=1 then 800 else 400 end end;
+  select least(6,greatest(0,coalesce((leader.skills->>(case when formation_row.domain='naval' then 'Навигация' else 'Маневренность' end))::integer,0)))
+    into maneuver_level from fauxlore.military_leaders leader where leader.id=formation_row.leader_id and leader.status='active';
+  budget:=budget*(1+floor(coalesce(maneuver_level,0)/2)*.10);
+  for index_value in 1..jsonb_array_length(route_value)-1 loop
+    point_a:=route_value->(index_value-1);
+    point_b:=route_value->index_value;
+    select * into province_row from fauxlore.provinces where id=(point_b->>'province_id')::integer;
+    segment_length:=sqrt(((point_b->>'x')::numeric-(point_a->>'x')::numeric)^2+
+      ((point_b->>'y')::numeric-(point_a->>'y')::numeric)^2);
+    if segment_length<.0001 then continue; end if;
+    select weather,wind_degrees into weather_value,wind_degrees from fauxlore.province_weather
+      where province_id=province_row.id and year=calendar_row.year and turn=calendar_row.turn;
+    total_distance:=total_distance+segment_length;
+    if formation_row.domain='naval' then
+      terrain_factor:=case when fauxlore.military_open_sea(province_row.id) then 3 else 1 end;
+      weather_factor:=case weather_value when 'storm' then 2 when 'snow' then 1.25
+        when 'heavy_rain' then 1.3 when 'rain' then 1.1 else 1 end;
+      if weather_value='wind' then
+        heading_degrees:=degrees(atan2(((point_b->>'y')::numeric-(point_a->>'y')::numeric)::double precision,
+          ((point_b->>'x')::numeric-(point_a->>'x')::numeric)::double precision));
+        wind_dot:=cos(radians(heading_degrees-coalesce(wind_degrees,0)));
+        weather_factor:=weather_factor*case when wind_dot>.5 then .8 when wind_dot<-.5 then 1.25 else 1 end;
+      end if;
+      road_factor:=1;
+      if (point_b->>'province_id')::integer is distinct from (point_a->>'province_id')::integer then sea_zones:=sea_zones+1; end if;
+    else
+      terrain_factor:=(case province_row.terrain_type when 'forest' then 1.25 when 'marsh' then 2 else 1 end)*
+        fauxlore.military_terrain_segment_factor((point_a->>'x')::double precision,(point_a->>'y')::double precision,
+          (point_b->>'x')::double precision,(point_b->>'y')::double precision);
+      weather_factor:=case weather_value when 'rain' then 1.2 when 'heavy_rain' then 1.5
+        when 'mud' then 1.5 when 'snow' then 1.5 when 'thaw' then 1.2 when 'wind' then 1.05
+        when 'heat' then 1.15 when 'storm' then 2 else 1 end;
+      road_factor:=coalesce((point_b->>'road_factor')::numeric,1);
+      terrain_name:=case province_row.terrain_type when 'forest' then 'лес' when 'marsh' then 'болото' else null end;
+      if terrain_name is not null and not terrain_name=any(terrain_names) then terrain_names:=array_append(terrain_names,terrain_name); end if;
+    end if;
+    if weather_value is not null and not weather_value=any(weather_names) then weather_names:=array_append(weather_names,weather_value); end if;
+    total_cost:=total_cost+segment_length*terrain_factor*weather_factor*road_factor;
+  end loop;
+  return jsonb_build_object('distanceKm',round(total_distance,2),'cost',round(total_cost,2),'budget',round(budget,2),
+    'turns',greatest(1,ceil(total_cost/nullif(budget,0))::integer,case when formation_row.domain='naval' then ceil(sea_zones/12.0)::integer else 1 end),
+    'terrains',to_jsonb(terrain_names),'weathers',to_jsonb(weather_names),'unknown',0,
+    'ports',case when formation_row.domain='naval' then true else false end,
+    'stop',case when total_cost>budget then jsonb_build_object('reason','Исчерпана дальность движения на этот ход') else null end);
+end
+$function$;
+revoke all on function fauxlore.military_movement_preview(bigint,jsonb) from public,anon,authenticated;
+
+do $migration$
+declare
+  definition text;
+  guard_marker text := 'elsif action<>''set_order'' then';
+  insert_marker text := 'insert into fauxlore.military_movement_orders(formation_id,state_id,route,next_index,segment_progress,issued_by,issued_year,issued_turn,stop_reason,resolved_year,resolved_turn)';
+begin
+  definition:=pg_get_functiondef('fauxlore.military_movement_api(text,bigint,jsonb)'::regprocedure);
+  if position(guard_marker in definition)=0 or position(insert_marker in definition)=0 then
+    raise exception 'Movement preview insertion points changed';
+  end if;
+  definition:=replace(definition,guard_marker,'elsif action not in (''set_order'',''preview'') then');
+  definition:=replace(definition,insert_marker,
+    'if action=''preview'' then return fauxlore.military_movement_preview(formation_key,route_value); end if;'||E'\n  '||insert_marker);
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030152725_fix_military_preview_wind_lookup.sql
+
+do $migration$
+declare
+  definition text;
+  old_fragment text := 'select weather,wind_degrees into weather_value,wind_degrees from fauxlore.province_weather';
+  new_fragment text := 'select weather,province_weather.wind_degrees into weather_value,wind_degrees from fauxlore.province_weather';
+begin
+  definition:=pg_get_functiondef('fauxlore.military_movement_preview(bigint,jsonb)'::regprocedure);
+  if position(old_fragment in definition)=0 then raise exception 'Movement preview wind lookup changed'; end if;
+  execute replace(definition,old_fragment,new_fragment);
+end
+$migration$;
+
+-- Applied migration: 20261030152827_minimize_military_map_forecast_inputs.sql
+
+-- Movement conditions and the game calendar were only used by the browser's
+-- movement calculator. The authoritative preview now reads them on the server.
+do $migration$
+declare
+  definition text;
+  start_at integer;
+  finish_at integer;
+begin
+  definition:=pg_get_functiondef('public.military_map_api()'::regprocedure);
+  start_at:=position('''calendar'',(select jsonb_build_object(''year'',year,''turn'',turn)' in definition);
+  finish_at:=position(',''fog_of_war'',not all_visible' in definition);
+  if start_at=0 or finish_at<=start_at then raise exception 'Military map forecast fields changed'; end if;
+  definition:=left(definition,start_at-1)||substr(definition,finish_at+1);
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030153402_naval_battle_source_service_only.sql
+
+-- The battle calculator reads a pending encounter from the database after
+-- checking the caller's admin role. Browser credentials cannot call this RPC.
+create or replace function public.naval_battle_source_api(battle_key bigint)
+returns jsonb language sql stable security definer set search_path='' as $$
+  select jsonb_build_object('id',b.id,'domain',b.domain,'status',b.status,'participants',b.participants)
+  from fauxlore.military_battles b where b.id=battle_key
+$$;
+revoke all on function public.naval_battle_source_api(bigint) from public,anon,authenticated;
+grant execute on function public.naval_battle_source_api(bigint) to service_role;
+
+-- Applied migration: 20261030153744_military_hire_preview.sql
+
+-- Use the exact hire branch for a read-only estimate, including current
+-- prerequisites, treasury, recruits, formation and modifier checks.
+do $migration$
+declare
+  definition text;
+  guard_marker text := 'elsif action=''hire'' then';
+  insert_marker text := 'if formation_key is null then';
+begin
+  definition:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  if position(guard_marker in definition)=0 or position(insert_marker in definition)=0 then
+    raise exception 'Military hire preview insertion points changed';
+  end if;
+  definition:=replace(definition,guard_marker,'elsif action in (''hire'',''preview_hire'') then');
+  definition:=replace(definition,insert_marker,
+    'if action=''preview_hire'' then return jsonb_build_object(''cost'',price,''recruits'',amount*unit_row.recruit_cost,
+      ''unit_id'',unit_row.id,''quantity'',amount); end if;'||E'\n  '||insert_marker);
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030153831_military_catalog_effective_prices.sql
+
+-- Publish ready-to-display unit prices so the client no longer applies cost
+-- modifiers itself. The hire preview still validates quantity and resources.
+do $migration$
+declare
+  definition text;
+  marker text := '''upkeep_factor'',fauxlore.military_unit_cost_factor(sid,u.id,''upkeep'')';
+begin
+  definition:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  if position(marker in definition)=0 then raise exception 'Military catalog cost fields changed'; end if;
+  definition:=replace(definition,marker,marker||
+    ',''hire_price'',floor(u.hire_cost*fauxlore.military_unit_cost_factor(sid,u.id,''hire''))'||
+    ',''upkeep_price'',floor(u.upkeep*fauxlore.military_unit_cost_factor(sid,u.id,''upkeep''))');
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030154034_military_upkeep_server_summary.sql
+
+create or replace function fauxlore.military_upkeep_summary(target_state integer)
+returns jsonb language plpgsql stable security definer set search_path='' as $function$
+declare
+  army_cost numeric:=0;
+  fleet_cost numeric:=0;
+  militia_cost numeric:=0;
+  mercenary_cost numeric:=0;
+  garrison_cost numeric:=0;
+begin
+  select coalesce(sum(floor(u.upkeep*fauxlore.military_unit_cost_factor(target_state,u.id,'upkeep')*
+    greatest(0,fu.quantity-case when u.name='Копейщик' then least(fu.quantity,coalesce(f.free_upkeep_quantity,0)) else 0 end)))
+      filter(where f.domain='land'),0),
+    coalesce(sum(floor(u.upkeep*fauxlore.military_unit_cost_factor(target_state,u.id,'upkeep')*
+    greatest(0,fu.quantity-case when u.name='Копейщик' then least(fu.quantity,coalesce(f.free_upkeep_quantity,0)) else 0 end)))
+      filter(where f.domain='naval'),0)
+  into army_cost,fleet_cost
+  from fauxlore.military_formations f join fauxlore.military_formation_units fu on fu.formation_id=f.id
+    join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+  where f.state_id=target_state and f.active and f.kind='regular';
+  select coalesce(sum(fu.quantity*u.upkeep),0) into militia_cost
+  from fauxlore.military_formations f join fauxlore.military_formation_units fu on fu.formation_id=f.id
+    join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+  where f.state_id=target_state and f.active and f.kind='militia';
+  select coalesce(sum(g.price*greatest(0,1+fauxlore.state_permanent_modifier_total(target_state,
+    array['mercenary_upkeep'],null,null))),0) into mercenary_cost
+  from fauxlore.military_formations f join fauxlore.mercenary_groups g on g.id=f.mercenary_group_id
+  where f.state_id=target_state and f.active and f.kind='mercenary';
+  garrison_cost:=fauxlore.garrison_upkeep(target_state);
+  return jsonb_build_object('army',army_cost,'fleet',fleet_cost,'militia',militia_cost,
+    'mercenaries',mercenary_cost,'garrisons',garrison_cost,
+    'total',army_cost+fleet_cost+militia_cost+mercenary_cost+garrison_cost);
+end
+$function$;
+revoke all on function fauxlore.military_upkeep_summary(integer) from public,anon,authenticated;
+
+do $migration$
+declare
+  definition text;
+  marker text := '''state_id'',sid,''is_admin'',is_admin,';
+begin
+  definition:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  if position(marker in definition)=0 then raise exception 'Military snapshot header changed'; end if;
+  definition:=replace(definition,marker,marker||E'\n   '||'''upkeep_breakdown'',fauxlore.military_upkeep_summary(sid),');
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030154120_military_formation_upkeep_prices.sql
+
+-- Give the interface ready-to-display upkeep per part and per formation unit.
+do $migration$
+declare
+  definition text;
+  marker text := '''upkeep'',u.upkeep,''capacity'',u.capacity';
+begin
+  definition:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  if position(marker in definition)=0 then raise exception 'Formation units snapshot changed'; end if;
+  definition:=replace(definition,marker,marker||
+    ',''unit_upkeep'',floor(u.upkeep*fauxlore.military_unit_cost_factor(sid,u.id,''upkeep''))'||
+    ',''total_upkeep'',case when f.kind=''regular'' then floor(u.upkeep*'||
+    'fauxlore.military_unit_cost_factor(sid,u.id,''upkeep'')*greatest(0,fu.quantity-'||
+    'case when u.name=''Копейщик'' then least(fu.quantity,coalesce(f.free_upkeep_quantity,0)) else 0 end))'||
+    ' when f.kind=''militia'' then fu.quantity*u.upkeep else 0 end');
+  execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261030154946_trade_route_preview.sql
+
+-- Reuse the authoritative trade agreement route checks for a read-only preview.
+do $$
+declare
+  definition text;
+begin
+  select pg_get_functiondef('fauxlore.trade_api(text,text,jsonb,uuid)'::regprocedure) into definition;
+  if position('if path=''my/trade-agreements'' and method=''POST'' then' in definition)=0 then
+    raise exception 'Trade proposal branch not found';
+  end if;
+  definition:=replace(definition,
+    'if path=''my/trade-agreements'' and method=''POST'' then',
+    'if path in (''my/trade-agreements'',''my/trade-agreements/preview-route'') and method=''POST'' then');
+  if position('    from_goods:=coalesce(body->''from_goods'',''[]''::jsonb);' in definition)=0 then
+    raise exception 'Trade goods validation boundary not found';
+  end if;
+  definition:=replace(definition,
+    '    from_goods:=coalesce(body->''from_goods'',''[]''::jsonb);',
+    '    if path=''my/trade-agreements/preview-route'' then
+      return jsonb_build_object(''valid'',true,''route_length'',route_len,''route_limit'',route_limit);
+    end if;
+    from_goods:=coalesce(body->''from_goods'',''[]''::jsonb);');
+  execute definition;
+
+  select pg_get_functiondef('public.fauxlore_api(text,text,jsonb,uuid)'::regprocedure) into definition;
+  if position('path=''my/trade-agreements'' or path ~' in definition)=0 then
+    raise exception 'Trade dispatcher branch not found';
+  end if;
+  definition:=replace(definition,
+    'path=''my/trade-agreements'' or path ~',
+    'path in (''my/trade-agreements'',''my/trade-agreements/preview-route'') or path ~');
+  execute definition;
+end $$;
+
+-- Applied migration: 20261030160134_remove_public_economy_config.sql
+
+-- The public map needs display data, not the rules and prices used by server projections.
+do $$
+declare
+  definition text;
+begin
+  select pg_get_functiondef('fauxlore.map_payload()'::regprocedure) into definition;
+  if position('if account_row.role = ''admin'' then return result; end if;' in definition)=0
+    or position('return jsonb_set(jsonb_set(result,''{provinces}'',provinces),''{categories}'',categories);' in definition)=0 then
+    raise exception 'Expected map response branches not found';
+  end if;
+  definition:=replace(definition,
+    'if account_row.role = ''admin'' then return result; end if;',
+    'if account_row.role = ''admin'' then return result - ''economy_config''; end if;');
+  definition:=replace(definition,
+    'return jsonb_set(jsonb_set(result,''{provinces}'',provinces),''{categories}'',categories);',
+    'return jsonb_set(jsonb_set(result,''{provinces}'',provinces),''{categories}'',categories) - ''economy_config'';');
+  execute definition;
+end $$;
+
+-- Applied migration: 20261030160209_restrict_economy_config_api.sql
+
+-- Constants are loaded only by the administrator editor.
+do $$
+declare
+  definition text;
+begin
+  select pg_get_functiondef('fauxlore.economy_config_api(text,text,jsonb,uuid)'::regprocedure) into definition;
+  if position('if path=''economy/config'' and method=''GET'' then return (select config from fauxlore.economy_parameters where singleton=true); end if;' in definition)=0 then
+    raise exception 'Public economy config branch not found';
+  end if;
+  definition:=replace(definition,
+    'if path=''economy/config'' and method=''GET'' then return (select config from fauxlore.economy_parameters where singleton=true); end if;',
+    'if path=''economy/config'' then raise sqlstate ''42501'' using message=''Нужна роль администратора''; end if;');
+  execute definition;
+end $$;
+
+-- Applied migration: 20261030160519_revoke_public_economy_config_function.sql
+
+-- The admin editor reads constants through its authenticated RPC only.
+revoke all on function fauxlore.economy_config_payload() from public, anon, authenticated;
+
+-- Applied migration: 20261030160613_apply_map_allowlist_to_admin.sql
+
+-- Administrators receive the same province field allowlist as other clients.
+-- Their state access is retained for editor screens and authorized projections.
+do $$
+declare
+  definition text;
+  old_branch text := 'if account_row.role = ''admin'' then return result - ''economy_config''; end if;
+    select coalesce(array_agg(state_id), ''{}''::integer[]) into allowed_states
+    from fauxlore.account_states where account_id=account_row.id;';
+  new_branch text := 'if account_row.role = ''admin'' then
+      select coalesce(array_agg(id), ''{}''::integer[]) into allowed_states
+      from fauxlore.map_categories where layer=''states'';
+    else
+      select coalesce(array_agg(state_id), ''{}''::integer[]) into allowed_states
+      from fauxlore.account_states where account_id=account_row.id;
+    end if;';
+begin
+  select pg_get_functiondef('fauxlore.map_payload()'::regprocedure) into definition;
+  if position(old_branch in definition)=0 then
+    raise exception 'Admin map branch not found';
+  end if;
+  execute replace(definition,old_branch,new_branch);
+end $$;

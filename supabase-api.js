@@ -89,6 +89,24 @@ export async function militaryMapApi() {
   return data;
 }
 
+export async function provinceProjectionApi(provinceId) {
+  const db = await client();
+  const {data, error} = await db.functions.invoke('province-projection', {
+    body: {province_id: Number(provinceId)},
+  });
+  if (error) throw new Error('Не удалось загрузить расчётные показатели провинции');
+  return data;
+}
+
+export async function stateProvinceProjectionApi(stateId, view = 'provinces') {
+  const db = await client();
+  const {data, error} = await db.functions.invoke('province-projection', {
+    body: {state_id: Number(stateId), view},
+  });
+  if (error) throw new Error('Не удалось загрузить расчётные показатели государства');
+  return data;
+}
+
 export async function militaryMovementApi(action, formationId, payload = {}) {
   const db = await client();
   const {data, error} = await db.rpc('military_movement_api', {
@@ -128,6 +146,16 @@ export async function militaryBattleApi(battleId, payload = {}) {
     failure.code = error.code;
     throw failure;
   }
+  return data;
+}
+
+export async function navalBattlePreviewApi(battleId, settings) {
+  const db = await client();
+  const {data,error} = await db.functions.invoke('naval-battle-preview', {
+    body:{battle_id:battleId,settings},
+  });
+  if(error)throw new Error(data?.error||error.message||'Не удалось рассчитать морской бой');
+  if(data?.error)throw new Error(data.error);
   return data;
 }
 

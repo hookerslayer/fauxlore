@@ -319,7 +319,7 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
   }
   const estateBlock=clamp01(.5+Object.values(estateStability).reduce((sum,value)=>sum+(value??0),0));
   const stateStability=(racialReligiousStability.race+racialReligiousStability.religion+estateBlock)/3;
-  return {estateWeights,estateEconomicWeights,estateInfluence,estateLoyalty,estateStability,estateModifierBreakdown,raceLoyalty,religionLoyalty,raceStability,religionStability,raceModifierBreakdown,religionModifierBreakdown,racialReligiousStability,estateBlock,stateStability};
+  return {estateWeights,estatePopulations,estateEconomicWeights,estateInfluence,estateLoyalty,estateStability,estateModifierBreakdown,raceLoyalty,religionLoyalty,raceStability,religionStability,raceModifierBreakdown,religionModifierBreakdown,racialReligiousStability,estateBlock,stateStability};
 }
 
 function provinceCategoryId(provinces,layer,name) {

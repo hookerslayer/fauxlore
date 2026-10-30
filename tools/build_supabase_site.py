@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'wall.js', 'rules.js', 'docs/rules.md', 'military-ui.js', 'garrison-ui.js', 'economy.js', 'estate-demography.js', 'state-principles.js', 'map-tools.js', 'road-worker.js', 'road-routing.js',
+PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'wall.js', 'rules.js', 'docs/rules.md', 'military-ui.js', 'garrison-ui.js', 'state-principles.js', 'map-tools.js', 'road-worker.js', 'road-routing.js',
           'sixiemeterre_northeast/militaryEngine.js', 'sixiemeterre_northeast/modifierSystem.js',
           'supabase-api.js', 'supabase-return.html', 'supabase-return.js', 'app-config.js')
 
@@ -11,6 +11,8 @@ PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'wall.js', 'rules.js
 def main():
     target = ROOT / '.local/supabase-site'
     target.mkdir(parents=True, exist_ok=True)
+    for obsolete in ('economy.js', 'estate-demography.js'):
+        (target / obsolete).unlink(missing_ok=True)
     for name in PUBLIC:
         destination = target / name
         destination.parent.mkdir(parents=True, exist_ok=True)

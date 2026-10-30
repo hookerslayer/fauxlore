@@ -1,6 +1,5 @@
-import {militaryApi,militaryBattleApi,militaryTransportApi,militarySiegeApi,militarySiegeStormApi,militiaApi,garrisonApi} from './supabase-api.js?v=siege-assault-20261028';
-import {renderGarrisonPanel} from './garrison-ui.js?v=military-map-layer-20261027';
-import {simulateNavalBattle,NAVAL_SHIP_PROFILES} from './sixiemeterre_northeast/militaryEngine.js?v=naval-battle-20261027';
+import {militaryApi,militaryBattleApi,navalBattlePreviewApi,militaryTransportApi,militarySiegeApi,militarySiegeStormApi,militiaApi,garrisonApi} from './supabase-api.js?v=server-projection12-20261030';
+import {renderGarrisonPanel} from './garrison-ui.js?v=server-projection12-20261030';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=value=>Math.floor(Number(value)||0).toLocaleString('ru-RU');
@@ -12,35 +11,6 @@ const status={pending:'Ожидает ответа',awaiting_admin:'На рас�
 const kinds={war:'Объявление войны',peace:'Заключение мира',passage:'Право прохода'};
 export const casusBelli=['Завоевание','Священная война','Реконкиста','Торговый спор','Оскорбление чести','Династическая уния','Поддержка повстанцев','Ликвидация угрозы','Поддержка союзника','Война без Casus Belli, Король так захотел!'];
 let activeMilitaryTab='Обзор';
-
-function navalBattleSide(participants,stateId){
-  const formations=participants.filter(p=>Number(p.state_id)===Number(stateId));
-  const ships=[];
-  for(const formation of formations){
-    const formationShips=[];
-    for(const unit of formation.units||[]){
-      const state=(formation.naval_state||[]).filter(item=>Number(item.unit_id)===Number(unit.unit_id));
-      for(let index=0;index<Number(unit.quantity||0);index++){
-        const saved=state[index]||{},profile=NAVAL_SHIP_PROFILES[unit.name]||NAVAL_SHIP_PROFILES['Ладья'];
-        const ship={id:String(saved.id||`${formation.formation_id}:${unit.unit_id}:${index+1}`),formation_id:Number(formation.formation_id),unit_id:Number(unit.unit_id),ship_no:Number(saved.ship_no||index+1),type:unit.name,
-          crew:Number(saved.crew??profile.crew),hull:Number(saved.hull??profile.hull),morale:Number(saved.morale??100),maxCrew:Number(profile.crew),passengers:[]};
-        formationShips.push(ship);ships.push(ship);
-      }
-    }
-    // Cargo belongs to the fleet formation, not to an individual ship. The
-    // approved rule removes it only when the fleet loses, so don't assign it
-    // arbitrarily to one vessel in the ship-by-ship simulator.
-  }
-  const skills=formations.map(p=>p.leader_skills||{}),keys=[...new Set(skills.flatMap(x=>Object.keys(x)))];
-  const commanderSkills=Object.fromEntries(keys.map(key=>[key,skills.reduce((sum,x)=>sum+Number(x[key]||0),0)/Math.max(1,skills.length)]));
-  const morale=ships.length?ships.reduce((sum,s)=>sum+s.morale,0)/ships.length:100;
-  return {id:Number(stateId),ships,morale,commanderSkills,formationIds:formations.map(p=>Number(p.formation_id))};
-}
-
-function navalStatePayload(side){
-  return side.ships.filter(ship=>!ship.sunk&&!ship.captured).map(ship=>({id:ship.id,unit_id:Number(ship.unit_id),ship_no:Number(ship.ship_no),type:ship.type,
-    crew:Math.max(0,Math.floor(Number(ship.crew)||0)),hull:Number(ship.hull)||0,morale:Number(ship.morale)||0}));
-}
 
 async function run(host,action,stateId,payload,notify,refresh){
   const buttons=[...host.querySelectorAll('button')];buttons.forEach(button=>button.disabled=true);
@@ -66,7 +36,6 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
     const ownedCities=data.provinces.filter(p=>p.kind==='land'&&p.owned&&(p.city||p.capital));
     const ports=data.provinces.filter(p=>p.kind==='sea'&&p.port);
     const placesFor=domain=>domain==='naval'?ports:ownedCities;
-    const upkeepOf=(f,item)=>Math.floor(Number(item.upkeep||0)*Number(data.catalog.find(u=>Number(u.id)===Number(item.unit_id))?.upkeep_factor??1)*Math.max(0,Number(item.quantity)-(item.name==='Копейщик'?Math.min(Number(item.quantity),Number(f.free_upkeep_quantity||0)):0)));
     const regular=data.formations.filter(f=>f.kind==='regular');
     const compositionControls=f=>{
       if(f.kind!=='regular')return '';
@@ -81,18 +50,16 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
     };
     const leaders=data.leaders,activeLeaders=leaders.filter(l=>l.status==='active');
     const generals=leaders.filter(l=>l.domain==='land').length,admirals=leaders.filter(l=>l.domain==='naval').length;
-    const armyUpkeep=data.formations.filter(f=>f.kind==='regular'&&f.domain==='land').reduce((sum,f)=>sum+f.units.reduce((n,u)=>n+upkeepOf(f,u),0),0);
-    const fleetUpkeep=data.formations.filter(f=>f.kind==='regular'&&f.domain==='naval').reduce((sum,f)=>sum+f.units.reduce((n,u)=>n+upkeepOf(f,u),0),0);
-    const mercenaryUpkeep=data.formations.filter(f=>f.kind==='mercenary').reduce((sum,f)=>sum+Number(data.mercenaries.find(g=>Number(g.id)===Number(f.mercenary_group_id))?.upkeep_price??data.mercenaries.find(g=>Number(g.id)===Number(f.mercenary_group_id))?.price??0),0);
-    const militiaFormation=data.formations.find(f=>f.kind==='militia'&&f.active);
-    const militiaUpkeep=militiaFormation?militiaFormation.units.reduce((sum,u)=>sum+Number(u.quantity||0)*Number(u.upkeep||0),0):0;
-    const upkeep=armyUpkeep+fleetUpkeep+mercenaryUpkeep+militiaUpkeep+Number(garrisons.troop_upkeep||0)+Number(garrisons.fortification_upkeep||0);
-    const catalogTable=domain=>`<section class="application-panel"><h4>${domains[domain]}</h4><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Юнит</th><th>Категория</th><th>Здоровье</th><th>Урон</th><th>Броня</th><th>Инициатива</th><th>Рекруты</th><th>Цена</th><th>Содержание</th><th>Условие</th></tr></thead><tbody>${data.catalog.filter(u=>u.domain===domain).map(u=>`<tr><td>${escape(u.name)}</td><td>${escape(u.category)}</td><td>${u.health}</td><td>${u.damage}${u.charge_damage?` (${u.charge_damage})`:''}</td><td>${u.armor}</td><td>${u.initiative}</td><td>${u.recruit_cost}</td><td>${fmt(Math.floor(Number(u.hire_cost)*Number(u.hire_factor??1)))}</td><td>${fmt(Number(u.upkeep)*Number(u.upkeep_factor??1))}</td><td>${u.prerequisite==='saltpeter'?'Избыток селитры':'—'}</td></tr>`).join('')}</tbody></table></div></section>`;
+    const upkeepBreakdown=data.upkeep_breakdown||{};
+    const armyUpkeep=Number(upkeepBreakdown.army||0),fleetUpkeep=Number(upkeepBreakdown.fleet||0);
+    const militiaUpkeep=Number(upkeepBreakdown.militia||0),mercenaryUpkeep=Number(upkeepBreakdown.mercenaries||0);
+    const upkeep=Number(upkeepBreakdown.total||0);
+    const catalogTable=domain=>`<section class="application-panel"><h4>${domains[domain]}</h4><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Юнит</th><th>Категория</th><th>Здоровье</th><th>Урон</th><th>Броня</th><th>Инициатива</th><th>Рекруты</th><th>Цена</th><th>Содержание</th><th>Условие</th></tr></thead><tbody>${data.catalog.filter(u=>u.domain===domain).map(u=>`<tr><td>${escape(u.name)}</td><td>${escape(u.category)}</td><td>${u.health}</td><td>${u.damage}${u.charge_damage?` (${u.charge_damage})`:''}</td><td>${u.armor}</td><td>${u.initiative}</td><td>${u.recruit_cost}</td><td>${fmt(u.hire_price)}</td><td>${fmt(u.upkeep_price)}</td><td>${u.prerequisite==='saltpeter'?'Избыток селитры':'—'}</td></tr>`).join('')}</tbody></table></div></section>`;
     const locationOptions=domain=>placesFor(domain).map(p=>`<option value="${p.id}">${escape(p.name)}${p.port?' · порт':''}</option>`).join('');
     const hiringRows=data.catalog.filter(u=>u.hireable).map(unit=>{
       const domain=unit.domain==='naval'?'naval':'land',placeList=placesFor(domain),matching=regular.filter(f=>f.domain===domain);
       const formationOptions=matching.map(f=>`<option value="${f.id}" data-province="${f.province_id}">${escape(f.name)}</option>`).join('');
-      return `<tr><td data-label="Юнит"><strong>${escape(unit.name)}</strong></td><td data-label="Категория">${escape(unit.category)}</td><td data-label="Цена за часть">${fmt(Math.floor(Number(unit.hire_cost)*Number(unit.hire_factor??1)))} G</td><td data-label="Содержание / ход">${fmt(Number(unit.upkeep)*Number(unit.upkeep_factor??1))} G</td><td data-label="Рекруты / часть">${fmt(unit.recruit_cost)}</td><td data-label="Место"><form class="military-hire-row" data-hire-unit="${unit.id}"><select name="province_id" aria-label="Место найма" required ${placeList.length?'':'disabled'}>${locationOptions(domain)}</select></form></td><td data-label="Формирование"><select form="" name="formation_id" aria-label="Формирование"><option value="">Новое</option>${formationOptions}</select></td><td data-label="Количество"><input form="" name="quantity" type="number" min="1" max="100000" step="1" value="1" aria-label="Количество" ${placeList.length?'':'disabled'}></td><td data-label="Итого"><span data-hire-estimate>${fmt(Math.floor(Number(unit.hire_cost)*Number(unit.hire_factor??1)))} G · ${fmt(unit.recruit_cost)} рекр.</span></td><td data-label="Действие"><button type="submit" form="" class="primary" data-hire-submit="${unit.id}" ${placeList.length?'':'disabled'}>Нанять</button></td></tr>`;
+      return `<tr><td data-label="Юнит"><strong>${escape(unit.name)}</strong></td><td data-label="Категория">${escape(unit.category)}</td><td data-label="Цена за часть">${fmt(unit.hire_price)} G</td><td data-label="Содержание / ход">${fmt(unit.upkeep_price)} G</td><td data-label="Рекруты / часть">${fmt(unit.recruit_cost)}</td><td data-label="Место"><form class="military-hire-row" data-hire-unit="${unit.id}"><select name="province_id" aria-label="Место найма" required ${placeList.length?'':'disabled'}>${locationOptions(domain)}</select></form></td><td data-label="Формирование"><select form="" name="formation_id" aria-label="Формирование"><option value="">Новое</option>${formationOptions}</select></td><td data-label="Количество"><input form="" name="quantity" type="number" min="1" max="100000" step="1" value="1" aria-label="Количество" ${placeList.length?'':'disabled'}></td><td data-label="Итого"><span data-hire-estimate>${fmt(unit.hire_price)} G · ${fmt(unit.recruit_cost)} рекр.</span></td><td data-label="Действие"><button type="submit" form="" class="primary" data-hire-submit="${unit.id}" ${placeList.length?'':'disabled'}>Нанять</button></td></tr>`;
     }).join('');
     const hirePanel=`<section class="application-panel"><h4>Найм регулярной армии</h4><p class="hint">Выберите провинцию, при желании — существующее формирование, укажите количество и нажмите «Нанять».</p><div class="table-scroll"><table class="state-data-table military-hiring-table"><thead><tr><th>Название</th><th>Категория</th><th>Цена за часть</th><th>Содержание / ход</th><th>Рекруты / часть</th><th>Место</th><th>Формирование</th><th>Количество</th><th>Итого</th><th></th></tr></thead><tbody>${hiringRows||'<tr><td colspan="10">Нет доступных для найма частей.</td></tr>'}</tbody></table></div></section>`;
     const expenseRows=[['Армия',money(armyUpkeep)],['Флот',money(fleetUpkeep)],['Ополчение',money(militiaUpkeep)],['Наёмники',money(mercenaryUpkeep)],['Крепости',money(garrisons.fortification_upkeep)],['Гарнизоны',money(garrisons.troop_upkeep)]].map(([label,value])=>`<div><span>${label}</span><strong>${value} G</strong></div>`).join('');
@@ -103,7 +70,7 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
       const separator=formationIndex?'<tr class="military-formation-gap"><td colspan="7"></td></tr>':'';
       const fleet=data.formations.find(item=>Number(item.id)===Number(f.transported_by));
       const location=fleet?`На борту «${escape(fleet.name)}»`:escape(provinceName(f.province_id));
-      return separator+heading+units.map((unit,index)=>`<tr>${index===0?`<td rowspan="${units.length}">${location}</td><td rowspan="${units.length}">${f.kind==='regular'?`<select data-assign-leader="${f.id}"><option value="">Без полководца</option>${leaderOptions}</select>`:'—'}</td>`:''}<td>${unit?escape(unit.name):'—'}</td><td>${unit?escape(domains[data.catalog.find(c=>Number(c.id)===Number(unit.unit_id))?.domain]||'Часть'):'—'}</td><td>${unit?fmt(unit.quantity):'—'}</td><td>${unit?fmt(Number(unit.upkeep)*Number(data.catalog.find(u=>Number(u.id)===Number(unit.unit_id))?.upkeep_factor??1)):'—'}${unit?' G':''}</td><td>${unit?fmt(f.kind==='mercenary'&&index===0?Number(data.mercenaries.find(g=>Number(g.id)===Number(f.mercenary_group_id))?.upkeep_price??0):upkeepOf(f,unit)):'—'}${unit?' G':''}</td></tr>`).join('');
+      return separator+heading+units.map((unit,index)=>`<tr>${index===0?`<td rowspan="${units.length}">${location}</td><td rowspan="${units.length}">${f.kind==='regular'?`<select data-assign-leader="${f.id}"><option value="">Без полководца</option>${leaderOptions}</select>`:'—'}</td>`:''}<td>${unit?escape(unit.name):'—'}</td><td>${unit?escape(domains[data.catalog.find(c=>Number(c.id)===Number(unit.unit_id))?.domain]||'Часть'):'—'}</td><td>${unit?fmt(unit.quantity):'—'}</td><td>${unit?fmt(unit.unit_upkeep):'—'}${unit?' G':''}</td><td>${unit?fmt(f.kind==='mercenary'&&index===0?Number(data.mercenaries.find(g=>Number(g.id)===Number(f.mercenary_group_id))?.upkeep_price??0):Number(unit.total_upkeep||0)):'—'}${unit?' G':''}</td></tr>`).join('');
     }).join('');
     const formationDialogs=regular.map(f=>{
       const fleet=data.formations.find(item=>Number(item.id)===Number(f.transported_by));
@@ -149,55 +116,33 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
       void (async()=>{try{const result=await militarySiegeStormApi(provinceId,route);notify?.(`Штурм начат. Сражение №${fmt(result.battle_id)} ожидает решения во вкладке «Сражения».`);window.dispatchEvent(new Event('map:refresh'));await refresh();}
         catch(error){notify?.(error.message);button.disabled=false;}})();
     }));
-    host.querySelectorAll('[data-calc-naval]').forEach(button=>button.addEventListener('click',()=>{
+    host.querySelectorAll('[data-calc-naval]').forEach(button=>button.addEventListener('click',async()=>{
       const battle=(data.battles||[]).find(item=>Number(item.id)===Number(button.dataset.calcNaval));
       const form=host.querySelector(`[data-resolve-battle="${Number(button.dataset.calcNaval)}"]`);
       const options=host.querySelector(`[data-naval-options="${Number(button.dataset.calcNaval)}"]`);
       const report=options?.querySelector('[data-naval-report]');
       if(!battle||!form||!options)return;
+      button.disabled=true;if(report)report.textContent='Сервер рассчитывает бой…';
       try{
         const stateIds=[...new Set(battle.participants.map(p=>Number(p.state_id)))];
-        if(stateIds.length!==2)throw new Error('Автоматический калькулятор пока рассчитывает столкновение двух государств. Для большего числа сторон исход фиксирует судья вручную.');
-        const attackerId=Number(options.querySelector('[data-naval-attacker]').value),defenderId=stateIds.find(id=>id!==attackerId);
-        const attacker=navalBattleSide(battle.participants,attackerId),defender=navalBattleSide(battle.participants,defenderId);
-        const checked=(kind,id)=>Boolean(options.querySelector(`[data-naval-option="${kind}"][data-state="${id}"]`)?.checked);
-        const simulation=simulateNavalBattle({battleId:String(battle.id),randomSeed:String(battle.id),attacker,defender,
-          poorVisibility:Boolean(options.querySelector('[data-poor-visibility]')?.checked),
-          safeRetreat:{attacker:checked('safe',attackerId),defender:checked('safe',defenderId)},
-          adverseConditions:{attacker:checked('adverse',attackerId),defender:checked('adverse',defenderId)},
-          requestWithdrawal:{attacker:checked('withdraw',attackerId),defender:checked('withdraw',defenderId)},
-          pursue:{attacker:checked('pursue',attackerId),defender:checked('pursue',defenderId)}});
-        const winnerId=simulation.outcome==='attacker'?attackerId:simulation.outcome==='defender'?defenderId:null;
-        if(winnerId)form.elements.winner_state_id.value=String(winnerId);
-        const lossMap=new Map();
-        for(const side of ['attacker','defender'])for(const ship of simulation.fleets[side].ships)if(ship.sunk||ship.captured){
-          const key=`${Number(ship.formation_id)}:${Number(ship.unit_id)}`;lossMap.set(key,(lossMap.get(key)||0)+1);
-        }
-        battle.participants.forEach(p=>(p.units||[]).forEach(u=>{
-          const input=form.elements[`loss_${p.formation_id}_${u.unit_id}`];if(input)input.value=String(lossMap.get(`${Number(p.formation_id)}:${Number(u.unit_id)}`)||0);
-        }));
-        const sideByState={[attackerId]:'attacker',[defenderId]:'defender'};
-        const navalStates=battle.participants.map(p=>{
-          const side=simulation.fleets[sideByState[Number(p.state_id)]];
-          return {formation_id:Number(p.formation_id),ships:navalStatePayload(side).filter(s=>Number(side.ships.find(x=>x.id===s.id)?.formation_id)===Number(p.formation_id))};
-        });
-        const navalCaptures=[];
-        for(const sideName of ['attacker','defender'])for(const ship of simulation.fleets[sideName].ships.filter(s=>s.captured)){
-          const receiverSide=ship.capturedBy,receiverState=receiverSide==='attacker'?attackerId:defenderId;
-          const targetFormation=battle.participants.find(p=>Number(p.state_id)===receiverState)?.formation_id;
-          if(!targetFormation)continue;
-          navalCaptures.push({target_formation_id:Number(targetFormation),unit_id:Number(ship.unit_id),ship:{id:`capture:${battle.id}:${ship.id}`,unit_id:Number(ship.unit_id),ship_no:Number(ship.ship_no),type:ship.type,crew:Math.max(0,Math.floor(ship.crew)),hull:Number(ship.hull),morale:Number(ship.morale)}});
-        }
-        form.dataset.navalStates=JSON.stringify(navalStates);form.dataset.navalCaptures=JSON.stringify(navalCaptures);
-        form.dataset.navalReport=JSON.stringify({outcome:simulation.outcome,cycles:simulation.cycles,withdrawals:simulation.withdrawals,pursuit:simulation.pursuit,random_seed:simulation.randomSeed});
+        const attackerId=Number(options.querySelector('[data-naval-attacker]').value);
+        const checked=kind=>Object.fromEntries(stateIds.map(id=>[String(id),Boolean(options.querySelector(`[data-naval-option="${kind}"][data-state="${id}"]`)?.checked)]));
+        const result=await navalBattlePreviewApi(Number(battle.id),{
+          attacker_state_id:attackerId,poor_visibility:Boolean(options.querySelector('[data-poor-visibility]')?.checked),
+          safe:checked('safe'),adverse:checked('adverse'),withdraw:checked('withdraw'),pursue:checked('pursue')});
+        if(!form.isConnected)return;
+        form.elements.winner_state_id.disabled=false;
+        if(result.winner_state_id){form.elements.winner_state_id.value=String(result.winner_state_id);form.elements.winner_state_id.disabled=true;}
+        for(const loss of result.losses||[]){const input=form.elements[`loss_${loss.formation_id}_${loss.unit_id}`];if(input)input.value=String(loss.losses);}
+        form.dataset.navalStates=JSON.stringify(result.naval_states||[]);
+        form.dataset.navalCaptures=JSON.stringify(result.naval_captures||[]);
+        form.dataset.navalReport=JSON.stringify(result.naval_report||null);
         form.querySelectorAll('input[name^="loss_"]').forEach(input=>input.readOnly=true);
-        if(winnerId)form.elements.winner_state_id.disabled=true;
-        const labels={attacker:attackerId,defender:defenderId};
-        const outcomeText=simulation.outcome==='draw'?'Ничья':`Победитель: ${battle.participants.find(p=>Number(p.state_id)===winnerId)?.state_name||'—'}`;
-        const cycleText=simulation.cycles.map(c=>`Цикл ${c.cycle}: экипаж потерял ${fmt((c.casualties.attacker||[]).reduce((sum,x)=>sum+Number(x.crewLost||0),0))} / ${fmt((c.casualties.defender||[]).reduce((sum,x)=>sum+Number(x.crewLost||0),0))}; потоплено или захвачено ${fmt((c.casualties.attacker||[]).filter(x=>x.sunk||x.captured).length)} / ${fmt((c.casualties.defender||[]).filter(x=>x.sunk||x.captured).length)} судов.`).join(' ');
-        if(report)report.textContent=`${outcomeText}. ${cycleText}${simulation.pursuit?.success?' Успешное преследование нанесло дополнительные потери.':''}`;
+        const outcomeText=result.winner_state_id?`Победитель: ${battle.participants.find(p=>Number(p.state_id)===Number(result.winner_state_id))?.state_name||'—'}`:'Ничья';
+        if(report)report.textContent=`${outcomeText}. ${result.summary||''}${result.naval_report?.pursuit?.success?' Успешное преследование нанесло дополнительные потери.':''}`;
         button.textContent='Пересчитать с теми же настройками';
       }catch(error){if(report)report.textContent=error.message;}
+      finally{if(button.isConnected)button.disabled=false;}
     }));
     host.querySelectorAll('[data-resolve-battle]').forEach(form=>{
       const winnerSelect=form.elements.winner_state_id;
@@ -221,9 +166,10 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
         const unit=data.catalog.find(item=>Number(item.id)===Number(form.dataset.hireUnit));if(!unit)return;
         const provinceSelect=form.elements.province_id,formationSelect=form.closest('tr').querySelector('select[aria-label="Формирование"]'),quantity=form.closest('tr').querySelector('input[name="quantity"]'),submit=form.closest('tr').querySelector('[data-hire-submit]'),estimate=form.closest('tr').querySelector('[data-hire-estimate]');
         formationSelect.setAttribute('form',form.id||`hire-form-${unit.id}`);form.id=formationSelect.getAttribute('form');quantity.setAttribute('form',form.id);submit.setAttribute('form',form.id);
-        const updateEstimate=()=>{const amount=Math.max(0,Math.floor(Number(quantity.value)||0));estimate.textContent=`${fmt(Math.floor(amount*Number(unit.hire_cost)*Number(unit.hire_factor??1)))} G · ${fmt(amount*Number(unit.recruit_cost))} рекр.`;};
-        formationSelect.onchange=()=>{const opt=formationSelect.selectedOptions[0],id=Number(formationSelect.value);if(id){const formation=regular.find(item=>Number(item.id)===id);if(formation)provinceSelect.value=String(formation.province_id);provinceSelect.disabled=true;}else provinceSelect.disabled=false;};
-        quantity.oninput=updateEstimate;updateEstimate();
+        let estimateTimer,estimateRevision=0;
+        const updateEstimate=()=>{clearTimeout(estimateTimer);const revision=++estimateRevision;estimate.textContent='Проверяю стоимость…';estimateTimer=setTimeout(async()=>{try{const result=await militaryApi('preview_hire',stateId,{unit_id:Number(unit.id),quantity:Number(quantity.value),province_id:Number(provinceSelect.value),formation_id:formationSelect.value?Number(formationSelect.value):null});if(revision===estimateRevision&&form.isConnected)estimate.textContent=`${fmt(result.cost)} G · ${fmt(result.recruits)} рекр.`;}catch(error){if(revision===estimateRevision&&form.isConnected)estimate.textContent=error.message;}},250);};
+        formationSelect.onchange=()=>{const id=Number(formationSelect.value);if(id){const formation=regular.find(item=>Number(item.id)===id);if(formation)provinceSelect.value=String(formation.province_id);provinceSelect.disabled=true;}else provinceSelect.disabled=false;updateEstimate();};
+        quantity.oninput=updateEstimate;quantity.onfocus=updateEstimate;provinceSelect.onchange=updateEstimate;
         form.addEventListener('submit',event=>{event.preventDefault();const amount=Number(quantity.value);if(!Number.isInteger(amount)||amount<1)return;void run(host,'hire',stateId,{unit_id:Number(unit.id),quantity:amount,province_id:Number(provinceSelect.value),formation_id:formationSelect.value?Number(formationSelect.value):null,name:unit.domain==='naval'?'Новая флотилия':'Новая армия'},notify,refresh);});
       });
     }

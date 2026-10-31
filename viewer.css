@@ -113,6 +113,7 @@ dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-w
 .marker-move-actions button{min-height:30px;padding:5px 8px;font-size:11px}
 .marker-popover>p.hint{margin:0 10px 8px;font-size:11px}
 .marker-popover-delete{margin:0 10px 10px;min-height:30px;color:#e2aa9b;border-color:#e2aa9b55}
+.local-event-description{white-space:pre-wrap;overflow-wrap:anywhere}
 .marker-option{display:flex;align-items:center;gap:7px}.marker-option img{width:20px;height:20px;object-fit:contain;flex:none}
 dialog.auth-dialog{width:min(460px,calc(100vw - 24px));max-height:none}
 dialog.auth-dialog .modal-shell{max-height:none}dialog.auth-dialog #modal-content{overflow:visible}

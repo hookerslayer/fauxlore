@@ -198,8 +198,10 @@ Deno.serve(async request => {
       : province.layers?.states?.estate_tax_rates != null;
     if (!permitted) return json(403, {error: 'Нет доступа к экономике провинции'});
 
-    const economy = calculateProvinceEconomy(province);
-    const value = calculateProvinceValue(province);
+    const localModifiers=await readRpc('local_events_api',{action:'projection',payload:{province_id:provinceId}});
+    const provinceContext={permanent_modifiers:localModifiers};
+    const economy = calculateProvinceEconomy(province,province?.layers?.states?.name,provinceContext);
+    const value = calculateProvinceValue(province,province?.layers?.states?.name,provinceContext);
     return json(200, {
       province_id: provinceId,
       data_revision: map.data_revision,

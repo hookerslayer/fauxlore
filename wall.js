@@ -1,4 +1,4 @@
-import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=load-recovery-20261031';
+import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=local-events-20261031';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=value=>new Date(value).toLocaleString('ru-RU');

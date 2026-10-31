@@ -1,5 +1,5 @@
-import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=load-recovery-20261031';
-import {renderGarrisonPanel} from './garrison-ui.js?v=load-recovery-20261031';
+import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=local-events-20261031';
+import {renderGarrisonPanel} from './garrison-ui.js?v=local-events-20261031';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=value=>Math.floor(Number(value)||0).toLocaleString('ru-RU');

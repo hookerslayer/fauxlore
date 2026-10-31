@@ -1,5 +1,7 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=quiet-refresh-20261031';
-import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=load-recovery-20261031';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=local-events-20261031';
+import {localEventsApi} from './supabase-api.js?v=local-events-20261031';
+import {showLocalEvent} from './local-events.js';
+import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=local-events-20261031';
 import {isOlderMapRevision,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -30,6 +32,17 @@ function tintedMilitaryIcon(type,color){
 let colorsTexture,occupationColorsTexture,terrainTexture,fogVisibilityTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
 const thematicComponents=new Map();
 let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
+let mapLocalEvents=[],localEventHitTargets=[],localEventRequest=0;
+async function refreshLocalEvents(){const request=++localEventRequest;try{const events=await localEventsApi('list');if(request===localEventRequest){mapLocalEvents=events;schedule();}}catch(error){console.debug('Не удалось обновить местные события:',error.message);}}
+function drawLocalEvents(){
+  localEventHitTargets=[];const groups=new Map();
+  for(const event of mapLocalEvents){const list=groups.get(Number(event.province_id))||[];list.push(event);groups.set(Number(event.province_id),list);}
+  ctx.save();ctx.lineWidth=1.5;ctx.font='700 13px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+  for(const [id,events] of groups){const province=provinces.get(id);if(!province?.center)continue;const anchorX=province.center[0]*view.scale+view.x,anchorY=province.center[1]*view.scale+view.y;const size=24,gap=4;
+    events.forEach((event,index)=>{const x=anchorX+(index-(events.length-1)/2)*(size+gap),y=anchorY-34;if(x<-40||y<-40||x>viewportWidth+40||y>viewportHeight+40)return;
+      ctx.fillStyle='#1c211c';ctx.strokeStyle='#e7c667';ctx.beginPath();ctx.moveTo(x-size*.3,y+size/2-1);ctx.lineTo(anchorX,anchorY);ctx.lineTo(x+size*.3,y+size/2-1);ctx.closePath();ctx.fill();ctx.stroke();ctx.beginPath();ctx.roundRect(x-size/2,y-size/2,size,size,5);ctx.fill();ctx.stroke();ctx.fillStyle='#e7c667';ctx.fillText('!',x,y+.5);localEventHitTargets.push({left:x-size/2,right:x+size/2,top:y-size/2,bottom:y+size/2,event});});
+  }ctx.restore();
+}
 let selectedMarkerPopup=null;
 let mapTradeRoutes=[];
 function drawTradeRoutes(){
@@ -430,6 +443,7 @@ function drawLabels() {
   // Markers are part of the map composition: their anchors, icon sizes, and label offsets all follow map zoom.
   ctx.setTransform(dprX,0,0,dprY,0,0); ctx.clearRect(0,0,viewportWidth,viewportHeight);
   drawTradeRoutes();
+  drawLocalEvents();
   const showMarkers=Object.keys(markerIcons).some(type=>activeSettings.markers?.[type])&&mapMarkers.length>0||activeSettings.markers?.capital||activeSettings.markers?.city;
   if (!showIds&&!Object.values(activeSettings.information).some(Boolean)&&!showMarkers&&activeSettings.layer!=='military') return;
   const markersByProvince=new Map();
@@ -623,6 +637,8 @@ function mapClick(x,y){
     window.dispatchEvent(new CustomEvent('map:marker-location-selected',{detail:{...draft,province_id,x:p[0],y:p[1]}}));
     status('Сохраняю маркер…',2500);return;
   }
+  const eventHit=[...localEventHitTargets].reverse().find(hit=>x>=hit.left&&x<=hit.right&&y>=hit.top&&y<=hit.bottom);
+  if(eventHit){showLocalEvent(eventHit.event);return;}
   const militaryHit=pickMilitary(x,y);
   if(militaryHit){
     selectedMarkerPopup=null;
@@ -861,7 +877,7 @@ canvas.addEventListener('wheel',e=>{ e.preventDefault();window.dispatchEvent(new
 canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();else if(!toolMode)zoom(2,e.clientX,e.clientY);});
 window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});
 window.addEventListener('auth:user-changed',()=>{void refreshMapMilitary();scheduleMilitaryRefresh();});
-window.addEventListener('map:refreshed',()=>{void refreshMapMilitary();});
+window.addEventListener('map:refreshed',()=>{void refreshMapMilitary();void refreshLocalEvents();});
 window.addEventListener('map:refresh',()=>{void refreshMapMilitary();});
 window.addEventListener('state:resources-changed',()=>provinceProjectionCache.clear());
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(militaryRefreshTimer);else{void refreshMapMilitary();scheduleMilitaryRefresh();}});
@@ -949,6 +965,7 @@ async function init() {
   setupGL();
   ready=true;resize();fit();
   await hydrateUI(data);
+  void refreshLocalEvents();
   status('',0);
   void api('map/revision').then(revision=>{if(String(revision.data_revision||0)!==dataRevision||String(revision.live_revision||0)!==liveRevision||String(revision.tile_revision||'')!==tileRevision)void syncMapInBackground();}).catch(error=>console.debug('Не удалось проверить версию карты:',error.message));
   syncTimer=setTimeout(syncMapInBackground,60000);

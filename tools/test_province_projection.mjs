@@ -8,8 +8,10 @@ const province={id:42,kind:'land',province_type:'Регион',population:1000,d
     races:{id:1,name:'Люди'},religions:{id:1,name:'Правоверие'},resources:{name:'Зерно'}}};
 let map={data_revision:7,live_revision:9,provinces:[province]};
 let role='admin';
+let localProjection=[];
 let privateReads=0, mapReads=0;
 globalThis.fetch=async (_url,options)=>{
+  if(String(_url).endsWith('/local_events_api'))return new Response(JSON.stringify(localProjection),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/military_api'))return new Response(JSON.stringify({upkeep_breakdown:{army:60,garrison_by_estate:{Знать:40}}}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/garrison_api'))return new Response(JSON.stringify({provinces:[{sponsor:'Знать',units:[{quantity:100,upkeep:1}],fort_level:0,wall_level:0}]}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/colonization_api'))return new Response(JSON.stringify({missions:[{id:1}]}),{status:200,headers:{'Content-Type':'application/json'}});
@@ -65,6 +67,10 @@ assert.equal(result.province_id,42);
 assert.equal(result.data_revision,7);
 assert.equal(result.live_revision,9);
 assert.equal(typeof result.taxes,'number');
+localProjection=[{source_kind:'admin',key:'production',value:.5,target_province_id:42}];
+const affected=await (await call({province_id:42})).json();
+assert.ok(affected.production>result.production,'Local event changes the selected province projection');
+localProjection=[];
 const forged=await (await call({province_id:42,population:999999999,estate_tax_rates:{Знать:999999}})).json();
 assert.deepEqual(forged,result,'Client-supplied economic inputs must be ignored');
 const state=await (await call({state_id:5})).json();

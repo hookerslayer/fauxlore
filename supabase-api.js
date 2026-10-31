@@ -2,6 +2,13 @@ export const isSupabaseBackend = window.FAUXLORE_CONFIG?.backend === 'supabase';
 let clientPromise;
 const inflight = new Map();
 
+export async function localEventsApi(action,payload={}) {
+  const db=await client();
+  const {data,error}=await db.rpc('local_events_api',{action,payload});
+  if(error)throw new Error(error.message||'Не удалось загрузить местные события');
+  return data;
+}
+
 async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;

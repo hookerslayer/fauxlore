@@ -18084,3 +18084,186 @@ begin
   execute revised;
 end $migration$;
 notify pgrst,'reload schema';
+
+-- Applied migration: 20261031074714_state_development_and_admin_mercenaries.sql
+create or replace function public.state_development_growth_api(target_state integer)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor fauxlore.accounts; p record; growth numeric; cap numeric; result jsonb := '[]'::jsonb;
+begin
+ actor:=fauxlore.current_account();
+ if actor.id is null or (actor.role is distinct from 'admin' and not exists(select 1 from fauxlore.account_states where account_id=actor.id and state_id=target_state)) then raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+ for p in select pr.id,pr.development,pr.province_type,r.name resource_name from fauxlore.provinces pr join fauxlore.province_values own on own.province_id=pr.id and own.layer='states' and own.category_id=target_state left join fauxlore.province_values rv on rv.province_id=pr.id and rv.layer='resources' left join fauxlore.map_categories r on r.layer='resources' and r.id=rv.category_id where pr.kind='land' loop
+  growth:=fauxlore.state_permanent_modifier_total(target_state,array['development','urban_development','regional_development','forest_development','livestock_development','metal_development','precious_development','ephemera_development'],p.id,p.resource_name);
+  cap:=null;
+  if p.province_type='Регион' then select min((m->>'value')::numeric) into cap from jsonb_array_elements(fauxlore.state_permanent_modifiers(target_state)) m where m->>'key'='regional_development_cap' and m->>'condition'='Максимум'; end if;
+  select least(coalesce(cap,1e12),min((m->>'value')::numeric)) into cap from jsonb_array_elements(fauxlore.state_permanent_modifiers(target_state)) m where m->>'key'='development_cap' and m->>'condition'='Максимум';
+  growth:=case when growth<=0 then 0 else least(growth,coalesce(cap,growth)) end;
+  result:=result||jsonb_build_array(jsonb_build_object('id',p.id,'development',p.development,'growth',growth));
+ end loop;
+ return result;
+end $$;
+revoke all on function public.state_development_growth_api(integer) from public,anon;
+grant execute on function public.state_development_growth_api(integer) to authenticated;
+
+create or replace function public.admin_mercenaries_api(action text,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor fauxlore.accounts; group_key bigint; group_row fauxlore.mercenary_groups;
+begin
+ actor:=fauxlore.current_account();
+ if actor.id is null or actor.role is distinct from 'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;
+ if action='snapshot' then
+  return jsonb_build_object('groups',coalesce((select jsonb_agg(to_jsonb(g)||jsonb_build_object('city_name',p.name,'hired_by',s.name) order by g.id) from fauxlore.mercenary_groups g join fauxlore.provinces p on p.id=g.city_province_id left join lateral (select c.name from fauxlore.military_formations f join fauxlore.map_categories c on c.layer='states' and c.id=f.state_id where f.mercenary_group_id=g.id and f.active order by f.id limit 1) s on true where g.active),'[]'::jsonb), 'cities',coalesce((select jsonb_agg(jsonb_build_object('id',p.id,'name',p.name) order by p.name) from fauxlore.provinces p where exists(select 1 from fauxlore.map_markers m where m.province_id=p.id and m.type in ('city','capital'))),'[]'::jsonb), 'catalog',coalesce((select jsonb_agg(jsonb_build_object('id',u.id,'name',u.name) order by u.name) from fauxlore.military_unit_catalog u where u.domain='land' and u.active),'[]'::jsonb));
+ elsif action='create' then
+  return fauxlore.military_actions_extra('admin_mercenary',null,payload);
+ elsif action='delete' then
+  group_key:=(payload->>'group_id')::bigint;
+  select * into group_row from fauxlore.mercenary_groups where id=group_key and active for update;
+  if not found then raise sqlstate 'P0002' using message='Группа не найдена'; end if;
+  update fauxlore.military_formations set active=false where mercenary_group_id=group_key and active;
+  update fauxlore.mercenary_groups set active=false where id=group_key;
+  return jsonb_build_object('ok',true);
+ end if;
+ raise sqlstate '22023' using message='Неизвестное действие';
+end $$;
+revoke all on function public.admin_mercenaries_api(text,jsonb) from public,anon;
+grant execute on function public.admin_mercenaries_api(text,jsonb) to authenticated;
+
+-- Applied migration: 20261031081704_optimize_state_and_map_projections.sql
+do $migration$
+declare definition text; old_part text; new_part text;
+begin
+ definition:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+ old_part:='), estates as (';
+ if position(old_part in definition)=0 then raise exception 'state indicators: estates marker missing'; end if;
+ new_part:='), relevant_values as materialized ('||chr(10)||
+   '  select p.*,fauxlore.province_value_for_state(p.id,target_state) cached_state_value from relevant p where p.share>0'||chr(10)||
+   '), estates as (';
+ definition:=replace(definition,old_part,new_part);
+ old_part:='sum(fauxlore.province_value_for_state(p.id,target_state)*ep.population';
+ if position(old_part in definition)=0 then raise exception 'state indicators: value marker missing'; end if;
+ definition:=replace(definition,old_part,'sum(p.cached_state_value*ep.population');
+ old_part:='left join relevant p on p.share>0';
+ if position(old_part in definition)=0 then raise exception 'state indicators: province join missing'; end if;
+ definition:=replace(definition,old_part,'left join relevant_values p on true');
+ execute definition;
+
+ definition:=pg_get_functiondef('fauxlore.state_indicators(integer)'::regprocedure);
+ old_part:='select min(fauxlore.effective_province_tax_efficiency(target_state,p.id)) min_rate,'||chr(10)||
+ '         max(fauxlore.effective_province_tax_efficiency(target_state,p.id)) max_rate'||chr(10)||
+ '  from fauxlore.provinces p'||chr(10)||
+ '  join fauxlore.province_values owner on owner.province_id=p.id and owner.layer=''states'' and owner.category_id=target_state'||chr(10)||
+ '  where p.kind=''land''';
+ if position(old_part in definition)=0 then raise exception 'state indicators: tax rate marker missing'; end if;
+ new_part:='with province_rates as materialized ('||chr(10)||
+ '  select fauxlore.effective_province_tax_efficiency(target_state,p.id) rate'||chr(10)||
+ '  from fauxlore.provinces p join fauxlore.province_values owner on owner.province_id=p.id and owner.layer=''states'' and owner.category_id=target_state'||chr(10)||
+ '  where p.kind=''land'') select min(rate) min_rate,max(rate) max_rate from province_rates';
+ definition:=replace(definition,old_part,new_part);
+ execute definition;
+
+ definition:=pg_get_functiondef('fauxlore.map_payload_unfiltered()'::regprocedure);
+ old_part:='with s as (select';
+ if position(old_part in definition)=0 then raise exception 'map payload: CTE marker missing'; end if;
+ new_part:='with state_tax_rates as materialized (select c.id,fauxlore.state_estate_tax_rates_json(c.id) rates from fauxlore.map_categories c where c.layer=''states''),'||chr(10)||'s as (select';
+ definition:=replace(definition,old_part,new_part);
+ old_part:='fauxlore.state_estate_tax_rates_json(c.id)';
+ -- Preserve the single computation in the materialized CTE, replace the three consumers.
+ if (length(definition)-length(replace(definition,old_part,'')))/length(old_part)<>4 then raise exception 'map payload: tax-rate reference count changed'; end if;
+ definition:=replace(definition,old_part,'(select r.rates from state_tax_rates r where r.id=c.id)');
+ definition:=replace(definition,'select c.id,(select r.rates from state_tax_rates r where r.id=c.id) rates from fauxlore.map_categories c','select c.id,fauxlore.state_estate_tax_rates_json(c.id) rates from fauxlore.map_categories c');
+ execute definition;
+end
+$migration$;
+
+-- Applied migration: 20261031082048_stop_noop_politics_revision.sql
+-- Do not mutate political records or increment live_revision on a read when
+-- the required rows and statuses already exist.
+create or replace function fauxlore.ensure_state_group_politics(target_state integer)
+returns void language plpgsql security definer set search_path='' as $function$
+begin
+  if exists (
+    select 1 from unnest(array['Знать','Духовенство','Горожане','Крестьяне']) e(name)
+    left join fauxlore.state_group_politics g on g.state_id=target_state and g.group_type='estate' and g.group_key=e.name
+    where g.state_id is null or g.status is distinct from fauxlore.estate_status_for(target_state,e.name)
+  ) then
+    insert into fauxlore.state_group_politics(state_id,group_type,group_key,status)
+    select target_state,'estate',e.name,fauxlore.estate_status_for(target_state,e.name)
+    from unnest(array['Знать','Духовенство','Горожане','Крестьяне']) e(name)
+    on conflict(state_id,group_type,group_key) do update set status=excluded.status
+      where fauxlore.state_group_politics.status is distinct from excluded.status;
+  end if;
+  if exists (
+    select 1 from fauxlore.state_profiles sp
+    join fauxlore.province_values sv on sv.layer='states' and sv.category_id=target_state
+    join fauxlore.province_values v on v.province_id=sv.province_id and v.layer in ('races','religions')
+    where sp.state_id=target_state and not exists (
+      select 1 from fauxlore.state_group_politics g where g.state_id=target_state
+      and g.group_type=case v.layer when 'races' then 'race' else 'religion' end
+      and g.group_key=v.category_id::text)
+  ) then
+    insert into fauxlore.state_group_politics(state_id,group_type,group_key,status)
+    select distinct target_state,case v.layer when 'races' then 'race' else 'religion' end,v.category_id::text,
+      case when v.layer='races' and v.category_id=sp.official_race_id then 'Официальная'
+           when v.layer='religions' and v.category_id=sp.official_religion_id then 'Официальная'
+           else 'Невмешательство' end
+    from fauxlore.state_profiles sp
+    join fauxlore.province_values sv on sv.layer='states' and sv.category_id=target_state
+    join fauxlore.province_values v on v.province_id=sv.province_id and v.layer in ('races','religions')
+    where sp.state_id=target_state
+    on conflict(state_id,group_type,group_key) do nothing;
+  end if;
+end
+$function$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261031082932_optimize_military_snapshot_catalog.sql
+do $migration$
+declare definition text; old_part text; new_part text;
+begin
+ definition:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+ old_part:=$old$'recruitment',fauxlore.state_recruitment(sid),$old$;
+ if position(old_part in definition)=0 then raise exception 'Military recruitment marker missing'; end if;
+ new_part:=$new$'recruitment',case when indicator_snapshot ? 'recruit_growth' and indicator_snapshot ? 'recruit_limit' then jsonb_build_object('recruit_growth',indicator_snapshot->'recruit_growth','recruit_limit',indicator_snapshot->'recruit_limit') else fauxlore.state_recruitment(sid) end,$new$;
+ definition:=replace(definition,old_part,new_part);
+ old_part:=$old$'catalog',(select coalesce(jsonb_agg(to_jsonb(u)||jsonb_build_object('hire_factor',fauxlore.military_unit_cost_factor(sid,u.id,'hire'),'upkeep_factor',fauxlore.military_unit_cost_factor(sid,u.id,'upkeep'),'hire_price',floor(u.hire_cost*fauxlore.military_unit_cost_factor(sid,u.id,'hire')),'upkeep_price',floor(u.upkeep*fauxlore.military_unit_cost_factor(sid,u.id,'upkeep'))) order by u.domain,u.id),'[]'::jsonb) from fauxlore.military_unit_catalog u where u.active and (u.state_id is null or u.state_id=sid)),$old$;
+ if position(old_part in definition)=0 then raise exception 'Military catalog marker missing'; end if;
+ new_part:=$new$'catalog',(with factors as materialized (select u.*,fauxlore.military_unit_cost_factor(sid,u.id,'hire') as _hire_factor,fauxlore.military_unit_cost_factor(sid,u.id,'upkeep') as _upkeep_factor from fauxlore.military_unit_catalog u where u.active and (u.state_id is null or u.state_id=sid)) select coalesce(jsonb_agg((to_jsonb(u)-'_hire_factor'-'_upkeep_factor')||jsonb_build_object('hire_factor',u._hire_factor,'upkeep_factor',u._upkeep_factor,'hire_price',floor(u.hire_cost*u._hire_factor),'upkeep_price',floor(u.upkeep*u._upkeep_factor)) order by u.domain,u.id),'[]'::jsonb) from factors u),$new$;
+ definition:=replace(definition,old_part,new_part);
+ execute definition;
+end
+$migration$;
+
+-- Migration 20261031092511: estate influence and loyalty.
+-- Keep the SQL indicators in sync with the server-side province projection.
+do $migration$
+declare
+  fn text;
+  old_fragment text;
+  new_fragment text;
+begin
+  fn:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+  old_fragment:=$old$select *,coalesce(adjusted_weight/nullif(sum(adjusted_weight) over(),0),0) influence from (select estates.*,weight*case when name='Крестьяне' then greatest(0,1+fauxlore.state_permanent_modifier_total(target_state,array['peasant_influence'],null,null)) else 1 end adjusted_weight from estates) weighted$old$;
+  new_fragment:=$new$select *,case when privileged_weight>0 and powerless_weight>total_weight*.1 then
+    case when status='Бесправное' then .1*adjusted_weight/nullif(powerless_weight,0)
+      else .9*adjusted_weight/nullif(privileged_weight,0) end
+    else coalesce(adjusted_weight/nullif(total_weight,0),0) end influence
+  from (select weighted.*,sum(adjusted_weight) over() total_weight,
+    sum(adjusted_weight) filter(where status='Бесправное') over() powerless_weight,
+    coalesce(sum(adjusted_weight) filter(where status is distinct from 'Бесправное') over(),0) privileged_weight
+    from (select estates.*,weight*case when name='Крестьяне' then greatest(0,1+fauxlore.state_permanent_modifier_total(target_state,array['peasant_influence'],null,null)) else 1 end adjusted_weight from estates) weighted) totals$new$;
+  if position(old_fragment in fn)=0 then raise exception 'estate influence source differs from expected'; end if;
+  fn:=replace(fn,old_fragment,new_fragment);
+  old_fragment:=$old$influence-case status when 'Ключевое' then .5 when 'Значимое' then .35 else 0 end$old$;
+  new_fragment:=$new$influence-case status when 'Ключевое' then .4 when 'Значимое' then .2 else 0 end$new$;
+  if position(old_fragment in fn)=0 then raise exception 'estate ambition source differs from expected'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+
+  fn:=pg_get_functiondef('fauxlore.state_permanent_modifier_total(integer,text[],integer,text)'::regprocedure);
+  old_fragment:=$old$group_key='Знать'),0)<=60$old$;
+  if position(old_fragment in fn)=0 then raise exception 'nobility loyalty threshold differs from expected'; end if;
+  fn:=replace(fn,old_fragment,$new$group_key='Знать'),0)<=.60$new$);
+  old_fragment:=$old$status='Ключевое' and loyalty<=60$old$;
+  if position(old_fragment in fn)=0 then raise exception 'key estate loyalty threshold differs from expected'; end if;
+  execute replace(fn,old_fragment,$new$status='Ключевое' and loyalty<=.60$new$);
+end
+$migration$;

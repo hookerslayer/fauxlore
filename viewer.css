@@ -775,3 +775,11 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .wall-post{position:relative}.wall-delete{position:absolute;top:8px;right:8px;width:auto;padding:5px 9px;color:#ef8b83;border-color:#7f403b}.wall-delete:hover{background:#542b28}
 
 .state-journal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}.state-journal-card form{display:grid;gap:10px}.state-journal-card textarea{width:100%;min-height:280px;resize:vertical}.state-journal-card button{justify-self:start}@media(max-width:700px){.state-journal-grid{grid-template-columns:1fr}}
+
+/* Grid cards share a row without the generic adjacent-panel margin. */
+.state-journal-grid>.state-journal-card{margin:0;min-width:0}
+.selection.colonization-open{max-width:calc(100vw - 24px);grid-template-rows:auto auto auto minmax(0,1fr)}
+.selection.colonization-open>#selection-relations{grid-column:1;grid-row:3}
+.selection.colonization-open>#selection-details{grid-row:4}
+.selection.colonization-open>.colonization-inline{grid-row:2/5;min-height:0}
+@media(max-width:650px){.selection.colonization-open{grid-template-rows:auto auto auto minmax(0,auto) minmax(0,1fr)}.selection.colonization-open>#selection-relations{grid-row:3}.selection.colonization-open>#selection-details{grid-row:4}.selection.colonization-open>.colonization-inline{grid-row:5}}

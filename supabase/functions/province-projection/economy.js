@@ -26,7 +26,7 @@ export const RECRUIT_GROWTH_MODIFIERS={'Столичная':1.5,'Городск�
 export const RECRUIT_LIMIT_MODIFIERS={'Столичная':1.5,'Городская':1,'Регион':.5};
 export const ESTATE_RECRUIT_MODIFIERS={'Знать':1.2,'Духовенство':.3,'Горожане':.5,'Крестьяне':.1};
 export const ESTATE_NAMES=['Знать','Духовенство','Горожане','Крестьяне'];
-export const ESTATE_AMBITIONS={'Ключевое':.5,'Значимое':.35,'Бесправное':0};
+export const ESTATE_AMBITIONS={'Ключевое':.4,'Значимое':.2,'Бесправное':0};
 export const ESTATE_INFLUENCE_FACTORS={'Ключевое':3,'Значимое':1.5,'Бесправное':.25};
 export const DEFAULT_ECONOMY_CONFIG={resources:ECONOMY_RESOURCES,estateTaxRates:BASE_ESTATE_TAX_RATES,provinceModifiers:PROVINCE_MODIFIERS,tradeStatusModifiers:TRADE_STATUS_MODIFIERS,raceGrowthModifiers:{Люди:1,Дварфы:.8,Полуэльфы:.75,Эльфы:.35,Зверолюди:.6},recruitGrowthModifiers:RECRUIT_GROWTH_MODIFIERS,recruitLimitModifiers:RECRUIT_LIMIT_MODIFIERS,estateRecruitModifiers:ESTATE_RECRUIT_MODIFIERS,provinceValueWeights:PROVINCE_VALUE_WEIGHTS,estateTaxGreed:{'Ключевое|Знать':.35,'Ключевое|Духовенство':.3,'Ключевое|Горожане':.3,'Ключевое|Крестьяне':.2,'Значимое|Знать':.2,'Значимое|Духовенство':.15,'Значимое|Горожане':.15,'Значимое|Крестьяне':.1,'Бесправное|Знать':.05,'Бесправное|Духовенство':.05,'Бесправное|Горожане':.05,'Бесправное|Крестьяне':0},taxLoyaltySensitivity:.5,occupationMultiplier:.5};
 let activeConfig=DEFAULT_ECONOMY_CONFIG;
@@ -257,6 +257,9 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
     }
   }
   const totalWeight=ESTATE_NAMES.reduce((sum,name)=>sum+estateWeights[name],0);
+  const powerlessWeight=ESTATE_NAMES.reduce((sum,name)=>sum+(rowsByKey.get(`estate:${name}`)?.status==='Бесправное'?estateWeights[name]:0),0);
+  const privilegedWeight=totalWeight-powerlessWeight;
+  const capPowerless=privilegedWeight>0&&powerlessWeight>totalWeight*.1;
   const estateInfluence={};
   const estateLoyalty={};
   const estateStability={};
@@ -267,7 +270,9 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
   const activeOrthodoxy=(provinces||[]).some(p=>p.kind==='land'&&p.layers?.states?.name===stateName&&p.layers?.religions?.name==='Правоверие');
   for(const name of ESTATE_NAMES) {
     const row=rowsByKey.get(`estate:${name}`);
-    const influence=totalWeight?estateWeights[name]/totalWeight:0;
+    const influence=capPowerless
+      ?(row?.status==='Бесправное'?.1*estateWeights[name]/powerlessWeight:.9*estateWeights[name]/privilegedWeight)
+      :(totalWeight?estateWeights[name]/totalWeight:0);
     const ambition=ESTATE_AMBITIONS[row?.status]??0;
     const burden=taxBurden[name];
     const rateRatio=burden.baseline?burden.actual/burden.baseline:1;

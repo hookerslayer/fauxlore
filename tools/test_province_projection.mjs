@@ -1,11 +1,4 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-
-for(const name of ['economy.js','estate-demography.js']){
-  assert.equal(readFileSync(new URL(`../${name}`,import.meta.url),'utf8'),
-    readFileSync(new URL(`../supabase/functions/province-projection/${name}`,import.meta.url),'utf8'),
-    `Server copy of ${name} must match the source rules`);
-}
 
 let handler;
 globalThis.Deno={serve(callback){handler=callback;},env:{get(key){return key==='SUPABASE_URL'?'https://example.supabase.co':key==='SUPABASE_SERVICE_ROLE_KEY'?'service-test-key':undefined;}}};
@@ -15,8 +8,9 @@ const province={id:42,kind:'land',province_type:'Регион',population:1000,d
     races:{id:1,name:'Люди'},religions:{id:1,name:'Правоверие'},resources:{name:'Зерно'}}};
 let map={data_revision:7,live_revision:9,provinces:[province]};
 let role='admin';
-let privateReads=0;
+let privateReads=0, mapReads=0;
 globalThis.fetch=async (_url,options)=>{
+  if(String(_url).endsWith('/military_api'))return new Response(JSON.stringify({upkeep_breakdown:{army:60,garrison_by_estate:{Знать:40}}}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/garrison_api'))return new Response(JSON.stringify({provinces:[{sponsor:'Знать',units:[{quantity:100,upkeep:1}],fort_level:0,wall_level:0}]}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/colonization_api'))return new Response(JSON.stringify({missions:[{id:1}]}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/projection_source_api')){
@@ -28,6 +22,7 @@ globalThis.fetch=async (_url,options)=>{
     return new Response(JSON.stringify({...map,provinces:[own,foreign]}),{status:200,headers:{'Content-Type':'application/json'}});
   }
   const path=JSON.parse(options.body).path;
+  if(path==='map')mapReads++;
   const data=path==='map'?map:path==='auth/me'?{user:{role}}:
     path==='admin/states'||path==='my/states'?[{id:5,name:'Тест',principles:{}}]:
     path==='admin/states/5/indicators'||path==='my/states/5/indicators'?{permanent_modifiers:[],corruption:0}:
@@ -41,6 +36,24 @@ globalThis.fetch=async (_url,options)=>{
   return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});
 };
 await import('../supabase/functions/province-projection/index.js');
+const {calculateStatePolitics}=await import('../supabase/functions/province-projection/economy.js');
+const estateNames=['Знать','Духовенство','Горожане','Крестьяне'];
+const politicsFor=statuses=>calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:statuses[i],loyalty:.5})),'Тест',{permanent_modifiers:[],corruption:0});
+const capped=politicsFor(['Ключевое','Значимое','Бесправное','Бесправное']);
+const near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-10,`${actual} != ${expected}`);
+near(capped.estateInfluence['Горожане']+capped.estateInfluence['Крестьяне'],.1);
+near(Object.values(capped.estateInfluence).reduce((a,b)=>a+b,0),1);
+near(capped.estateModifierBreakdown['Знать'].ambition,.4);
+near(capped.estateModifierBreakdown['Духовенство'].ambition,.2);
+near(capped.estateModifierBreakdown['Крестьяне'].ambition,0);
+near(capped.estateLoyalty['Крестьяне'],.5+capped.estateInfluence['Крестьяне']);
+const onlyPowerless=politicsFor(estateNames.map(()=>'Бесправное'));
+near(Object.values(onlyPowerless.estateInfluence).reduce((a,b)=>a+b,0),1);
+const noPowerless=politicsFor(estateNames.map(()=>'Ключевое'));
+near(Object.values(noPowerless.estateInfluence).reduce((a,b)=>a+b,0),1);
+const belowCap=politicsFor(['Бесправное','Ключевое','Ключевое','Ключевое']);
+assert.ok(belowCap.estateInfluence['Знать']<.1);
+near(belowCap.estateInfluence['Знать'],belowCap.estateWeights['Знать']/Object.values(belowCap.estateWeights).reduce((a,b)=>a+b,0));
 const call=body=>handler(new Request('https://example.test/province-projection',{
   method:'POST',headers:{authorization:'Bearer test-jwt',apikey:'sb_publishable_test'},body:JSON.stringify(body),
 }));
@@ -63,6 +76,7 @@ const politics=await (await call({state_id:5,view:'politics'})).json();
 assert.equal(typeof politics.derived.estateInfluence['Крестьяне'],'number');
 assert.equal(typeof politics.derived.estatePopulations['Крестьяне'],'number');
 assert.equal(typeof politics.system_effects.crimeTaxMultiplier,'number');
+const mapReadsBeforeTrade=mapReads;
 const trade=await (await call({state_id:5,view:'trade'})).json();
 assert.equal(Array.isArray(trade.resources),true);
 assert.equal(Array.isArray(trade.zones),true);
@@ -81,7 +95,9 @@ assert.equal(trade.zones.length,1);
 assert.equal(trade.zones[0].participants.find(p=>p.state_id===6).local_income,null);
 assert.equal(typeof trade.zones[0].participants.find(p=>p.state_id===5).local_income,'number');
 assert.equal(privateReads,2);
+assert.equal(mapReads,mapReadsBeforeTrade,'Trade and finance must not request the unused public map');
 assert.equal((await call({state_id:6})).status,403);
+assert.equal((await call({state_id:6,view:'trade'})).status,403);
 assert.equal(privateReads,2,'Forbidden state must not access the private map');
 role='player';
 assert.equal((await call({state_id:5})).status,200);

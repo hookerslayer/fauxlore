@@ -51,10 +51,13 @@ Deno.serve(async request => {
       if(!response.ok)throw new Error(`RPC ${name}: ${response.status}`);
       return response.json();
     };
+    // Trade and finance use the private projection source after access is checked;
+    // loading the public map first would build the same large snapshot twice.
+    const needsPublicMap = !stateMode || !['trade','finance'].includes(view);
     const [map, identity] = stateMode
-      ? await Promise.all([read('map'), read('auth/me')])
+      ? await Promise.all([needsPublicMap ? read('map') : Promise.resolve(null), read('auth/me')])
       : [await read('map'), null];
-    setEconomyConfig(map.economy_config);
+    if (map) setEconomyConfig(map.economy_config);
     if (stateMode) {
       const administrator = identity?.user?.role === 'admin';
       const prefix = administrator ? 'admin' : 'my';

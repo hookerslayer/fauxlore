@@ -44,13 +44,14 @@ async function request(path, options) {
   }) : null;
   // Attach a handler immediately, even if the RPC fails before this fetch.
   if (adjacency) void adjacency.catch(() => {});
-  const { data, error } = await db.rpc('fauxlore_api', {
+  const { data, error, status } = await db.rpc('fauxlore_api', {
     path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : {},
     request_id: options.requestId || ((options.method || 'GET') === 'GET' ? null : crypto.randomUUID()),
   });
   if (error) {
     const failure = new Error(error.message || 'Не удалось выполнить запрос к карте');
     failure.code = error.code;
+    failure.retryable = status === 0 || [408,429,500,502,503,504].includes(status);
     throw failure;
   }
   if (adjacency) {
@@ -89,12 +90,19 @@ export async function militaryMapApi() {
   return data;
 }
 
+function projectionError(error,message) {
+  const failure=new Error(message,{cause:error});
+  failure.status=Number(error.context?.status)||null;
+  failure.retryable=error.name==='FunctionsFetchError'||[408,429,500,502,503,504].includes(failure.status);
+  return failure;
+}
+
 export async function provinceProjectionApi(provinceId) {
   const db = await client();
   const {data, error} = await db.functions.invoke('province-projection', {
     body: {province_id: Number(provinceId)},
   });
-  if (error) throw new Error('Не удалось загрузить расчётные показатели провинции');
+  if (error) throw projectionError(error,'Не удалось загрузить расчётные показатели провинции');
   return data;
 }
 
@@ -103,7 +111,7 @@ export async function stateProvinceProjectionApi(stateId, view = 'provinces') {
   const {data, error} = await db.functions.invoke('province-projection', {
     body: {state_id: Number(stateId), view},
   });
-  if (error) throw new Error('Не удалось загрузить расчётные показатели государства');
+  if (error) throw projectionError(error,'Не удалось загрузить расчётные показатели государства');
   return data;
 }
 
@@ -321,4 +329,17 @@ export async function supabaseLogin() {
     if (exchanged.error) throw exchanged.error;
     return await supabaseApi('auth/me');
   } finally { cleanup(); popup.close(); }
+}
+
+export async function stateDevelopmentGrowthApi(stateId) {
+  const db = await client();
+  const {data,error} = await db.rpc('state_development_growth_api',{target_state:Number(stateId)});
+  if(error) throw new Error(error.message || 'Не удалось загрузить рост развития');
+  return data;
+}
+export async function adminMercenariesApi(action,payload={}) {
+  const db = await client();
+  const {data,error} = await db.rpc('admin_mercenaries_api',{action,payload});
+  if(error) throw new Error(error.message || 'Не удалось управлять наёмниками');
+  return data;
 }

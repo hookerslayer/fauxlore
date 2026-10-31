@@ -1,5 +1,6 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=manual-military-20261031';
-import {militaryMapApi,militaryOrderApi,provinceProjectionApi} from './supabase-api.js?v=manual-military-20261031';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=quiet-refresh-20261031';
+import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=load-recovery-20261031';
+import {isOlderMapRevision,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
@@ -732,15 +733,14 @@ function select(id, focus=false) {
   };
   for(const[label,value]of entries){const div=document.createElement('div');div.className='province-field';if(projectionFields[label])div.dataset.projectionKey=projectionFields[label];const name=document.createElement('span');name.textContent=`${label}: `;const content=document.createElement('strong');content.textContent=val(value);div.append(name,content);details.append(div);}
   if(p.kind==='land'&&canSeeEconomy&&!provinceProjectionCache.has(id)&&!provinceProjectionPending.has(id)){
-    const request=provinceProjectionApi(id).then(result=>{
-      if(String(result.data_revision)!==dataRevision||String(result.live_revision)!==liveRevision)return;
+    const request=consistentProvinceProjectionApi(id).then(result=>{
       provinceProjectionCache.set(id,result);
       if(selected!==id)return;
-      details.querySelectorAll('[data-projection-key]').forEach(field=>{
+      document.querySelector('#selection-details')?.querySelectorAll('[data-projection-key]').forEach(field=>{
         const value=result[field.dataset.projectionKey];
         field.querySelector('strong').textContent=value==null?'—':Number(value).toLocaleString('ru-RU');
       });
-    }).catch(error=>{if(selected===id)status(error.message,4000);}).finally(()=>{if(provinceProjectionPending.get(id)===request)provinceProjectionPending.delete(id);});
+    }).catch(error=>{if(selected===id&&details.isConnected){status(`${error.message}. Повторяю автоматически.`,4000);scheduleAutomaticRetry({isActive:()=>selected===id&&details.isConnected,attempt:()=>select(id)});}}).finally(()=>{if(provinceProjectionPending.get(id)===request)provinceProjectionPending.delete(id);});
     provinceProjectionPending.set(id,request);
   }
   if(p.kind==='land')for(const[group,label,layer,turnsField,targetField]of [['race','Расы','races','race_assimilation_turns','race_assimilation_target_id'],['religion','Религии','religions','religion_assimilation_turns','religion_assimilation_target_id']]){
@@ -891,6 +891,7 @@ window.addEventListener('application:selection-updated',e=>{applicationSelectedI
 window.addEventListener('application:clear-selection',()=>{applicationSelectedIds.clear();if(ready)updateLayerColors();schedule();});
 window.addEventListener('province:updated',e=>{const p=e.detail;provinces.set(p.id,{...provinces.get(p.id),...p});thematicComponents.clear();for(const[layer,category]of Object.entries(p.layers||{}))if(!categoryList.some(c=>c.layer===layer&&c.id===category.id))categoryList.push({layer,...category});if(selected===p.id)select(p.id);updateLayerColors();updateTerrainTypes();schedule();});
 function installMapData(data){
+  if(ready&&isOlderMapRevision(data,{data_revision:dataRevision,live_revision:liveRevision}))return;
   const nextTileRevision=String(data.tile_revision||0),nextRegion=data.region||region,regionChanged=JSON.stringify(nextRegion)!==JSON.stringify(region),tileChanged=nextTileRevision!==tileRevision;
   tileRevision=nextTileRevision;dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||liveRevision);region=nextRegion;
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
@@ -912,7 +913,6 @@ async function syncMapInBackground(){
     const revision=await api('map/revision'),nextData=String(revision.data_revision||0),nextLive=String(revision.live_revision||0),nextTiles=String(revision.tile_revision||'');
     if(nextData!==dataRevision||nextLive!==liveRevision||nextTiles!==tileRevision){
       const data=await api('map');
-      liveRevision=nextLive;
       installMapData(data);
     }
   }catch(error){console.debug('Фоновое обновление карты не выполнено:',error.message);}

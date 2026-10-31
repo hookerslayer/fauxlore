@@ -114,6 +114,11 @@ dialog:not(.auth-dialog) .menu-tabs button{flex:0 0 auto;width:max-content;max-w
 .marker-popover>p.hint{margin:0 10px 8px;font-size:11px}
 .marker-popover-delete{margin:0 10px 10px;min-height:30px;color:#e2aa9b;border-color:#e2aa9b55}
 .local-event-description{white-space:pre-wrap;overflow-wrap:anywhere}
+.local-event-popover{position:fixed;z-index:20;width:min(300px,calc(100vw - 16px));height:min(300px,calc(100dvh - 16px));display:flex;flex-direction:column;overflow:hidden}
+.local-event-popover header{padding:8px 10px;align-items:flex-start}
+.local-event-popover h2{min-width:0;overflow-wrap:anywhere;max-height:4.5em;overflow:auto}
+.local-event-popover-content{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;padding:10px;display:grid;align-content:start;gap:8px;font-size:12px}
+.local-event-popover-content ul{margin:0;padding-left:18px;overflow-wrap:anywhere}
 .marker-option{display:flex;align-items:center;gap:7px}.marker-option img{width:20px;height:20px;object-fit:contain;flex:none}
 dialog.auth-dialog{width:min(460px,calc(100vw - 24px));max-height:none}
 dialog.auth-dialog .modal-shell{max-height:none}dialog.auth-dialog #modal-content{overflow:visible}

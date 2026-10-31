@@ -5,7 +5,7 @@ import {PRINCIPLES} from './state-principles.js';
 import {renderWall} from './wall.js?v=local-events-20261031';
 import {renderRules} from './rules.js?v=rules-fauxlore-20261031';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=local-events-20261031';
-import {renderLocalEventAdmin} from './local-events.js';
+import {renderLocalEventAdmin} from './local-events.js?v=event-popover-20261031';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -133,7 +133,7 @@ function renderEconomyConstants(host){
       .finally(()=>economyLoading=false);
   }
 }
-export let settings={layer:'states',showIds:false,markers:{names:true,...Object.fromEntries(Object.keys(MARKERS).map(k=>[k,true]))},information:Object.fromEntries(Object.keys(INFO).map(k=>[k,false]))};
+export let settings={layer:'states',showIds:false,markers:{names:true,...Object.fromEntries(Object.keys(MARKERS).map(k=>[k,true]))},information:{...Object.fromEntries(Object.keys(INFO).map(k=>[k,false])),events:true}};
 try{const saved=JSON.parse(localStorage.getItem('fauxlore.map-settings')||'{}');settings={...settings,...saved,markers:{...settings.markers,...saved.markers},information:{...settings.information,...saved.information}};}catch{}
 if(!LAYERS[settings.layer])settings.layer='states';
 export const isAdminEditing=()=>adminEditing&&user?.role==='admin';
@@ -268,7 +268,7 @@ function renderDrawer(){
   const host=$('drawer-content');
   if(current==='control')host.innerHTML=group('Слои',`<div class="radio-list">${Object.entries(LAYERS).map(([key,label])=>`<button class="layer-choice ${settings.layer===key?'active':''}" data-layer="${key}" aria-pressed="${settings.layer===key}">${label}</button>`).join('')}</div>`);
   if(current==='markers')host.innerHTML=group('Названия',checks({names:'Названия маркеров'},settings.markers,'markers'))+group('Типы',`<div class="check-grid">${Object.entries(MARKERS).map(([key,label])=>`<label class="check-row"><span class="marker-option"><img src="assets/markers/${key}.svg" alt="">${label}</span><input type="checkbox" data-group="markers" data-key="${key}" ${settings.markers[key]?'checked':''}></label>`).join('')}</div>`);
-  if(current==='info')host.innerHTML=group('Поиск',searchForm())+group('Карта',`<div class="check-grid">${checks({ids:'ID провинций'},{ids:settings.showIds},'ids')}${checks({routes:INFO.routes},settings.information,'information')}</div>`)+group('Подписи',`<div class="check-grid">${checks(Object.fromEntries(Object.entries(INFO).filter(([k])=>k!=='routes')),settings.information,'information')}</div>`);
+  if(current==='info')host.innerHTML=group('Поиск',searchForm())+group('Карта',`<div class="check-grid">${checks({ids:'ID провинций'},{ids:settings.showIds},'ids')}${checks({routes:INFO.routes,events:'Маркеры событий'},settings.information,'information')}</div>`)+group('Подписи',`<div class="check-grid">${checks(Object.fromEntries(Object.entries(INFO).filter(([k])=>k!=='routes')),settings.information,'information')}</div>`);
   if(current==='tools')host.innerHTML=group('Инструмент',`<div class="tool-grid"><button data-tool="distance" aria-pressed="${toolMode==='distance'}">Расстояние</button><button data-tool="area" aria-pressed="${toolMode==='area'}">Площадь</button><button data-tool="coordinates" aria-pressed="${toolMode==='coordinates'}">Координаты</button><button id="copy-coordinates">Копировать точку</button></div>`)+group('Измерение',`<p class="hint">Две точки — расстояние. Три и более — площадь.</p><div id="tool-result" class="tool-result">${escape(lastToolResult||'Выберите инструмент')}</div><div class="tool-actions"><button id="finish-area">Завершить</button><button id="undo-point">Отменить точку</button><button id="clear-tool">Очистить</button></div>`)+group('Переход',`<form id="coordinate-form" class="stack"><label>Перейти к координатам</label><div class="coordinate-row"><input name="x" type="number" min="0" max="9999" step="any" placeholder="X" aria-label="Координата X" required><input name="y" type="number" min="0" max="9999" step="any" placeholder="Y" aria-label="Координата Y" required></div><button type="submit">Перейти</button></form>`);
   if(current==='admin'){
     const fields=[['name','Название'],['race','Раса'],['religion','Религия'],['state','Государство'],['occupation','Оккупация'],['population','Население'],['trade_status','Торговый статус'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль, %'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
@@ -653,7 +653,7 @@ function renderMenu(section='Статистика',fromHistory=false){
   activeMenuSection=section;
   closeDrawer();
   closeUtilityPopover();
-  $('app-page').hidden=false;document.body.dataset.view=view;updateTopNavigation(view);
+  window.dispatchEvent(new Event('map:close-local-event'));$('app-page').hidden=false;document.body.dataset.view=view;updateTopNavigation(view);
   $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
   const tabs=$('page-tabs'),picker=$('page-tab-picker'),tabSelect=$('page-tab-select'),heading=$('page-heading'),content=$('menu-section');
   const isState=view==='state';

@@ -18,8 +18,25 @@ export async function renderLocalEventAdmin(panel){
   }catch(error){if(panel.isConnected)panel.innerHTML=`<h3>Создание местных событий</h3><p class="form-message">${escape(error.message)}</p>`;}
 }
 
-export function showLocalEvent(event){
-  const dialog=document.getElementById('modal');document.getElementById('modal-title').textContent=event.title;
-  document.getElementById('modal-content').innerHTML=`<p><strong>Провинция:</strong> ${escape(event.province_name)} · ${Number(event.province_id)}</p><p class="local-event-description">${escape(event.description)}</p><p><strong>Срок:</strong> ${event.remaining_turns===null?'Постоянное':`${Number(event.remaining_turns)} ход.`}</p><h3>Эффекты</h3><ul>${event.effects.map(e=>`<li>${escape(formatEffect(e))}</li>`).join('')}</ul>`;
-  dialog.classList.remove('auth-dialog');if(!dialog.open)dialog.showModal();
+let eventPopover=null;
+export function closeLocalEvent(){
+  if(!eventPopover)return;
+  eventPopover.remove();eventPopover=null;
+  window.dispatchEvent(new Event('map:local-event-closed'));
 }
+export function positionLocalEvent({x,y,visible=true}){
+  if(!eventPopover)return;
+  eventPopover.hidden=!visible;if(!visible)return;
+  const margin=8,gap=14,rect=eventPopover.getBoundingClientRect();
+  const left=x+gap+rect.width<=innerWidth-margin?x+gap:x-gap-rect.width;
+  const top=y-rect.height/2;
+  eventPopover.style.left=`${Math.max(margin,Math.min(innerWidth-rect.width-margin,left))}px`;
+  eventPopover.style.top=`${Math.max(margin,Math.min(innerHeight-rect.height-margin,top))}px`;
+}
+export function showLocalEvent(event,position){
+  closeLocalEvent();
+  const box=document.createElement('section');box.className='surface local-event-popover';box.setAttribute('role','dialog');box.setAttribute('aria-label','Местное событие');
+  box.innerHTML=`<header><h2>${escape(event.title)}</h2><button type="button" class="icon-button" aria-label="Закрыть событие">×</button></header><div class="local-event-popover-content"><p><strong>Провинция:</strong> ${escape(event.province_name)} · ${Number(event.province_id)}</p><p class="local-event-description">${escape(event.description)}</p><p><strong>Срок:</strong> ${event.remaining_turns===null?'Постоянное':`${Number(event.remaining_turns)} ход.`}</p><h3>Эффекты</h3><ul>${event.effects.map(e=>`<li>${escape(formatEffect(e))}</li>`).join('')}</ul></div>`;
+  box.querySelector('button').onclick=closeLocalEvent;document.body.append(box);eventPopover=box;positionLocalEvent(position);box.querySelector('button').focus({preventScroll:true});
+}
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&eventPopover){event.preventDefault();closeLocalEvent();}});

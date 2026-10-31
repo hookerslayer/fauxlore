@@ -1,6 +1,6 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=local-events-20261031';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=event-popover-20261031';
 import {localEventsApi} from './supabase-api.js?v=local-events-20261031';
-import {showLocalEvent} from './local-events.js';
+import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=event-popover-20261031';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=local-events-20261031';
 import {isOlderMapRevision,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
@@ -32,16 +32,23 @@ function tintedMilitaryIcon(type,color){
 let colorsTexture,occupationColorsTexture,terrainTexture,fogVisibilityTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
 const thematicComponents=new Map();
 let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
-let mapLocalEvents=[],localEventHitTargets=[],localEventRequest=0;
-async function refreshLocalEvents(){const request=++localEventRequest;try{const events=await localEventsApi('list');if(request===localEventRequest){mapLocalEvents=events;schedule();}}catch(error){console.debug('Не удалось обновить местные события:',error.message);}}
+let mapLocalEvents=[],localEventHitTargets=[],localEventRequest=0,selectedLocalEventId=null;
+window.addEventListener('map:local-event-closed',()=>{selectedLocalEventId=null;});
+window.addEventListener('map:close-local-event',closeLocalEvent);
+async function refreshLocalEvents(){const request=++localEventRequest;try{const events=await localEventsApi('list');if(request===localEventRequest){mapLocalEvents=events;if(selectedLocalEventId!==null&&!events.some(event=>String(event.id)===selectedLocalEventId))closeLocalEvent();schedule();}}catch(error){console.debug('Не удалось обновить местные события:',error.message);}}
 function drawLocalEvents(){
-  localEventHitTargets=[];const groups=new Map();
+  localEventHitTargets=[];if(activeSettings.information.events===false){closeLocalEvent();return;}const groups=new Map();
   for(const event of mapLocalEvents){const list=groups.get(Number(event.province_id))||[];list.push(event);groups.set(Number(event.province_id),list);}
-  ctx.save();ctx.lineWidth=1.5;ctx.font='700 13px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
-  for(const [id,events] of groups){const province=provinces.get(id);if(!province?.center)continue;const anchorX=province.center[0]*view.scale+view.x,anchorY=province.center[1]*view.scale+view.y;const size=24,gap=4;
-    events.forEach((event,index)=>{const x=anchorX+(index-(events.length-1)/2)*(size+gap),y=anchorY-34;if(x<-40||y<-40||x>viewportWidth+40||y>viewportHeight+40)return;
-      ctx.fillStyle='#1c211c';ctx.strokeStyle='#e7c667';ctx.beginPath();ctx.moveTo(x-size*.3,y+size/2-1);ctx.lineTo(anchorX,anchorY);ctx.lineTo(x+size*.3,y+size/2-1);ctx.closePath();ctx.fill();ctx.stroke();ctx.beginPath();ctx.roundRect(x-size/2,y-size/2,size,size,5);ctx.fill();ctx.stroke();ctx.fillStyle='#e7c667';ctx.fillText('!',x,y+.5);localEventHitTargets.push({left:x-size/2,right:x+size/2,top:y-size/2,bottom:y+size/2,event});});
+  ctx.save();ctx.lineWidth=1.5;ctx.font='700 15px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+  for(const [id,events] of groups){const province=provinces.get(id);if(!province?.center)continue;const anchorX=province.center[0]*view.scale+view.x,anchorY=province.center[1]*view.scale+view.y;const size=28,gap=4;
+    events.forEach((event,index)=>{const x=anchorX+(index-(events.length-1)/2)*(size+gap),y=anchorY-22;if(x<-50||y<-50||x>viewportWidth+50||y>viewportHeight+50)return;
+      const l=x-size/2,r=x+size/2,t=y-size/2,b=y+size/2,corner=8;
+      ctx.fillStyle='#1c211c';ctx.strokeStyle='#e7c667';ctx.lineJoin='round';ctx.beginPath();
+      ctx.moveTo(l+corner,t);ctx.lineTo(r-corner,t);ctx.quadraticCurveTo(r,t,r,t+corner);ctx.lineTo(r,b-corner);ctx.quadraticCurveTo(r,b,r-corner,b);
+      ctx.lineTo(x+5,b);ctx.lineTo(x,b+7);ctx.lineTo(x-5,b);ctx.lineTo(l+corner,b);ctx.quadraticCurveTo(l,b,l,b-corner);ctx.lineTo(l,t+corner);ctx.quadraticCurveTo(l,t,l+corner,t);ctx.closePath();ctx.fill();ctx.stroke();
+      ctx.fillStyle='#e7c667';ctx.fillText('!',x,y+.5);localEventHitTargets.push({left:l,right:r,top:t,bottom:b+7,x,y,event});});
   }ctx.restore();
+  if(selectedLocalEventId!==null){const hit=localEventHitTargets.find(item=>String(item.event.id)===selectedLocalEventId);positionLocalEvent(hit?{x:hit.x,y:hit.y,visible:hit.x>=0&&hit.x<=viewportWidth&&hit.y>=0&&hit.y<=viewportHeight}:{visible:false});}
 }
 let selectedMarkerPopup=null;
 let mapTradeRoutes=[];
@@ -638,7 +645,8 @@ function mapClick(x,y){
     status('Сохраняю маркер…',2500);return;
   }
   const eventHit=[...localEventHitTargets].reverse().find(hit=>x>=hit.left&&x<=hit.right&&y>=hit.top&&y<=hit.bottom);
-  if(eventHit){showLocalEvent(eventHit.event);return;}
+  if(eventHit){showLocalEvent(eventHit.event,{x:eventHit.x,y:eventHit.y});selectedLocalEventId=String(eventHit.event.id);return;}
+  closeLocalEvent();
   const militaryHit=pickMilitary(x,y);
   if(militaryHit){
     selectedMarkerPopup=null;

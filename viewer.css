@@ -789,3 +789,7 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .selection.colonization-open>#selection-details{grid-row:4}
 .selection.colonization-open>.colonization-inline{grid-row:2/5;min-height:0}
 @media(max-width:650px){.selection.colonization-open{grid-template-rows:auto auto auto minmax(0,auto) minmax(0,1fr)}.selection.colonization-open>#selection-relations{grid-row:3}.selection.colonization-open>#selection-details{grid-row:4}.selection.colonization-open>.colonization-inline{grid-row:5}}
+
+.wall-toolbar{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.wall-toolbar button{min-height:36px;padding:5px 9px}.wall-editor{min-height:200px;max-height:60vh;overflow:auto;padding:10px;border:1px solid #656c5c;border-radius:4px;background:#111410;line-height:1.5;overflow-wrap:anywhere}.wall-editor:focus{outline:2px solid #dfbf62;outline-offset:2px}.wall-editor:empty:before{content:attr(data-placeholder);color:#aeb7af;pointer-events:none}.wall-editor p,.wall-text p{margin:0 0 .6em}.wall-editor h2,.wall-editor h3,.wall-text h2,.wall-text h3{margin:.7em 0 .35em}.wall-editor ul,.wall-editor ol,.wall-text ul,.wall-text ol{padding-left:1.7em;margin:.5em 0}.wall-text:has(p),.wall-text:has(h2),.wall-text:has(h3),.wall-text:has(ul),.wall-text:has(ol){white-space:normal}
+
+.wall-filter{display:grid;gap:6px;max-width:100%}.wall-filter select{width:100%;max-width:420px;min-height:40px}

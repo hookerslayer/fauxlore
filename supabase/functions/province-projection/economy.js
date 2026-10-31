@@ -106,10 +106,6 @@ function provincePermanentModifier(province,stateContext,key){
   }
   return value;
 }
-function provincePopulationGrowthMultiplier(province){
-  return province?.layers?.races?.name==='Зверолюди'&&province?.layers?.resources?.name==='Животноводство'?1.10:1;
-}
-
 export function calculateProvinceEstateTaxes(province,beneficiary=province?.layers?.states?.name,stateContext=null){
   if(province?.kind!=='land')return null;
   const population=Math.max(0,Number(province.population)||0),counts=estatePopulation(province.province_type,population);
@@ -168,7 +164,7 @@ export function calculateProvinceEconomy(province, beneficiary=province?.layers?
   const growthModifier=activeConfig.raceGrowthModifiers?.[province.layers?.races?.name];
   const urbanizationGrowthMultiplier=Number(stateLayer?.urbanization_growth_multiplier??1);
   const raceGrowthAdjustment=provincePermanentModifier(province,stateContext,'population_growth');
-  const populationGrowth=growthModifier===undefined||development===null?null:province.layers?.states?.name===beneficiary?floorToInteger(population*Math.max(0,.015*growthModifier*(1+raceGrowthAdjustment))*provincePopulationGrowthMultiplier(province)*urbanizationGrowthMultiplier*(1-(crime??0)*effects.crimePopulationPenalty)*groupStatusEffect(province,'race','population')*groupStatusEffect(province,'religion','population')*development):0;
+  const populationGrowth=growthModifier===undefined||development===null?null:province.layers?.states?.name===beneficiary?floorToInteger(population*Math.max(0,.015*growthModifier*(1+raceGrowthAdjustment))*urbanizationGrowthMultiplier*(1-(crime??0)*effects.crimePopulationPenalty)*groupStatusEffect(province,'race','population')*groupStatusEffect(province,'religion','population')*development):0;
   if(populationGrowth===null)missing.push('race-growth-coefficient');
   const recruitGrowthModifier=activeConfig.recruitGrowthModifiers?.[province.province_type];
   const recruitLimitModifier=activeConfig.recruitLimitModifiers?.[province.province_type];

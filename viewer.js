@@ -1,5 +1,5 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=server-boundary-final-20261030';
-import {militaryMapApi,militaryMovementApi,provinceProjectionApi} from './supabase-api.js?v=server-boundary-final-20261030';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker} from './ui.js?v=manual-military-20261031';
+import {militaryMapApi,militaryOrderApi,provinceProjectionApi} from './supabase-api.js?v=manual-military-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
 const $ = id => document.getElementById(id);
@@ -12,7 +12,7 @@ const provinceProjectionCache=new Map(),provinceProjectionPending=new Map();
 let width = 10000, height = 10000, tileSize = 2048, columns = 5, rows = 5;
 let tileRevision = '0';
 let dataRevision = '0', liveRevision = '0', syncTimer = 0, syncInProgress = false;
-let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[],provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],colonizationRouteMode=false,colonizationRouteIds=[],militaryMoveDraft=null,portPlacement=null,fortPlacement=null;
+let ready = false, showIds = false, selected = 0, provinces = new Map(), categoryList=[],provinceAdjacency={}, frame = 0, adminPaint=null,tradeRouteMode=false,tradeRouteIds=[],colonizationRouteMode=false,colonizationRouteIds=[],militaryMoveDraft=null,militaryChipPlacement=null,portPlacement=null,fortPlacement=null;
 let program, texture, tileSlotsTexture, pickFramebuffer, loc, statusTimer;
 let cacheSlots = 25, tileCache = new Map(), tileLoading = new Map(), tileUse = 0;
 let region = [0, 0, 10000, 10000]; // min x/y inclusive, max x/y exclusive
@@ -30,45 +30,7 @@ let colorsTexture,occupationColorsTexture,terrainTexture,fogVisibilityTexture,ac
 const thematicComponents=new Map();
 let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
 let selectedMarkerPopup=null;
-let mapRoads=[],mapTradeRoutes=[],roadDraft=null,roadWorker=null,roadSequence=0,roadPending=new Map(),roadGeneration=0,roadBusy=false,roadSaving=false;
-function roadProgress(){window.dispatchEvent(new CustomEvent('roads:progress',{detail:{active:!!roadDraft,busy:roadBusy,saving:roadSaving,anchors:roadDraft?.anchors||[],segments:roadDraft?.segments||[]}}));schedule();}
-function cancelRoad(){roadGeneration++;roadDraft=null;roadBusy=false;roadSaving=false;roadWorker?.terminate();roadWorker=null;for(const task of roadPending.values())task.reject(Error('Прокладывание отменено'));roadPending.clear();roadProgress();}
-function calculateRoad(a,b){
-  if(!roadWorker){
-    roadWorker=new Worker(new URL('./road-worker.js',import.meta.url),{type:'module'});
-    roadWorker.onmessage=({data})=>{const task=roadPending.get(data.id);if(!task)return;roadPending.delete(data.id);data.error?task.reject(Error(data.error)):task.resolve(data.points);};
-    roadWorker.onerror=()=>{for(const task of roadPending.values())task.reject(Error('Не удалось рассчитать дорогу'));roadPending.clear();roadWorker?.terminate();roadWorker=null;};
-  }
-  const first=provinces.get(a.province_id),second=provinces.get(b.province_id),bbox=[Math.min(first.bbox[0],second.bbox[0]),Math.min(first.bbox[1],second.bbox[1]),Math.max(first.bbox[2],second.bbox[2]),Math.max(first.bbox[3],second.bbox[3])];
-  const id=++roadSequence;return new Promise((resolve,reject)=>{roadPending.set(id,{resolve,reject});roadWorker.postMessage({id,a,b,bbox,region,tileRevision});});
-}
-async function addRoadAnchor(x,y){
-  if(roadBusy)return;
-  if(roadDraft.anchors.length>=64){status('Максимум 64 точки. Сохраните дорогу и начните следующую.',4000);return;}
-  const marker=pickMarker(x,y),p=provinces.get(marker?.province_id||pickProvinceId(x,y));
-  if(!p||p.kind!=='land'){status('Дороги прокладываются по суше. Выберите провинцию или маркер на суше.',4000);return;}
-  const anchor=marker?{kind:'marker',marker_id:marker.id,province_id:p.id,x:marker.x,y:marker.y}:{kind:'province',province_id:p.id,x:p.center[0],y:p.center[1]};
-  const previous=roadDraft.anchors.at(-1),generation=roadGeneration;
-  if(!previous){roadDraft.anchors.push(anchor);roadProgress();return;}
-  if(previous.x===anchor.x&&previous.y===anchor.y){status('Выберите другую точку',2500);return;}
-  if(previous.province_id!==anchor.province_id&&!(provinceAdjacency[previous.province_id]||[]).includes(anchor.province_id)){status('Выберите соседнюю провинцию: добавляйте промежуточные точки по порядку.',4000);return;}
-  roadBusy=true;roadProgress();
-  try{const points=await calculateRoad(previous,anchor);if(generation!==roadGeneration||!roadDraft)return;roadDraft.anchors.push(anchor);roadDraft.segments.push(points);}
-  catch(error){if(generation===roadGeneration)status(error.message,6000);}
-  finally{if(generation===roadGeneration){roadBusy=false;roadProgress();}}
-}
-function drawRoads(){
-  const roads=activeSettings.information.roads?mapRoads:[];
-  ctx.save();ctx.strokeStyle='#000';ctx.lineCap='round';ctx.lineJoin='round';
-  const draw=road=>{
-    ctx.lineWidth=({trail:.35,highway:.65,imperial:1}[road.type]||1)*view.scale;
-    ctx.setLineDash(({trail:[.2,3],highway:[6,4],imperial:[]}[road.type]||[]).map(n=>n*view.scale));
-    for(const points of road.segments){ctx.beginPath();points.forEach(([x,y],i)=>{x=x*view.scale+view.x;y=y*view.scale+view.y;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
-  };
-  for(const road of roads)draw(road);
-  if(roadDraft){ctx.globalAlpha=.75;draw(roadDraft);ctx.setLineDash([]);for(const a of roadDraft.anchors){ctx.beginPath();ctx.arc(a.x*view.scale+view.x,a.y*view.scale+view.y,3,0,Math.PI*2);ctx.stroke();}}
-  ctx.restore();
-}
+let mapTradeRoutes=[];
 function drawTradeRoutes(){
   if(!activeSettings.information.routes||!mapTradeRoutes.length)return;
   const provincePoint=id=>{
@@ -94,17 +56,6 @@ function drawTradeRoutes(){
   }
   ctx.restore();
 }
-window.addEventListener('roads:start',e=>{if(!isAdmin())return;cancelRoad();toolMode='';markerPlacement=null;roadDraft={type:e.detail,anchors:[],segments:[]};roadProgress();status('Выберите центр провинции или маркер, затем следующую точку.',4000);});
-window.addEventListener('roads:cancel',cancelRoad);
-window.addEventListener('keydown',e=>{if(e.key==='Escape'&&roadDraft&&!roadSaving)cancelRoad();});
-window.addEventListener('roads:undo',()=>{if(!roadDraft||roadBusy)return;roadDraft.anchors.pop();roadDraft.segments.pop();roadProgress();});
-window.addEventListener('roads:save',async()=>{
-  if(!isAdmin()||!roadDraft||roadBusy||roadDraft.anchors.length<2)return;
-  const generation=roadGeneration;roadBusy=true;roadSaving=true;roadProgress();
-  try{const road=await api('admin/roads',{method:'POST',body:JSON.stringify(roadDraft)});mapRoads.push(road);if(generation===roadGeneration)cancelRoad();window.dispatchEvent(new CustomEvent('roads:saved',{detail:road}));schedule();status('Дорога сохранена',3000);}
-  catch(error){if(generation===roadGeneration)status(error.message,6000);}
-  finally{if(generation===roadGeneration){roadBusy=false;roadSaving=false;roadProgress();}}
-});
 const markerIcons=Object.fromEntries(['capital','city','fortress','port'].map(type=>{const image=new Image();image.src=`assets/markers/${type}.svg`;image.onload=schedule;return[type,image];}));
 const MARKER_HEIGHT={capital:12,city:10,fortress:8,port:6};
 const status = (text, timeout = 0) => {
@@ -477,7 +428,6 @@ function drawLabels() {
   const dprX = labels.width/viewportWidth,dprY=labels.height/viewportHeight;
   // Markers are part of the map composition: their anchors, icon sizes, and label offsets all follow map zoom.
   ctx.setTransform(dprX,0,0,dprY,0,0); ctx.clearRect(0,0,viewportWidth,viewportHeight);
-  drawRoads();
   drawTradeRoutes();
   const showMarkers=Object.keys(markerIcons).some(type=>activeSettings.markers?.[type])&&mapMarkers.length>0||activeSettings.markers?.capital||activeSettings.markers?.city;
   if (!showIds&&!Object.values(activeSettings.information).some(Boolean)&&!showMarkers&&activeSettings.layer!=='military') return;
@@ -538,7 +488,7 @@ function drawLabels() {
   militaryHitTargets=[];
   if(activeSettings.layer==='military'){
     ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
-    for(const item of mapMilitary.formations||[]){const route=item.movement_order?.route||[];ctx.globalAlpha=1;drawMilitaryRoute(route);}
+    for(const item of mapMilitary.formations||[]){const order=item.pending_order;if(!order)continue;const route=order.route.map((id,index)=>index===0?{x:Number(item.x),y:Number(item.y)}:index===order.route.length-1?{x:Number(order.destination_x),y:Number(order.destination_y)}:{x:Number(provinces.get(Number(id))?.center?.[0]),y:Number(provinces.get(Number(id))?.center?.[1])});ctx.globalAlpha=1;drawMilitaryRoute(route);}
     ctx.restore();
   }
   if(militaryMoveDraft?.route?.length>1){ctx.save();ctx.globalAlpha=1;ctx.lineCap='round';ctx.lineJoin='round';drawMilitaryRoute(militaryMoveDraft.route);ctx.restore();}
@@ -579,7 +529,7 @@ function pickConstruction(x,y){
 }
 async function refreshMapMilitary(){
   const token=++militaryRequestToken;
-  try{const data=await militaryMapApi();if(token!==militaryRequestToken)return;mapMilitary=data||{formations:[],garrisons:[]};updateFogVisibility();window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}
+  try{const [data,orderData]=await Promise.all([militaryMapApi(),militaryOrderApi('snapshot').catch(()=>({orders:[]}))]);if(token!==militaryRequestToken)return;mapMilitary=data||{formations:[],garrisons:[]};for(const item of mapMilitary.formations||[])item.pending_order=(orderData.orders||[]).find(order=>Number(order.formation_id)===Number(item.id));updateFogVisibility();window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}
   catch{if(token===militaryRequestToken){mapMilitary={formations:[],garrisons:[]};updateFogVisibility();window.dispatchEvent(new CustomEvent('map:military-data',{detail:mapMilitary}));if(selected)emitSelectedGarrisonInfo();schedule();}}
 }
 function emitSelectedGarrisonInfo(){const item=(mapMilitary.garrisons||[]).find(row=>Number(row.province_id)===Number(selected));window.dispatchEvent(new CustomEvent('map:garrison-info',{detail:item||null}));}
@@ -591,7 +541,7 @@ async function requestMovementPreview(){
   window.dispatchEvent(new CustomEvent('map:movement-progress',{detail:{route,formation:draft.formation,forecast:null}}));
   if(route.length<2)return;
   try{
-    const forecast=await militaryMovementApi('preview',Number(draft.formation.id),{route});
+    const last=route.at(-1),forecast=await militaryOrderApi('preview',Number(draft.formation.id),{route:route.map(point=>point.province_id),x:last.x,y:last.y});
     if(revision!==militaryPreviewRevision||militaryMoveDraft!==draft)return;
     window.dispatchEvent(new CustomEvent('map:movement-progress',{detail:{route,formation:draft.formation,forecast}}));
   }catch(error){
@@ -624,29 +574,23 @@ function mapClick(x,y){
   const p=[(x-view.x)/view.scale,(y-view.y)/view.scale];
   if(p[0]<region[0]||p[0]>=region[2]||p[1]<region[1]||p[1]>=region[3])return;
   lastPoint=p;
-  if(militaryMoveDraft){
-    const provinceId=pickProvinceId(x,y),province=provinces.get(provinceId);
-    const expectedKind=militaryMoveDraft.formation.domain==='naval'?'sea':'land';
-    if(!province||province.kind!==expectedKind){status(expectedKind==='sea'?'Маршрут флотилии должен проходить по морю.':'Маршрут сухопутной армии должен проходить по суше.',3000);return;}
-    const routeTarget=militaryMoveDraft.formation.domain==='naval'
-      ?mapMarkers.filter(marker=>marker.type==='port'&&Number(marker.province_id)===Number(provinceId))
-        .sort((a,b)=>Math.hypot(Number(a.x)-p[0],Number(a.y)-p[1])-Math.hypot(Number(b.x)-p[0],Number(b.y)-p[1]))[0]
-      :null;
-    const targetPoint=routeTarget?[Number(routeTarget.x),Number(routeTarget.y)]:p;
-    const previous=militaryMoveDraft.route.at(-1),length=Math.hypot(targetPoint[0]-previous.x,targetPoint[1]-previous.y);
-    if(length<1){status('Укажите точку дальше от предыдущей.',2500);return;}
-    const steps=Math.ceil(length),added=[];let lastProvince=Number(previous.province_id);
-    for(let step=1;step<=steps;step++){
-      const t=step/steps,point=[previous.x+(targetPoint[0]-previous.x)*t,previous.y+(targetPoint[1]-previous.y)*t],id=pickProvinceId(point[0]*view.scale+view.x,point[1]*view.scale+view.y),sample=provinces.get(id);
-      if(!sample||sample.kind!==expectedKind){status(expectedKind==='sea'?'Отрезок маршрута пересекает сушу или неизвестную область. Выберите другой путь.':'Отрезок маршрута пересекает море или неизвестную область. Выберите другую точку.',4000);return;}
-      if(Number(id)!==lastProvince&&!(provinceAdjacency[lastProvince]||[]).includes(Number(id))){status('Маршрут пересекает непроверенную границу. Добавьте промежуточную точку.',4000);return;}
-      if(step===steps||step%5===0||Number(id)!==lastProvince)added.push({x:point[0],y:point[1],province_id:Number(id)});
-      lastProvince=Number(id);
-    }
-    if(militaryMoveDraft.route.length+added.length>5000){status('Маршрут слишком длинный. Отправьте приказ с промежуточной остановкой.',4000);return;}
-    militaryMoveDraft.route.push(...added);void requestMovementPreview();schedule();return;
+  if(militaryChipPlacement){
+    const placement=militaryChipPlacement,id=pickProvinceId(x,y);
+    if(!isAdmin()&&Number(id)!==Number(placement.province_id)){status('Фишку можно перемещать только внутри её провинции.',3000);return;}
+    const action=isAdmin()&&Number(id)!==Number(placement.province_id)?'admin_move':'place';
+    void militaryOrderApi(action,Number(placement.id),{province_id:Number(id),x:p[0],y:p[1]}).then(()=>{militaryChipPlacement=null;status('Фишка перемещена.',2500);void refreshMapMilitary();}).catch(error=>status(error.message,5000));return;
   }
-  if(roadDraft&&isAdmin()){void addRoadAnchor(x,y);return;}
+  if(militaryMoveDraft){
+    const id=pickProvinceId(x,y),province=provinces.get(id),draft=militaryMoveDraft;
+    if(!province||province.kind!==(draft.formation.domain==='naval'?'sea':'land')){status('Выберите провинцию нужного типа.',3000);return;}
+    const previous=draft.route.at(-1);
+    if(Number(previous.province_id)!==Number(id)&&!(provinceAdjacency[previous.province_id]||[]).includes(Number(id))){status('Выберите соседнюю провинцию.',3000);return;}
+    const port=draft.formation.domain==='naval'?mapMarkers.find(marker=>marker.type==='port'&&Number(marker.province_id)===Number(id)):null;
+    const point=port?{x:Number(port.x),y:Number(port.y)}:{x:p[0],y:p[1]};
+    if(Number(previous.province_id)===Number(id))draft.route[draft.route.length-1]={...point,province_id:Number(id)};
+    else draft.route.push({...point,province_id:Number(id)});
+    void requestMovementPreview();schedule();return;
+  }
   if(colonizationRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри морской провинции.',2500);return;}window.dispatchEvent(new CustomEvent('colonization:route-province-picked',{detail:province}));return;}
   if(tradeRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри провинции маршрута.',2500);return;}window.dispatchEvent(new CustomEvent('trade:route-province-picked',{detail:province}));return;}
   if(applicationPlacement){
@@ -718,10 +662,11 @@ function mapClick(x,y){
 window.addEventListener('trade:route-pick',e=>{tradeRouteMode=Boolean(e.detail?.active);if(tradeRouteMode||e.detail?.clear)tradeRouteIds=[];if(tradeRouteMode)status('Выбор маршрута торговли: кликайте соседние провинции.',0);schedule();});
 window.addEventListener('map:movement-start',event=>{
   const item=event.detail;if(!item||!['land','naval'].includes(item.domain)||!Number.isFinite(Number(item.x))||!Number.isFinite(Number(item.y)))return;
-  if(item.domain==='naval'&&!item.is_port&&!item.movement_order){status('Флотилия должна начать маршрут в доступном порту.',3500);return;}
+  if(item.domain==='naval'&&!item.is_port){status('Флотилия должна начать маршрут в доступном порту.',3500);return;}
   militaryMoveDraft={formation:item,route:[{x:Number(item.x),y:Number(item.y),province_id:Number(item.province_id)}]};
   void requestMovementPreview();status(item.domain==='naval'?'Коснитесь морских провинций по пути и завершите маршрут в доступном порту. Затем нажмите «Отправить приказ».':'Коснитесь суши, чтобы добавить точки маршрута. Затем нажмите «Отправить приказ».',0);schedule();
 });
+window.addEventListener('map:chip-place',event=>{militaryChipPlacement=event.detail;status(isAdmin()?'Выберите точку для фишки. Администратор может выбрать другую провинцию.':'Выберите точку внутри текущей провинции.',0);});
 window.addEventListener('map:movement-clear',()=>{militaryPreviewRevision++;militaryMoveDraft=null;window.dispatchEvent(new CustomEvent('map:movement-progress',{detail:{route:[]}}));status('',0);schedule();});
 window.addEventListener('map:movement-submit',()=>{if(!militaryMoveDraft||militaryMoveDraft.route.length<2){status('Добавьте хотя бы одну точку маршрута.',3000);return;}if(militaryMoveDraft.submitting)return;militaryMoveDraft.submitting=true;window.dispatchEvent(new CustomEvent('map:movement-ready',{detail:{formation:militaryMoveDraft.formation,route:militaryMoveDraft.route}}));schedule();});
 window.addEventListener('map:movement-submit-failed',()=>{if(militaryMoveDraft)militaryMoveDraft.submitting=false;});
@@ -950,7 +895,7 @@ function installMapData(data){
   tileRevision=nextTileRevision;dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||liveRevision);region=nextRegion;
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));
   if(ready&&(tileChanged||regionChanged))resetTileCache(Math.min(regionSlots,view.scale>view.min*1.8?12:25));
-  categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};provinceProjectionCache.clear();provinceProjectionPending.clear();thematicComponents.clear();
+  categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapTradeRoutes=data.trade_routes||[];provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));provinceAdjacency=data.adjacency||{};provinceProjectionCache.clear();provinceProjectionPending.clear();thematicComponents.clear();
   window.dispatchEvent(new CustomEvent('map:refreshed',{detail:data}));if(selected&&!provinces.has(selected))selected=0;if(selected)select(selected);updateLayerColors();updateTerrainTypes();updateFogVisibility();schedule();
 }
 window.addEventListener('map:cache-update',e=>{if(ready)installMapData(e.detail);});
@@ -982,7 +927,7 @@ window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(ma
 window.addEventListener('map:close-marker-popup',()=>{selectedMarkerPopup=null;});
 window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});
 window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});
-window.addEventListener('map:tool',e=>{if(e.detail&&roadDraft)cancelRoad();toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
+window.addEventListener('map:tool',e=>{toolMode=e.detail;toolPoints=[];areaClosed=false;canvas.classList.toggle('measuring',!!toolMode);toolResult(toolMode?'Нажмите на карту':'Выберите инструмент');schedule();});
 window.addEventListener('map:finish',finishArea);
 window.addEventListener('map:undo',()=>{toolPoints.pop();areaClosed=false;toolResult(`Точек: ${toolPoints.length}`);schedule();});
 window.addEventListener('map:clear-tool',()=>{toolPoints=[];areaClosed=false;toolResult('Измерение очищено');schedule();});
@@ -994,7 +939,7 @@ window.visualViewport?.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});
 async function init() {
   if(!gl)throw new Error('Для просмотра карты требуется браузер с WebGL 2.');
-  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapRoads=data.roads||[];mapTradeRoutes=data.trade_routes||[];provinceAdjacency=data.adjacency||{};
+  const data=await loadInitialMap();region=data.region;tileRevision=String(data.tile_revision||0);dataRevision=String(data.data_revision||0);liveRevision=String(data.live_revision||0);categoryList=data.categories;mapMarkers=data.markers||[];mapColonies=data.colonies||[];mapTradeRoutes=data.trade_routes||[];provinceAdjacency=data.adjacency||{};
   if(!Array.isArray(region)||region.length!==4||!region.every(Number.isFinite)||region[0]<0||region[1]<0||region[2]>width||region[3]>height||region[0]>=region[2]||region[1]>=region[3])throw new Error('Некорректные границы игровой области');
   provinces=new Map(data.provinces.map(p=>[p.id,{...p,rgb:p.id}]));
   regionSlots=(Math.ceil(region[2]/tileSize)-Math.floor(region[0]/tileSize))*(Math.ceil(region[3]/tileSize)-Math.floor(region[1]/tileSize));

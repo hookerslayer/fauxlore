@@ -1,13 +1,13 @@
-import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryMovementApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,adminResourcesApi,adminModifiersApi,stateProvinceProjectionApi,governmentFormPreviewApi} from './supabase-api.js?v=server-boundary-final-20261030';
+import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,adminResourcesApi,adminModifiersApi,adminGlobalModifiersApi,stateProvinceProjectionApi,governmentFormPreviewApi,stateJournalApi} from './supabase-api.js?v=manual-military-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=server-boundary-final-20261030';
-import {renderRules} from './rules.js?v=rules-headings-20261029';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=server-boundary-final-20261030';
+import {renderWall} from './wall.js?v=manual-military-20261031';
+import {renderRules} from './rules.js?v=rules-fauxlore-20261031';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=manual-military-20261031';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
-const INFO={roads:'Дороги',routes:'Торговые пути',provinces:'Названия провинций',states:'Названия государств',races:'Названия рас',religions:'Названия религий',resources:'Названия ресурсов',trade:'Названия торговых зон'};
-const STATE_SECTIONS=['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия','Военное дело','Модификаторы'];
+const INFO={routes:'Торговые пути',provinces:'Названия провинций',states:'Названия государств',races:'Названия рас',religions:'Названия религий',resources:'Названия ресурсов',trade:'Названия торговых зон'};
+const STATE_SECTIONS=['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия','Военное дело','Модификаторы','Журнал'];
 const PANELS={legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emit=(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail}));
@@ -17,6 +17,7 @@ let lastStateSection='Статистика',lastAdminStateId=null,lastAdminState
 let provinceColumnPreset='Основное',provinceSearchQuery='';
 let headerResourceToken=0;
 let visibleGarrisonsByProvince=new Map();
+let visibleFormations=[];
 let pendingDiplomacyStateId=null;
 const stateEmblemCache=new Map();
 const TRADE_STATUS_VALUES=['Отсутствует','Устье реки','Природный порт','Центр торговли I','Центр торговли II','Центр торговли III'];
@@ -24,16 +25,10 @@ const BULK_FIELDS=[['race','Раса'],['religion','Религия'],['state','�
 let bulkRules=[{condition_field:'climate',condition_value:'Холодный',target_field:'population',target_value:2000},{condition_field:'climate',condition_value:'Умеренный',target_field:'population',target_value:4000},{condition_field:'climate',condition_value:'Тропический',target_field:'population',target_value:5000}],bulkPreview=null,bulkBusy=false;
 const panelPages={};let layoutFrame=0;
 let adminTool='manual',colorLayer='resources',colorCategoryId=null;
-const ADMIN_TOOLS={manual:'Ручное редактирование',bulk:'Массовое редактирование',markers:'Создать маркер',colors:'Цвета параметров',roads:'Прокладывание дорог'};
+const ADMIN_TOOLS={manual:'Ручное редактирование',bulk:'Массовое редактирование',markers:'Создать маркер',colors:'Цвета параметров'};
 let economyDraft=null,economyLoading=false,economyDirty=false;
 let militiaCoefficient=null,militiaCoefficientLoading=false;
 let armyBudget={state_id:null,units:[],treasury:0,debt:0},armyBudgetLoading=false,armyBudgetDirty=false,armyReport=null;
-const ROAD_TYPES={trail:'Тропа',highway:'Тракт',imperial:'Имперская'};
-let roadsList=[],roadInfo={active:false,busy:false,anchors:[],segments:[]},roadType='trail';
-function roadMarkup(){
-  const count=roadInfo.anchors.length;
-  return group('Прокладывание дорог',`<label class="field"><span>Тип дороги</span><select id="road-type" ${roadInfo.active?'disabled':''}>${Object.entries(ROAD_TYPES).map(([key,name])=>`<option value="${key}" ${key===roadType?'selected':''}>${name}</option>`).join('')}</select></label><p class="hint">Клик по провинции — её центр. Клик по маркеру — сам маркер. Добавляйте соседние провинции последовательно. Пунктир — тропа, штрихи — тракт, сплошная линия — имперская дорога.</p>${roadInfo.active?`<div class="tool-result">Точек: ${count}${roadInfo.busy?' · Расчёт / сохранение…':''}</div><button id="road-undo" ${roadInfo.busy||!count?'disabled':''}>Убрать последнюю точку</button><button id="road-save" ${roadInfo.busy||count<2?'disabled':''}>Сохранить дорогу</button><button id="road-cancel" ${roadInfo.saving?'disabled':''}>Отмена</button>`:'<button id="road-start">Начать прокладывание</button>'}<p class="hint">Сохранённых дорог: ${roadsList.length}. Видимость переключается в панели «Информация → Дороги».</p>${roadsList.map(road=>`<div class="marker-admin-row"><span>№ ${road.id} · ${ROAD_TYPES[road.type]||escape(road.type)} · ${road.anchors.length} точек</span><button data-delete-road="${road.id}" ${roadInfo.busy?'disabled':''} aria-label="Удалить дорогу ${road.id}">×</button></div>`).join('')}`);
-}
 function armyBudgetMarkup(){
   const states=categories.filter(c=>c.layer==='states');
   const report=armyReport?.states?.length?`<div class="army-report"><strong>Отчёт за ${armyReport.year} год, ход ${armyReport.turn}</strong>${armyReport.states.map(s=>`<div class="army-report-row"><b>${escape(s.name)}</b><span>Содержание ${Number(s.army_upkeep||0).toLocaleString('ru-RU')} G · оплачено ${Number(s.army_upkeep_paid||0).toLocaleString('ru-RU')} G · долг +${Number(s.army_upkeep_arrears||0).toLocaleString('ru-RU')} G · погашено ${Number(s.debt_repaid||0).toLocaleString('ru-RU')} G · долг всего ${Number(s.treasury_debt||0).toLocaleString('ru-RU')} G${s.food_coverage_pct==null?'':` · продовольственная обеспеченность ${Number(s.food_coverage_pct).toLocaleString('ru-RU')}% (${Number(s.food_deficit_units||0).toLocaleString('ru-RU')} / ${Number(s.food_required_units||0).toLocaleString('ru-RU')} ед. дефицита / потребления)`}</span></div>`).join('')}<p class="hint">Обеспеченность считается после договоров и рыночного распределения. Преступность меняется после расчёта пищи с поправкой стабильности и влияет на производство следующего хода. Население автоматически не меняется.</p></div>`:'';
@@ -243,7 +238,7 @@ function renderDrawer(){
   const host=$('drawer-content');
   if(current==='control')host.innerHTML=group('Слои',`<div class="radio-list">${Object.entries(LAYERS).map(([key,label])=>`<button class="layer-choice ${settings.layer===key?'active':''}" data-layer="${key}" aria-pressed="${settings.layer===key}">${label}</button>`).join('')}</div>`);
   if(current==='markers')host.innerHTML=group('Названия',checks({names:'Названия маркеров'},settings.markers,'markers'))+group('Типы',`<div class="check-grid">${Object.entries(MARKERS).map(([key,label])=>`<label class="check-row"><span class="marker-option"><img src="assets/markers/${key}.svg" alt="">${label}</span><input type="checkbox" data-group="markers" data-key="${key}" ${settings.markers[key]?'checked':''}></label>`).join('')}</div>`);
-  if(current==='info')host.innerHTML=group('Поиск',searchForm())+group('Карта',`<div class="check-grid">${checks({ids:'ID провинций'},{ids:settings.showIds},'ids')}${checks({roads:INFO.roads,routes:INFO.routes},settings.information,'information')}</div>`)+group('Подписи',`<div class="check-grid">${checks(Object.fromEntries(Object.entries(INFO).filter(([k])=>!['roads','routes'].includes(k))),settings.information,'information')}</div>`);
+  if(current==='info')host.innerHTML=group('Поиск',searchForm())+group('Карта',`<div class="check-grid">${checks({ids:'ID провинций'},{ids:settings.showIds},'ids')}${checks({routes:INFO.routes},settings.information,'information')}</div>`)+group('Подписи',`<div class="check-grid">${checks(Object.fromEntries(Object.entries(INFO).filter(([k])=>k!=='routes')),settings.information,'information')}</div>`);
   if(current==='tools')host.innerHTML=group('Инструмент',`<div class="tool-grid"><button data-tool="distance" aria-pressed="${toolMode==='distance'}">Расстояние</button><button data-tool="area" aria-pressed="${toolMode==='area'}">Площадь</button><button data-tool="coordinates" aria-pressed="${toolMode==='coordinates'}">Координаты</button><button id="copy-coordinates">Копировать точку</button></div>`)+group('Измерение',`<p class="hint">Две точки — расстояние. Три и более — площадь.</p><div id="tool-result" class="tool-result">${escape(lastToolResult||'Выберите инструмент')}</div><div class="tool-actions"><button id="finish-area">Завершить</button><button id="undo-point">Отменить точку</button><button id="clear-tool">Очистить</button></div>`)+group('Переход',`<form id="coordinate-form" class="stack"><label>Перейти к координатам</label><div class="coordinate-row"><input name="x" type="number" min="0" max="9999" step="any" placeholder="X" aria-label="Координата X" required><input name="y" type="number" min="0" max="9999" step="any" placeholder="Y" aria-label="Координата Y" required></div><button type="submit">Перейти</button></form>`);
   if(current==='admin'){
     const fields=[['name','Название'],['race','Раса'],['religion','Религия'],['state','Государство'],['occupation','Оккупация'],['population','Население'],['trade_status','Торговый статус'],['resource','Ресурс'],['trade','Торговая зона'],['development','Развитие'],['control','Контроль, %'],['climate','Климат'],['terrain_type','Тип местности'],['capital','Маркер столицы'],['city','Маркер города']];
@@ -263,18 +258,15 @@ function renderDrawer(){
   }
   if(current==='admin'){
     const title=ADMIN_TOOLS[adminTool];
-    const content=['colors','roads','army'].includes(adminTool)?null:[...host.children].find(section=>section.dataset.pageTitle===title);
+    const content=['colors','army'].includes(adminTool)?null:[...host.children].find(section=>section.dataset.pageTitle===title);
     if(adminTool==='colors')host.innerHTML=categoryColorsMarkup();
-    else if(adminTool==='roads')host.innerHTML=roadMarkup();
     else if(adminTool==='army')host.innerHTML=armyBudgetMarkup();
     else host.replaceChildren(content);
     const wrapper=document.createElement('div');wrapper.className='admin-tool-content';
     wrapper.append(...host.childNodes);
     host.innerHTML=`<label class="field"><span>Инструмент администратора</span><select id="admin-tool">${Object.entries(ADMIN_TOOLS).map(([key,label])=>`<option value="${key}" ${adminTool===key?'selected':''}>${label}</option>`).join('')}</select></label>`;
     host.append(wrapper);
-    $('admin-tool').disabled=roadInfo.busy;
     $('admin-tool').onchange=e=>{
-      if(roadInfo.active)emit('roads:cancel');
       adminTool=e.target.value;paintActive=false;adminEditing=false;pendingMarkerDraft=null;
       emit('map:admin-paint',null);emit('admin:editing',{enabled:false});emit('map:place-marker',null);
       renderDrawer();
@@ -304,15 +296,6 @@ function renderDrawer(){
         finally{armyBudgetLoading=false;renderDrawer();}
       };
     }
-    if($('road-type'))$('road-type').onchange=e=>{roadType=e.target.value;};
-    if($('road-start'))$('road-start').onclick=()=>{settings.information.roads=true;save();emit('roads:start',roadType);};
-    if($('road-cancel'))$('road-cancel').onclick=()=>emit('roads:cancel');
-    if($('road-undo'))$('road-undo').onclick=()=>emit('roads:undo');
-    if($('road-save'))$('road-save').onclick=()=>emit('roads:save');
-    host.querySelectorAll('[data-delete-road]').forEach(button=>button.onclick=async()=>{
-      if(!confirm(`Удалить дорогу № ${button.dataset.deleteRoad}?`))return;
-      button.disabled=true;try{await api(`admin/roads/${button.dataset.deleteRoad}`,{method:'DELETE'});emit('map:refresh');showStatus('Дорога удалена',2500);}catch(error){button.disabled=false;showStatus(error.message,5000);}
-    });
     if($('category-color-layer'))$('category-color-layer').onchange=e=>{colorLayer=e.target.value;colorCategoryId=null;renderDrawer();};
     if($('category-color-value'))$('category-color-value').onchange=e=>{colorCategoryId=Number(e.target.value);renderDrawer();};
     if($('category-color'))$('category-color').oninput=e=>{$('category-color-code').textContent=e.target.value;};
@@ -388,7 +371,7 @@ async function refreshHeaderResources(){
   }catch{/* The header keeps placeholders while state data is unavailable. */}
 }
 async function acceptUser(next){
-  user=next;colonizationMilitaryCache.clear();if(user?.state_ids?.[0])void loadColonizationMilitary(Number(user.state_ids[0])).catch(()=>{});notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);emit('roads:cancel');}$('panel-admin').hidden=user?.role!=='admin';
+  user=next;colonizationMilitaryCache.clear();if(user?.state_ids?.[0])void loadColonizationMilitary(Number(user.state_ids[0])).catch(()=>{});notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);}$('panel-admin').hidden=user?.role!=='admin';
   emit('auth:user-changed',user);
   void refreshHeaderResources();
   if(!user&&current==='admin')closeDrawer();
@@ -414,6 +397,7 @@ async function renderProfile(host,showApplicationForm=false){
     const avatar=profile.avatar_url?`<img class="profile-avatar" src="${escape(profile.avatar_url)}${profile.avatar_url.startsWith('data:')?'':`?v=${Date.now()}`}" alt="Аватар">`:`<span class="profile-avatar profile-avatar-fallback">${escape(profile.nickname.slice(0,1).toUpperCase())}</span>`;
     host.innerHTML=`<div class="profile-card">${avatar}<div><h3>${escape(profile.nickname)}</h3><p class="hint">${escape(profile.email||'')} · ${profile.role==='admin'?'Администратор':'Игрок'}</p><p>Репутация: <strong>${profile.reputation}</strong></p></div></div><div class="profile-avatar-actions"><label class="profile-avatar-upload">${profile.avatar_url?'Сменить аватар':'Загрузить аватар'}<input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>${profile.avatar_url?'<button id="profile-avatar-delete">Удалить аватар</button>':''}<span class="hint">PNG, JPEG, GIF или WebP · до 2 МБ</span></div>${profile.role==='admin'?'<section class="application-panel"><h3>Модерация</h3><button id="admin-applications">Анкеты игроков</button></section>':''}${profile.role!=='admin'&&!profile.state_ids?.length?`<section class="application-panel"><h3>Государство</h3>${pending?`<p>Анкета «${escape(pending.state_name)}» — <strong>На рассмотрении</strong></p><button data-open-application="${pending.id}">Открыть анкету</button>`:`<button id="create-application" class="primary">Создать государство</button>`}${applications.filter(item=>item.status!=='На рассмотрении').map(item=>`<button class="application-history" type="button" data-open-application="${item.id}">${escape(item.state_name)} — ${escape(item.status)}</button>`).join('')}</section>`:''}${applications.some(item=>item.status==='Принято')?`<p>Ваше государство: <strong>${escape(applications.find(item=>item.status==='Принято').state_name)}</strong></p>`:''}`;
     if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-resource-editor" data-admin-resource-editor><h3>Ресурсы государств</h3><p class="hint">Корректировка Казны руководящего центра, Престижа и Рекрутов.</p><p class="hint">Загружаю данные…</p></section><section class="application-panel admin-modifier-editor" data-admin-modifier-editor><h3>Конструктор модификаторов</h3><p class="hint">Загружаю каталог и действующие назначения…</p></section><div data-military-admin-queue></div>');void renderAdminResourceEditor(host.querySelector('[data-admin-resource-editor]'));void renderAdminModifierEditor(host.querySelector('[data-admin-modifier-editor]'));void renderMilitaryAdminQueue(host.querySelector('[data-military-admin-queue]'),{notify:message=>showStatus(message,4000)});}
+    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-global-modifiers" data-global-modifiers><h3>Глобальные модификаторы</h3><p class="hint">Загружаю назначения…</p></section><section class="application-panel" data-military-orders><h3>Приказы о передвижении</h3><p>Загружаю приказы…</p></section>');void renderAdminGlobalModifiers(host.querySelector('[data-global-modifiers]'));void renderAdminMilitaryOrders(host.querySelector('[data-military-orders]'));}
     host.insertAdjacentHTML('beforeend','<div class="profile-session-actions"><button type="button" id="profile-logout">Выйти из аккаунта</button></div>');
     host.querySelector('#profile-logout').onclick=async event=>{const button=event.currentTarget;button.disabled=true;try{await api('auth/logout',{method:'POST',body:'{}'});await acceptUser(null);emit('map:refresh');renderMenu('Профиль');}catch(error){button.disabled=false;showStatus(error.message,5000);}};
     const avatarImage=host.querySelector('.profile-avatar');if(avatarImage)avatarImage.onerror=()=>{const fallback=document.createElement('span');fallback.className='profile-avatar profile-avatar-fallback';fallback.textContent=profile.nickname.slice(0,1).toUpperCase();avatarImage.replaceWith(fallback);};
@@ -446,6 +430,31 @@ async function renderAdminResourceEditor(panel){
       finally{submit.disabled=false;}
     });
   }catch(error){panel.innerHTML=`<h3>Ресурсы государств</h3><p class="form-message">${escape(error.message)}</p>`;}
+}
+async function renderAdminMilitaryOrders(panel){
+  if(!panel)return;
+  try{
+    const data=await militaryOrderApi('snapshot');if(!panel.isConnected)return;
+    panel.innerHTML=`<h3>Приказы о передвижении</h3>${(data.orders||[]).map(order=>`<div class="marker-admin-row"><span>${escape(order.formation_name)} · ${order.route.map(Number).join(' → ')} · ${Number(order.travel_cost)} пров.</span><button type="button" data-order-approve="${Number(order.id)}">Подтвердить</button><button type="button" data-order-reject="${Number(order.id)}">Отклонить</button></div>`).join('')||'<p class="hint">Ожидающих приказов нет.</p>'}`;
+    for(const button of panel.querySelectorAll('[data-order-approve],[data-order-reject]'))button.onclick=async()=>{button.disabled=true;try{await militaryOrderApi(button.dataset.orderApprove?'approve':'reject',null,{order_id:Number(button.dataset.orderApprove||button.dataset.orderReject)});emit('map:refresh');await renderAdminMilitaryOrders(panel);}catch(error){button.disabled=false;showStatus(error.message,5000);}};
+  }catch(error){panel.textContent=`Не удалось загрузить приказы: ${error.message}`;}
+}
+async function renderAdminGlobalModifiers(panel){
+  if(!panel)return;
+  try{
+    let [catalog,global]=await Promise.all([adminModifiersApi('snapshot'),adminGlobalModifiersApi('snapshot')]);
+    const render=()=>{
+      const definitions=catalog.definitions||[],states=catalog.states||[],zones=global.zones||[];
+      panel.innerHTML=`<h3>Глобальные модификаторы</h3><form class="admin-modifier-form"><div class="inline-actions"><label>Область действия <select name="target_kind"><option value="state_group">Группа государств</option><option value="trade_zone">Торговая зона</option></select></label><label data-group-field>Государства <select name="state_ids" multiple size="6">${states.map(s=>`<option value="${Number(s.id)}">${escape(s.name)}</option>`).join('')}</select></label><label data-zone-field hidden>Торговая зона <select name="trade_zone_id">${zones.map(z=>`<option value="${Number(z.id)}">${escape(z.name)}</option>`).join('')}</select></label><label>Эффект <select name="definition_index">${definitions.map((d,i)=>`<option value="${i}">${escape(d.effect)} · ${escape(d.source)}</option>`).join('')}</select></label><label>Значение <input name="value" type="number" step="any" required></label><label>Источник <input name="source" maxlength="120" placeholder="Решение судьи"></label><label>Срок, ходов <input name="duration_turns" type="number" min="1" max="10000" step="1" placeholder="Постоянно"></label><button type="submit" class="primary">Назначить</button></div><p class="form-message" role="status"></p></form><h4>Назначения</h4><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Область</th><th>Эффект</th><th>Значение</th><th>Источник</th><th>Срок</th><th></th></tr></thead><tbody>${(global.assigned||[]).map(item=>`<tr><td>${escape(item.target_name||'—')}</td><td>${escape(item.effect)}</td><td>${Number(item.value).toLocaleString('ru-RU')} ${escape(item.unit)}</td><td>${escape(item.source)}</td><td>${item.remaining_turns===null?'Постоянный':`${Number(item.remaining_turns)} ход.`}</td><td><button type="button" data-remove-global="${Number(item.id)}">Удалить</button></td></tr>`).join('')||'<tr><td colspan="6">Назначений пока нет.</td></tr>'}</tbody></table></div>`;
+      const form=panel.querySelector('form'),kind=form.elements.target_kind,definition=form.elements.definition_index;
+      const syncKind=()=>{form.querySelector('[data-group-field]').hidden=kind.value!=='state_group';form.querySelector('[data-zone-field]').hidden=kind.value!=='trade_zone';};
+      const syncValue=()=>{const d=definitions[Number(definition.value)];form.elements.value.value=d?(['%','п.п.'].includes(d.unit)?Number(d.value)*100:d.value):0;};
+      kind.onchange=syncKind;definition.onchange=syncValue;syncKind();syncValue();
+      form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('[type="submit"]'),status=form.querySelector('[role="status"]'),d=definitions[Number(definition.value)];button.disabled=true;try{const entered=Number(form.elements.value.value);await adminGlobalModifiersApi('assign',{target_kind:kind.value,state_ids:[...form.elements.state_ids.selectedOptions].map(option=>Number(option.value)),trade_zone_id:kind.value==='trade_zone'?Number(form.elements.trade_zone_id.value):null,definition_index:Number(definition.value),value:['%','п.п.'].includes(d.unit)?entered/100:entered,source:form.elements.source.value.trim(),duration_turns:form.elements.duration_turns.value?Number(form.elements.duration_turns.value):null});global=await adminGlobalModifiersApi('snapshot');render();panel.querySelector('[role="status"]').textContent='Модификатор назначен.';}catch(error){status.textContent=error.message;button.disabled=false;}};
+      panel.querySelectorAll('[data-remove-global]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await adminGlobalModifiersApi('delete',{modifier_id:Number(button.dataset.removeGlobal)});global=await adminGlobalModifiersApi('snapshot');render();}catch(error){showStatus(error.message,5000);button.disabled=false;}});
+    };
+    render();
+  }catch(error){panel.innerHTML=`<h3>Глобальные модификаторы</h3><p class="form-message">${escape(error.message)}</p>`;}
 }
 async function renderAdminModifierEditor(panel){
   if(!panel)return;
@@ -622,7 +631,7 @@ function renderMenu(section='Статистика',fromHistory=false){
   else if(section==='Государства'&&user?.role==='admin')renderStatesMenu(content);
   else if(section==='Уведомления'&&user)renderNotifications(content);
   else if(section==='Константы'&&user?.role==='admin')renderEconomyConstants(content);
-  else if(STATE_SECTIONS.includes(section)&&user&&['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия','Военное дело','Модификаторы'].includes(section))renderPlayerStateSection(content,section);
+  else if(STATE_SECTIONS.includes(section)&&user)renderPlayerStateSection(content,section);
   else if(isState&&!user){content.innerHTML='<div class="empty-page"><h2>Государство</h2><p>Войдите, чтобы открыть игровые данные.</p><button type="button" id="state-login">Войти</button></div>';content.querySelector('#state-login').onclick=renderAuth;}
   else if(section==='Правила и механики')void renderRules(content);
   else content.innerHTML=`<div class="empty-page"><span class="badge">В РАЗРАБОТКЕ</span><h2>${escape(section)}</h2><p>Содержание раздела пока не опубликовано.</p></div>`;
@@ -1159,6 +1168,22 @@ function productionTableHtml(productionRows,crime){
   return `<div class="table-scroll"><table class="state-data-table"><thead><tr><th>Ресурс</th><th>Производство</th><th>Потребление</th><th>Баланс</th><th>Импорт</th><th>Экспорт</th></tr></thead><tbody>${rows}</tbody></table></div><p class="hint">Производство рассчитано по назначенному ресурсу, населению, типу провинции и контролю, затем уменьшено на преступность государства (${Math.floor(crime*100)}%). Потребление = округление вниз от населения / 10 × коэффициент. Все объёмы отображаются целыми числами. Эфемерная и Магическая пустоши в таблицу не включаются. ${unresolved?`Не рассчитано ресурсных строк: ${unresolved} из-за отсутствующих входных данных.`:''} Баланс учитывает договорные и зональные поставки последнего расчётного хода; запасы не ведутся.</p>`;
 }
 
+async function renderStateJournal(host,stateId){
+  if(!host)return;
+  try{
+    const journal=await stateJournalApi('snapshot',stateId);
+    if(!host.isConnected)return;
+    const field=(kind,title,value,editable)=>`<section class="application-panel state-journal-card"><h4>${title}</h4><form data-journal-kind="${kind}"><textarea name="note" rows="16" maxlength="30000" ${editable?'':'readonly'}>${escape(value||'')}</textarea>${editable?'<button type="submit">Сохранить</button>':''}<p class="form-message" role="status"></p></form></section>`;
+    host.innerHTML=`<div class="state-journal-grid">${field('player','Заметки игрока',journal.player_note,journal.can_edit_player)}${field('admin','Заметки администратора',journal.admin_note,journal.can_edit_admin)}</div>`;
+    host.querySelectorAll('form[data-journal-kind]').forEach(form=>form.onsubmit=async event=>{
+      event.preventDefault();const button=form.querySelector('[type="submit"]');if(!button)return;
+      button.disabled=true;const status=form.querySelector('[role="status"]');
+      try{await stateJournalApi(form.dataset.journalKind==='admin'?'save_admin':'save_player',stateId,form.elements.note.value);status.textContent='Сохранено.';}
+      catch(error){status.textContent=error.message;}
+      finally{button.disabled=false;}
+    });
+  }catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
+}
 function renderStateDetails(host,state,tab,provinces,isAdmin){
   if(tab==='Провинции')provinces=[...provinces].sort((a,b)=>(a.province_type==='Столичная'?0:1)-(b.province_type==='Столичная'?0:1)||Number(a.id)-Number(b.id));
   if(isAdmin){
@@ -1227,6 +1252,7 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
   else if(tab==='Военное дело')detail=`<div data-state-military><p class="hint">Загружаю военное дело…</p></div>`;
   else if(tab==='Торговля')detail=`<div data-state-trade><p class="hint">Загружаю торговые данные…</p></div>`;
   else if(tab==='Модификаторы')detail=`<div data-state-modifiers><p class="hint">Загружаю действующие модификаторы…</p></div>`;
+  else if(tab==='Журнал')detail=`<div data-state-journal><p class="hint">Загружаю журнал…</p></div>`;
   else if(tab==='Производство')detail='<div data-state-production><p class="hint">Загружаю производство…</p></div>';
   if(!detail)detail=`<div class="empty-page"><span class="badge">В РАЗРАБОТКЕ</span><h2>${escape(tab)}</h2><p>Содержание раздела пока не опубликовано.</p></div>`;
   host.innerHTML=`<div class="state-menu stack">${isAdmin?'<button id="state-back" type="button">← Все государства</button>':''}${!isAdmin?`<div class="state-heading"><h3>${escape(state.name)}</h3></div>`:''}${isAdmin?`<nav class="state-subtabs" aria-label="Разделы государства">${STATE_SECTIONS.map(name=>`<button type="button" data-state-tab="${escape(name)}" class="${name===tab?'active':''}">${name==='Статистика'?'Обзор':escape(name)}</button>`).join('')}</nav>`:''}<section class="state-detail"><h3>${escape(tab==='Статистика'?'Обзор':tab)}</h3>${detail}</section>${isAdmin?'<button id="state-delete" class="danger-button" type="button">Удалить государство</button>':''}</div>`;
@@ -1235,6 +1261,7 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
     baseRate?.insertAdjacentHTML('afterend','<div><small>Эффективность налогообложения провинций с учётом модификаторов</small><strong data-effective-tax-efficiency>—</strong></div>');
   }
   if(tab==='Модификаторы')void renderStateModifierTab(host,state,provinces,isAdmin);
+  if(tab==='Журнал')void renderStateJournal(host.querySelector('[data-state-journal]'),Number(state.id));
   if(isAdmin){
     const picker=document.createElement('label');picker.className='page-tab-picker';picker.innerHTML=`<span>Раздел государства</span><select aria-label="Раздел государства">${STATE_SECTIONS.map(name=>`<option value="${escape(name)}" ${name===tab?'selected':''}>${name==='Статистика'?'Обзор':escape(name)}</option>`).join('')}</select>`;
     host.querySelector('.state-subtabs').after(picker);
@@ -1601,7 +1628,7 @@ export function initUI(notify){
 let gameCalendar={year:1452,turn:1};
 let colonizationDraft=null;
 function renderCalendar(calendar){gameCalendar={year:Number(calendar.year),turn:Number(calendar.turn)};const season=gameCalendar.turn%2?'Тёплый':'Холодный';const label=`${gameCalendar.year.toLocaleString('ru-RU')} год · Ход ${gameCalendar.turn.toLocaleString('ru-RU')} · ${season}`;$('calendar-label').textContent=label;$('calendar-detail').textContent=`${label} сезон`;}
-export function hydrateUI(data){mapDataRevision=String(data.data_revision||0);mapLiveRevision=String(data.live_revision||0);categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};mapMarkers=data.markers||[];activeColonies=data.colonies||[];roadsList=data.roads||[];if(legendOpen)renderLegend();emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(async result=>{await acceptUser(result.user);const section=sectionFromLocation();if(section!=='map')renderMenu(section,true);}).catch(e=>showStatus(e.message,4000));}
+export function hydrateUI(data){mapDataRevision=String(data.data_revision||0);mapLiveRevision=String(data.live_revision||0);categories=data.categories;allProvinces=data.provinces;provinceAdjacency=data.adjacency||{};mapMarkers=data.markers||[];activeColonies=data.colonies||[];if(legendOpen)renderLegend();emit('map:settings',settings);api('game/calendar').then(renderCalendar).catch(e=>showStatus(e.message,4000));api('auth/me').then(async result=>{await acceptUser(result.user);const section=sectionFromLocation();if(section!=='map')renderMenu(section,true);}).catch(e=>showStatus(e.message,4000));}
 let selectionActionRevision=0;
 const colonizationMilitaryCache=new Map();
 function loadColonizationMilitary(stateId){
@@ -1611,7 +1638,13 @@ function loadColonizationMilitary(stateId){
 }
 window.addEventListener('state:resources-changed',()=>colonizationMilitaryCache.clear());
 window.addEventListener('map:selection-changed',e=>{selectedProvince=e.detail||null;selectionActionRevision++;if(colonizationDraft&&Number(colonizationDraft.provinceId)!==Number(selectedProvince?.id)){colonizationDraft=null;$('selection')?.classList.remove('colonization-open');$('colonization-inline')?.remove();}});
-window.addEventListener('map:military-data',event=>{visibleGarrisonsByProvince=new Map((event.detail?.garrisons||[]).map(item=>[Number(item.province_id),item]));});
+window.addEventListener('map:military-data',event=>{visibleGarrisonsByProvince=new Map((event.detail?.garrisons||[]).map(item=>[Number(item.province_id),item]));visibleFormations=event.detail?.formations||[];});
+window.addEventListener('ui:military-map-action',event=>{
+  const {eventName,formation}=event.detail||{};
+  if(!eventName||!formation)return;
+  showMap();
+  emit(eventName,formation);
+});
 window.addEventListener('map:garrison-info',event=>{
   const details=$('selection-details');if(!details)return;
   details.querySelector('.province-garrison-summary')?.remove();
@@ -1803,10 +1836,8 @@ window.addEventListener('application:province-picked',e=>{
 window.addEventListener('map:marker-location-selected',async e=>{try{const marker=await api('admin/markers',{method:'POST',body:JSON.stringify({...pendingMarkerDraft,...e.detail})});emit('map:marker-created',marker);pendingMarkerDraft=null;const form=$('marker-create-form');if(form){form.reset();form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;$('marker-province').textContent='Заполните поля, затем укажите точку на карте.';}showStatus('Маркер создан в выбранной точке',2500);}catch(error){pendingMarkerDraft=null;emit('map:place-marker',null);showStatus(error.message,5000);const form=$('marker-create-form');if(form){form.querySelector('button[type="submit"]').textContent='Указать точку на карте';form.querySelector('button[type="submit"]').disabled=false;$('cancel-marker-placement').hidden=true;}}});
 window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
 window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(m=>m.id!==e.detail);if(current==='admin')updateMarkerAdminList($('marker-create-form')?.closest('.panel-group'));});
-window.addEventListener('map:refreshed',e=>{mapDataRevision=String(e.detail.data_revision||0);mapLiveRevision=String(e.detail.live_revision||0);categories=e.detail.categories;allProvinces=e.detail.provinces;provinceAdjacency=e.detail.adjacency||provinceAdjacency;mapMarkers=e.detail.markers||[];activeColonies=e.detail.colonies||[];tradeAvailability={};roadsList=e.detail.roads||[];if(!economyDirty)economyDraft=null;});
+window.addEventListener('map:refreshed',e=>{mapDataRevision=String(e.detail.data_revision||0);mapLiveRevision=String(e.detail.live_revision||0);categories=e.detail.categories;allProvinces=e.detail.provinces;provinceAdjacency=e.detail.adjacency||provinceAdjacency;mapMarkers=e.detail.markers||[];activeColonies=e.detail.colonies||[];tradeAvailability={};if(!economyDirty)economyDraft=null;});
 window.addEventListener('state:resources-changed',()=>{void refreshHeaderResources();});
-window.addEventListener('roads:progress',e=>{roadInfo=e.detail;if(current==='admin'&&adminTool==='roads')renderDrawer();});
-window.addEventListener('roads:saved',e=>{roadsList.push(e.detail);if(current==='admin'&&adminTool==='roads')renderDrawer();});
 let markerPopover=null,markerMoveState=null;
 function closeMarkerPopover(){if(markerMoveState){emit('map:marker-move-cancel');markerMoveState=null;}markerPopover?.remove();markerPopover=null;}
 window.addEventListener('map:close-marker-popup',closeMarkerPopover);
@@ -1826,15 +1857,29 @@ window.addEventListener('map:military-selected',event=>{
     else if(item.leader_name){const commander=document.createElement('p');commander.textContent=`${fleet?'Адмирал':'Генерал'}: ${item.leader_name}`;body.append(commander);}
     const units=item.units||[];if(units.length){const list=document.createElement('ul');for(const unit of units){const row=document.createElement('li');row.textContent=`${unit.name} × ${Number(unit.quantity||0).toLocaleString('ru-RU')}`;list.append(row);}body.append(list);}else{const empty=document.createElement('p');empty.className='hint';empty.textContent='Состав не указан.';body.append(empty);}
     const total=document.createElement('p');total.className='military-map-total';total.textContent=`Всего: ${Number(item.total_quantity||units.reduce((sum,unit)=>sum+Number(unit.quantity||0),0)).toLocaleString('ru-RU')}`;body.append(total);
-    if(item.movement_order){const routeStatus=document.createElement('p');routeStatus.className='hint';routeStatus.textContent=`Маршрут задан · точек осталось: ${Math.max(0,(item.movement_order.route?.length||0)-Number(item.movement_order.next_index||1))}${item.movement_order.stop_reason?` · остановка: ${item.movement_order.stop_reason}`:''}`;body.append(routeStatus);}
-    if(!garrison){
-      if(user&&(user.role==='admin'||user.state_ids?.map(Number).includes(Number(item.state_id)))){
-        const actions=document.createElement('div');actions.className='military-map-actions';
-        if(!fleet||item.is_port||item.movement_order){const move=document.createElement('button');move.type='button';move.textContent=item.movement_order?'Изменить маршрут':fleet?'Задать морской маршрут':'Задать движение';move.onclick=()=>{emit('map:movement-start',item);closeMilitaryMapPopover();};actions.append(move);}
-        else{const portHint=document.createElement('p');portHint.className='hint';portHint.textContent='Флотилия не в доступном порту. Прикажите ей пройти до порта, чтобы снова изменить курс.';body.append(portHint);}
-        if(item.movement_order&&(!fleet||item.is_port)){const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отменить маршрут';cancel.onclick=async()=>{cancel.disabled=true;try{await militaryMovementApi('cancel',Number(item.id));emit('map:refresh');closeMilitaryMapPopover();showStatus('Приказ движения отменён',3000);}catch(error){cancel.disabled=false;showStatus(error.message,5000);}};actions.append(cancel);}
-        body.append(actions);
+    if(!garrison&&user&&(user.role==='admin'||user.state_ids?.map(Number).includes(Number(item.state_id)))){
+      const actions=document.createElement('div');actions.className='military-map-actions';
+      const move=document.createElement('button');move.type='button';move.textContent=fleet?'Задать морской маршрут':'Задать движение';move.onclick=()=>{emit('map:movement-start',item);closeMilitaryMapPopover();};actions.append(move);
+      if(item.pending_order){move.disabled=true;const pending=document.createElement('p');pending.className='hint';pending.textContent='Приказ ожидает решения администратора.';actions.append(pending);const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отменить приказ';cancel.onclick=async()=>{cancel.disabled=true;try{await militaryOrderApi('cancel',null,{order_id:Number(item.pending_order.id)});closeMilitaryMapPopover();emit('map:refresh');}catch(error){cancel.disabled=false;showStatus(error.message,5000);}};actions.append(cancel);}
+      const place=document.createElement('button');place.type='button';place.textContent='Переместить фишку';place.onclick=()=>{emit('map:chip-place',item);closeMilitaryMapPopover();};actions.append(place);
+      const peers=visibleFormations.filter(other=>Number(other.id)!==Number(item.id)&&Number(other.state_id)===Number(item.state_id)&&other.domain===item.domain&&Number(other.province_id)===Number(item.province_id));
+      if((item.units||[]).some(unit=>Number(unit.quantity)>1)){
+        const split=document.createElement('button');split.type='button';split.textContent='Разделить формирование';split.onclick=()=>{
+          const form=document.createElement('form');form.className='stack';form.innerHTML=`<label class="field"><span>Название нового формирования</span><input name="name" maxlength="100" required value="${escape(item.name)} — отделение"></label>${(item.units||[]).map(unit=>`<label class="field"><span>${escape(unit.name)} (из ${Number(unit.quantity)})</span><input type="number" min="0" max="${Math.max(0,Number(unit.quantity)-1)}" step="1" value="0" data-split-unit="${Number(unit.unit_id)}"></label>`).join('')}<button type="submit">Отделить</button>`;
+          form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('[type="submit"]');button.disabled=true;try{const units=[...form.querySelectorAll('[data-split-unit]')].filter(input=>Number(input.value)>0).map(input=>({unit_id:Number(input.dataset.splitUnit),quantity:Number(input.value)}));await militarySplitApi(Number(item.id),{name:form.elements.name.value,units});closeMilitaryMapPopover();emit('map:refresh');showStatus('Формирование разделено.',2500);}catch(error){button.disabled=false;showStatus(error.message,5000);}};actions.replaceWith(form);
+        };actions.append(split);
       }
+      for(const peer of peers){const merge=document.createElement('button');merge.type='button';merge.textContent=`Объединить с «${peer.name}»`;merge.onclick=async()=>{merge.disabled=true;try{await militaryOrderApi('merge',Number(item.id),{source_id:Number(peer.id)});closeMilitaryMapPopover();emit('map:refresh');showStatus('Формирования объединены.',2500);}catch(error){merge.disabled=false;showStatus(error.message,5000);}};actions.append(merge);}
+      if(user.role==='admin'){
+        const edit=document.createElement('button');edit.type='button';edit.textContent='Численность частей';edit.onclick=async()=>{
+          edit.disabled=true;let catalog=[];try{catalog=(await militaryApi('snapshot',Number(item.state_id))).catalog||[];}catch(error){edit.disabled=false;showStatus(error.message,5000);return;}
+          const available=catalog.filter(unit=>(unit.domain===item.domain||item.domain==='land'&&unit.domain==='siege')&&!(item.units||[]).some(owned=>Number(owned.unit_id)===Number(unit.id)));
+          const form=document.createElement('form');form.className='stack';form.innerHTML=`<strong>Численность</strong>${(item.units||[]).map(unit=>`<label class="field"><span>${escape(unit.name)}</span><input type="number" min="0" max="1000000" step="1" value="${Number(unit.quantity)}" data-unit-id="${Number(unit.unit_id)}"></label>`).join('')}${available.length?`<label class="field"><span>Добавить часть</span><select name="new_unit"><option value="">Выберите</option>${available.map(unit=>`<option value="${Number(unit.id)}">${escape(unit.name)}</option>`).join('')}</select></label><label class="field"><span>Количество</span><input name="new_quantity" type="number" min="1" max="1000000" step="1"></label>`:''}<button type="submit">Сохранить</button>`;
+          form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('[type="submit"]');button.disabled=true;try{const units=[...form.querySelectorAll('[data-unit-id]')].map(input=>({unit_id:Number(input.dataset.unitId),quantity:Number(input.value)}));if(form.elements.new_unit?.value)units.push({unit_id:Number(form.elements.new_unit.value),quantity:Number(form.elements.new_quantity.value)});await militaryOrderApi('admin_units',Number(item.id),{units});closeMilitaryMapPopover();emit('map:refresh');showStatus('Численность сохранена.',2500);}catch(error){button.disabled=false;showStatus(error.message,5000);}};
+          actions.replaceWith(form);
+        };actions.append(edit);
+      }
+      body.append(actions);
     }
   }
   box.append(body);document.body.append(box);
@@ -1850,11 +1895,8 @@ window.addEventListener('map:movement-progress',event=>{
   panel.setAttribute('aria-label',`Маршрут ${unit}`);
   if(forecast?.error){forecastLines.push(`Маршрут недоступен: ${forecast.error}`);}
   else if(forecast){
-    forecastLines.push(`Путь: ${forecast.distanceKm.toLocaleString('ru-RU',{maximumFractionDigits:1})} км · стоимость марша: ${forecast.cost.toLocaleString('ru-RU',{maximumFractionDigits:1})} / ${forecast.budget.toLocaleString('ru-RU',{maximumFractionDigits:0})} км за текущий ход`);
-    forecastLines.push(`Оценка: около ${forecast.turns} ${forecast.turns===1?'хода':'ходов'}${forecast.terrains.length?` · местность: ${forecast.terrains.join(', ')}`:''}${forecast.weathers.length?` · погода: ${forecast.weathers.join(', ')}`:''}`);
-    if(naval)forecastLines.push('Флот завершит путь в порту с правом базирования.');
-    if(forecast.unknown)forecastLines.push(`Условия ${forecast.unknown} участков неизвестны; прогноз для них приблизительный.`);
-    if(forecast.stop)forecastLines.push(`Остановка: ${forecast.stop.reason}${forecast.stop.name?` (${forecast.stop.name})`:''}`);
+    forecastLines.push(`Стоимость маршрута: ${Number(forecast.cost)} / ${Number(forecast.limit)} провинций за ход.`);
+    if(naval)forecastLines.push('Конечная точка маршрута — доступный порт.');
   }
   const forecastOpen=panel.querySelector('.military-movement-details')?.open??!matchMedia('(max-width:760px)').matches;
   panel.innerHTML=`<strong>Маршрут ${unit}</strong><span>Точек: ${route.length}</span><details class="military-movement-details" ${forecastOpen?'open':''}><summary>Прогноз движения</summary><div class="military-movement-forecast">${forecastLines.length?forecastLines.map(line=>`<span>${escape(line)}</span>`).join(''):`<span>${route.length<2?'Добавьте точку маршрута.':'Проверяю маршрут на сервере…'}</span>`}</div></details><div><button type="button" data-move-submit ${route.length<2||!forecast||forecast.error?'disabled':''}>Отправить приказ</button><button type="button" data-move-cancel>Отмена</button></div>`;
@@ -1863,7 +1905,7 @@ window.addEventListener('map:movement-progress',event=>{
 window.addEventListener('map:movement-cancelled',()=>{document.getElementById('military-movement-panel')?.remove();showStatus('Построение маршрута отменено',2500);});
 window.addEventListener('map:movement-ready',async event=>{
   const button=document.querySelector('[data-move-submit]');if(button)button.disabled=true;
-  try{const {formation,route}=event.detail;await militaryMovementApi('set_order',Number(formation.id),{route});emit('map:movement-clear');emit('map:refresh');showStatus('Приказ движения сохранён. Перемещение начнётся при расчёте следующего хода.',4500);}
+  try{const {formation,route}=event.detail;await militaryOrderApi('submit',Number(formation.id),{route:route.map(point=>point.province_id),x:route.at(-1).x,y:route.at(-1).y});emit('map:movement-clear');emit('map:refresh');showStatus('Приказ отправлен администратору на рассмотрение.',4500);}
   catch(error){if(button)button.disabled=false;emit('map:movement-submit-failed');showStatus(error.message,6000);}
 });
 function positionMarkerPopover({x,y,visible}){

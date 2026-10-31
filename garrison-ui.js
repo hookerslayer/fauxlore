@@ -1,4 +1,4 @@
-import {garrisonApi} from './supabase-api.js?v=server-boundary-final-20261030';
+import {garrisonApi} from './supabase-api.js?v=manual-military-20261031';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=value=>Number(value||0).toLocaleString('ru-RU',{maximumFractionDigits:2});

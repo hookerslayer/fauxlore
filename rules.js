@@ -1,4 +1,4 @@
-const RULES_URL = new URL('./docs/rules.md', import.meta.url);
+const RULES_URL = new URL('./docs/fauxlore.md', import.meta.url);
 const LIBRARIES = [
   ['marked', 'assets/vendor/marked.umd.js'],
   ['DOMPurify', 'assets/vendor/purify.min.js']

@@ -18,20 +18,23 @@ export function buildFinanceProjection({stateId,taxForecast,tradeProjection,agre
   const formationUpkeep=floor(Number(militaryUpkeep.army||0)+Number(militaryUpkeep.fleet||0)+
     Number(militaryUpkeep.mercenaries||0));
   const upkeep=floor(formationUpkeep+sponsorGarrison['Корона']+militiaByEstate['Корона']);
-  const colonyUpkeep=floor((colonyData?.missions||[]).length*1000);
+  const armyByEstate=Object.fromEntries(estates.map(name=>[name,
+    name==='Корона'?upkeep:floor(sponsorGarrison[name]+militiaByEstate[name])]));
+  const portUpkeep=floor(militaryUpkeep.ports||0);
+  const colonyUpkeep=floor((colonyData?.missions||[]).reduce((total,mission)=>total+Number(mission.upkeep_per_turn??1000),0));
   const zoneIncomeByEstate=tradeProjection.zone_income_by_estate||{};
   const adjustedEstateIncome=tradeProjection.adjusted_estate_income||{};
   const estateBudget=Object.fromEntries(estates.map(name=>{
     const income=floor(Number(taxForecast.buckets?.[name]||0)+Number(zoneIncomeByEstate[name]||0)+
       Number(adjustedEstateIncome[name]||0)+(name==='Корона'?tradeGoldIn:0));
-    const expense=name==='Корона'?floor(upkeep+colonyUpkeep+tradeGoldOut):floor(sponsorGarrison[name]+militiaByEstate[name]);
+    const expense=name==='Корона'?floor(upkeep+portUpkeep+colonyUpkeep+tradeGoldOut):floor(sponsorGarrison[name]+militiaByEstate[name]);
     return [name,{income,expense,saldo:income-expense}];
   }));
   const treasuryIncomeRows=[['Налоговые поступления',taxForecast.buckets?.['Корона']||0],
     ['Внутренняя торговля · пошлина',tradeProjection.adjusted_internal_income||0],
     ['Торговые зоны',zoneIncomeByEstate['Корона']||0],['Золото по договорам',tradeGoldIn],
     ['Прочие разовые поступления',0]];
-  const treasuryExpenseRows=[['Содержание армии и флота',upkeep],['Содержание колоний',colonyUpkeep],
+  const treasuryExpenseRows=[['Содержание армии и флота',upkeep],['Содержание портов',portUpkeep],['Содержание колоний',colonyUpkeep],
     ['Платежи по торговым договорам',tradeGoldOut],['Погашение займов',0],['Прочие разовые списания',0]];
   const prestigeEffects=(indicators?.permanent_modifiers||[])
     .filter(item=>item.key==='prestige'&&item.scope==='Государство');
@@ -44,7 +47,7 @@ export function buildFinanceProjection({stateId,taxForecast,tradeProjection,agre
   const treasurySaldo=sum(treasuryIncomeRows)-sum(treasuryExpenseRows);
   const prestigeSaldo=sum(prestigeIncomeRows)-sum(prestigeExpenseRows);
   return {trade_gold_in:tradeGoldIn,trade_gold_out:tradeGoldOut,sponsor_garrison:sponsorGarrison,
-    upkeep,colony_upkeep:colonyUpkeep,estate_budget:estateBudget,
+    upkeep,army_by_estate:armyByEstate,port_upkeep:portUpkeep,colony_upkeep:colonyUpkeep,estate_budget:estateBudget,
     current_balances:taxRates.buckets||{},
     treasury_income_rows:treasuryIncomeRows,treasury_expense_rows:treasuryExpenseRows,
     prestige_income_rows:prestigeIncomeRows,prestige_expense_rows:prestigeExpenseRows,

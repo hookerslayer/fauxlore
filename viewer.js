@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=wall-filters2-20261031';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=state-costs-20261101';
 import {localEventsApi} from './supabase-api.js?v=local-events-20261031';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=event-popover-20261031';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=local-events-20261031';

@@ -233,6 +233,13 @@ export async function colonizationApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function adminColonizationModifiersApi(action, payload = {}) {
+  const db = await client();
+  const {data,error}=await db.rpc('admin_colonization_modifiers_api',{action,payload});
+  if(error) throw new Error(error.message||'Не удалось изменить модификаторы колонизации');
+  return data;
+}
+
 export async function adminResourcesApi(action, targetState = null, resource = null, delta = 0) {
   const db = await client();
   const {data, error} = await db.rpc('admin_resources_api', {

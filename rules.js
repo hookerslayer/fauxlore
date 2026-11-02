@@ -62,7 +62,6 @@ export async function renderRules(host) {
   host.innerHTML = `<section class="rules-reader">
     <header class="rules-reader-header">
       <div><h2>Материалы проекта</h2><p>Действующие правила Fauxlore</p></div>
-      <button type="button" class="rules-refresh">Обновить</button>
     </header>
     <div class="rules-reader-layout">
       <nav class="rules-reader-nav" aria-label="Главы правил"></nav>
@@ -73,7 +72,6 @@ export async function renderRules(host) {
   const nav = host.querySelector('.rules-reader-nav');
   const picker = host.querySelector('.rules-reader-picker select');
   const article = host.querySelector('.rules-reader-article');
-  const refresh = host.querySelector('.rules-refresh');
   let pages = [];
   let currentKey = rememberedChapter();
   let requestId = 0;
@@ -137,7 +135,6 @@ export async function renderRules(host) {
 
   async function load() {
     const id = ++requestId;
-    refresh.disabled = true;
     if (!pages.length) article.innerHTML = '<p>Загружаю правила…</p>';
     try {
       const response = await fetch(RULES_URL, { cache: 'no-store' });
@@ -154,8 +151,6 @@ export async function renderRules(host) {
         message.textContent = error.message || 'Не удалось открыть правила.';
         article.append(message);
       }
-    } finally {
-      if (host.isConnected && id === requestId) refresh.disabled = false;
     }
   }
 
@@ -175,6 +170,5 @@ export async function renderRules(host) {
       heading.scrollIntoView({ block: 'start' });
     }
   });
-  refresh.addEventListener('click', () => void load());
   await load();
 }

@@ -253,6 +253,23 @@ export async function adminResourcesApi(action, targetState = null, resource = n
   return data;
 }
 
+export async function instantModifierApi(payload){
+  const db=await client();const {data,error}=await db.rpc('instant_modifier_api',{payload});
+  if(error)throw new Error(error.message||'Не удалось применить разовое изменение');return data;
+}
+
+export async function judgeStateStatisticsApi() {
+  const db=await client();const {data,error}=await db.rpc('judge_state_statistics_api');
+  if(error)throw new Error(error.message||'Не удалось загрузить статистику');return data;
+}
+
+export async function judgeAssignmentsApi(action,payload={}) {
+  const db=await client();
+  const {data,error}=await db.rpc('judge_assignments_api',{action,payload});
+  if(error)throw new Error(error.message||'Не удалось изменить назначение судьи');
+  return data;
+}
+
 export async function adminModifiersApi(action, payload = {}) {
   const db = await client();
   const {data,error}=await db.rpc('admin_modifiers_api',{action,payload});

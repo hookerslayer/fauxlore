@@ -8,7 +8,7 @@ const province={id:42,kind:'land',province_type:'Регион',population:1000,d
     races:{id:1,name:'Люди'},religions:{id:1,name:'Правоверие'},resources:{name:'Зерно'}}};
 let map={data_revision:7,live_revision:9,provinces:[province]};
 let role='admin';
-let localProjection=[];
+let localProjection=[],indicatorModifiers=[];
 let privateReads=0, mapReads=0;
 globalThis.fetch=async (_url,options)=>{
   if(String(_url).endsWith('/local_events_api'))return new Response(JSON.stringify(localProjection),{status:200,headers:{'Content-Type':'application/json'}});
@@ -27,7 +27,7 @@ globalThis.fetch=async (_url,options)=>{
   if(path==='map')mapReads++;
   const data=path==='map'?map:path==='auth/me'?{user:{role}}:
     path==='admin/states'||path==='my/states'?[{id:5,name:'Тест',principles:{}}]:
-    path==='admin/states/5/indicators'||path==='my/states/5/indicators'?{permanent_modifiers:[],corruption:0}:
+    path==='admin/states/5/indicators'||path==='my/states/5/indicators'?{permanent_modifiers:indicatorModifiers,corruption:0}:
     path==='admin/states/5/politics'||path==='my/states/5/politics'?[]:
     path==='admin/states/5/trade-overview'||path==='my/states/5/trade-overview'?{resources:[],zones:[]}:
     path==='admin/states/5/estate-tax-rates'||path==='my/states/5/estate-tax-rates'?{groups:[{estate:'Знать',rate:10},{estate:'Духовенство',rate:1},{estate:'Горожане',rate:3},{estate:'Крестьяне',rate:1}]}:
@@ -38,7 +38,7 @@ globalThis.fetch=async (_url,options)=>{
   return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}});
 };
 await import('../supabase/functions/province-projection/index.js');
-const {calculateStatePolitics}=await import('../supabase/functions/province-projection/economy.js');
+const {calculateStatePolitics,calculateProvinceEconomy}=await import('../supabase/functions/province-projection/economy.js');
 const estateNames=['Знать','Духовенство','Горожане','Крестьяне'];
 const politicsFor=statuses=>calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:statuses[i],loyalty:.5})),'Тест',{permanent_modifiers:[],corruption:0});
 const capped=politicsFor(['Ключевое','Значимое','Бесправное','Бесправное']);
@@ -49,6 +49,40 @@ near(capped.estateModifierBreakdown['Знать'].ambition,.4);
 near(capped.estateModifierBreakdown['Духовенство'].ambition,.2);
 near(capped.estateModifierBreakdown['Крестьяне'].ambition,0);
 near(capped.estateLoyalty['Крестьяне'],.5+capped.estateInfluence['Крестьяне']);
+const influenceAdjusted=calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:['Ключевое','Значимое','Бесправное','Бесправное'][i],loyalty:.5})),'Тест',{permanent_modifiers:[{key:'clergy_influence_pp',value:.05,source_kind:'admin',scope:'Государство'}],corruption:0});
+near(influenceAdjusted.estateInfluence['Духовенство'],capped.estateInfluence['Духовенство']+.05);
+near(Object.values(influenceAdjusted.estateInfluence).reduce((a,b)=>a+b,0),1);
+assert.ok(influenceAdjusted.estateInfluence['Горожане']+influenceAdjusted.estateInfluence['Крестьяне']<=.1+1e-10);
+const clergyAdjusted=calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:['Ключевое','Значимое','Бесправное','Бесправное'][i],loyalty:.5})),'Тест',{permanent_modifiers:[{key:'clergy_loyalty',value:.05,source_kind:'admin',scope:'Государство'}],corruption:0});
+near(clergyAdjusted.estateLoyalty['Духовенство'],Math.min(1,capped.estateLoyalty['Духовенство']+.05));
+near(clergyAdjusted.estateLoyalty['Горожане'],capped.estateLoyalty['Горожане']);
+const estateStabilized=calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:['Ключевое','Значимое','Бесправное','Бесправное'][i],loyalty:.5})),'Тест',{permanent_modifiers:[{key:'clergy_stabilization',value:.05,source_kind:'admin',scope:'Государство'}],corruption:0});
+near(estateStabilized.estateStability['Духовенство'],capped.estateStability['Духовенство']+.05);
+near(estateStabilized.estateStability['Горожане'],capped.estateStability['Горожане']);
+const stabilityAdjusted=calculateStatePolitics([province],estateNames.map((name,i)=>({group_type:'estate',group_key:name,status:['Ключевое','Значимое','Бесправное','Бесправное'][i],loyalty:.5})),'Тест',{permanent_modifiers:[{key:'state_stability_flat',value:.05,source_kind:'admin',scope:'Государство'}],corruption:0});
+near(stabilityAdjusted.stateStability,Math.min(1,capped.stateStability+.05));
+const raceBase=calculateStatePolitics([province],[],'Тест',{permanent_modifiers:[],corruption:0});
+const raceAdjusted=calculateStatePolitics([province],[],'Тест',{permanent_modifiers:[{key:'race_human_loyalty',value:.05,source_kind:'admin',scope:'Государство'}],corruption:0});
+near(raceAdjusted.raceLoyalty[1],Math.min(1,raceBase.raceLoyalty[1]+.05));
+const scopedProduction={permanent_modifiers:[{key:'production',value:.5,source_kind:'admin',scope:'Область:Города'}]};
+const regionalBase=calculateProvinceEconomy(province,'Тест',{permanent_modifiers:[]});
+const occupied={...province,occupation:'Захватчик',occupation_crime:.8};
+const occupiedOutput=calculateProvinceEconomy(occupied,'Захватчик',{permanent_modifiers:[]}).production;
+const occupiedWithDifferentCrime=calculateProvinceEconomy({...occupied,occupation_crime:.1},'Захватчик',{permanent_modifiers:[]}).production;
+assert.equal(occupiedOutput,occupiedWithDifferentCrime,'Production uses the owner crime rate during occupation');
+const regionalScoped=calculateProvinceEconomy(province,'Тест',scopedProduction);
+assert.equal(regionalScoped.production,regionalBase.production,'City modifier must not affect a region');
+const cityProvince={...province,province_type:'Городская'};
+assert.ok(calculateProvinceEconomy(cityProvince,'Тест',scopedProduction).production>calculateProvinceEconomy(cityProvince,'Тест',{permanent_modifiers:[]}).production,'City modifier must affect a city');
+const growthPointModifier={permanent_modifiers:[{key:'population_growth_pp',value:.10,source_kind:'admin',scope:'Государство'}]};
+const baseGrowth=calculateProvinceEconomy(province,'Тест',{permanent_modifiers:[]}).populationGrowth;
+assert.ok(calculateProvinceEconomy(province,'Тест',growthPointModifier).populationGrowth>baseGrowth,'Growth percentage points must increase population growth');
+const lossGrowth=calculateProvinceEconomy(province,'Тест',{permanent_modifiers:[{key:'population_growth_pp',value:-100,source_kind:'admin',scope:'Государство'}]}).populationGrowth;
+assert.equal(lossGrowth,-province.population,'Population loss must not exceed population');
+const controlContext={permanent_modifiers:[{key:'control_modifier_pp',value:-.10,source_kind:'admin',scope:'Государство'}]};
+const controlled=calculateProvinceEconomy(province,'Тест',controlContext);
+assert.equal(controlled.effectiveControl,90,'Control points affect displayed control');
+assert.ok(controlled.production<regionalBase.production,'Reduced control must lower production');
 const onlyPowerless=politicsFor(estateNames.map(()=>'Бесправное'));
 near(Object.values(onlyPowerless.estateInfluence).reduce((a,b)=>a+b,0),1);
 const noPowerless=politicsFor(estateNames.map(()=>'Ключевое'));
@@ -67,6 +101,11 @@ assert.equal(result.province_id,42);
 assert.equal(result.data_revision,7);
 assert.equal(result.live_revision,9);
 assert.equal(typeof result.taxes,'number');
+indicatorModifiers=[{source_kind:'admin',key:'control_modifier_pp',value:-.10,scope:'Государство'}];
+const controlAdjusted=await (await call({province_id:42})).json();
+assert.equal(controlAdjusted.effectiveControl,90,'Single-province projection uses authorized state modifiers');
+assert.ok(controlAdjusted.production<result.production,'Control affects production in single-province projection');
+indicatorModifiers=[];
 localProjection=[{source_kind:'admin',key:'production',value:.5,target_province_id:42}];
 const affected=await (await call({province_id:42})).json();
 assert.ok(affected.production>result.production,'Local event changes the selected province projection');

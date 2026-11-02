@@ -199,13 +199,24 @@ Deno.serve(async request => {
     if (!permitted) return json(403, {error: 'Нет доступа к экономике провинции'});
 
     const localModifiers=await readRpc('local_events_api',{action:'projection',payload:{province_id:provinceId}});
-    const provinceContext={permanent_modifiers:localModifiers};
+    let provinceContext={permanent_modifiers:localModifiers};
+    try {
+      const caller=await read('auth/me'),administrator=caller?.user?.role==='admin',prefix=administrator?'admin':'my';
+      const states=await read(administrator?'admin/states':'my/states');
+      const controlledName=occupied?province.occupation:province.layers?.states?.name;
+      const state=states.find(item=>item.name===controlledName);
+      if(state){
+        const indicators=await read(`${prefix}/states/${Number(state.id)}/indicators`);
+        provinceContext={...state,permanent_modifiers:[...(indicators.permanent_modifiers||[]).filter(item=>item.local_event_id==null),...localModifiers]};
+      }
+    } catch { /* Keep public local-event projection when private state data is unavailable. */ }
     const economy = calculateProvinceEconomy(province,province?.layers?.states?.name,provinceContext);
     const value = calculateProvinceValue(province,province?.layers?.states?.name,provinceContext);
     return json(200, {
       province_id: provinceId,
       data_revision: map.data_revision,
       live_revision: map.live_revision,
+      effectiveControl: economy.effectiveControl,
       populationGrowth: economy.populationGrowth,
       taxes: economy.taxes,
       production: economy.production,

@@ -19312,3 +19312,1048 @@ begin
   execute definition;
 end $migration$;
 notify pgrst,'reload schema';
+
+-- Applied migration: 20261102082839_judge_assignments.sql
+create table fauxlore.judge_assignments (
+ judge_id bigint not null references fauxlore.accounts(id) on delete cascade,
+ player_id bigint not null references fauxlore.accounts(id) on delete cascade,
+ created_by bigint not null references fauxlore.accounts(id), created_at timestamptz not null default now(),
+ primary key (judge_id,player_id), check(judge_id<>player_id)
+);
+alter table fauxlore.judge_assignments enable row level security;
+revoke all on fauxlore.judge_assignments from public,anon,authenticated;
+create function fauxlore.judge_can_review(judge_key bigint,state_key integer) returns boolean
+language sql stable security definer set search_path='' as $$
+ select exists(select 1 from fauxlore.judge_assignments j
+ join fauxlore.account_states s on s.account_id=j.player_id and s.layer='states'
+ where j.judge_id=judge_key and s.state_id=state_key
+ and not exists(select 1 from fauxlore.account_states own where own.account_id=judge_key and own.layer='states' and own.state_id=state_key))
+$$;
+revoke all on function fauxlore.judge_can_review(bigint,integer) from public,anon,authenticated;
+create function public.judge_assignments_api(action text,payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor fauxlore.accounts; judge_key bigint; player_key bigint;
+begin
+ actor:=fauxlore.current_account();
+ if coalesce(actor.role,'')<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;
+ if action='snapshot' then
+  return jsonb_build_object('players',coalesce((select jsonb_agg(jsonb_build_object('id',id,'nickname',nickname) order by nickname,id) from fauxlore.accounts where role='player'),'[]'::jsonb),
+   'assignments',coalesce((select jsonb_agg(jsonb_build_object('judge_id',j.judge_id,'judge',a.nickname,'player_id',j.player_id,'player',b.nickname) order by a.nickname,b.nickname,j.judge_id,j.player_id) from fauxlore.judge_assignments j join fauxlore.accounts a on a.id=j.judge_id join fauxlore.accounts b on b.id=j.player_id),'[]'::jsonb));
+ elsif action='assign' then
+  judge_key:=nullif(payload->>'judge_id','')::bigint; player_key:=nullif(payload->>'player_id','')::bigint;
+  if judge_key is null or player_key is null or judge_key=player_key or (select count(*) from fauxlore.accounts where id in (judge_key,player_key) and role='player')<>2 then raise sqlstate '22023' using message='Выберите двух разных пользователей-игроков'; end if;
+  insert into fauxlore.judge_assignments(judge_id,player_id,created_by) values(judge_key,player_key,actor.id) on conflict do nothing;
+  return jsonb_build_object('assigned',true);
+ elsif action='remove' then
+  delete from fauxlore.judge_assignments where judge_id=nullif(payload->>'judge_id','')::bigint and player_id=nullif(payload->>'player_id','')::bigint;
+  if not found then raise sqlstate 'P0002' using message='Назначение не найдено'; end if;
+  return jsonb_build_object('removed',true);
+ end if;
+ raise sqlstate '22023' using message='Неизвестное действие';
+end $$;
+revoke all on function public.judge_assignments_api(text,jsonb) from public,anon;
+grant execute on function public.judge_assignments_api(text,jsonb) to authenticated;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083052_judge_modifier_access.sql
+do $migration$
+declare fn text; old_text text; new_text text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ old_text:=$old$  if coalesce(actor.role,'')<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;$old$;
+ new_text:=$new$  if coalesce(actor.role,'')<>'admin' then
+    if not exists(select 1 from fauxlore.judge_assignments where judge_id=actor.id) then raise sqlstate '42501' using message='Нет прав судьи'; end if;
+    if action in ('assign','resource_assign') and not fauxlore.judge_can_review(actor.id,nullif(payload->>'state_id','')::integer) then raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+    if action='delete' and not exists(select 1 from fauxlore.admin_modifier_assignments a where a.id=(payload->>'modifier_id')::bigint and fauxlore.judge_can_review(actor.id,a.state_id)) then raise sqlstate '42501' using message='Нет доступа к модификатору'; end if;
+  end if;$new$;
+ if position(old_text in fn)=0 then raise exception 'modifier authorization hook missing'; end if;
+ fn:=replace(fn,old_text,new_text);
+ old_text:=$old$from fauxlore.map_categories c where c.layer='states'),'[]'::jsonb)$old$;
+ new_text:=$new$from fauxlore.map_categories c where c.layer='states' and (actor.role='admin' or fauxlore.judge_can_review(actor.id,c.id))),'[]'::jsonb)$new$;
+ if position(old_text in fn)=0 then raise exception 'state filter hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ old_text:=$old$where owner.layer='states' and p.kind='land'),'[]'::jsonb)$old$;
+ new_text:=$new$where owner.layer='states' and p.kind='land' and (actor.role='admin' or fauxlore.judge_can_review(actor.id,owner.category_id))),'[]'::jsonb)$new$;
+ if position(old_text in fn)=0 then raise exception 'province filter hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ old_text:=$old$left join fauxlore.provinces p on p.id=a.province_id),'[]'::jsonb)$old$;
+ new_text:=$new$left join fauxlore.provinces p on p.id=a.province_id where actor.role='admin' or fauxlore.judge_can_review(actor.id,a.state_id)),'[]'::jsonb)$new$;
+ if position(old_text in fn)=0 then raise exception 'assigned filter hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083125_judge_local_events.sql
+do $migration$
+declare fn text; old_text text; new_text text;
+begin
+ fn:=pg_get_functiondef('public.local_events_api(text,jsonb)'::regprocedure);
+ old_text:=$old$  if coalesce(actor.role,'')<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;$old$;
+ new_text:=$new$  if coalesce(actor.role,'')<>'admin' then
+    if not exists(select 1 from fauxlore.judge_assignments where judge_id=actor.id) then raise sqlstate '42501' using message='Нет прав судьи'; end if;
+    if action='create' and not exists(select 1 from fauxlore.province_values o where o.layer='states' and o.province_id=nullif(payload->>'province_id','')::integer and fauxlore.judge_can_review(actor.id,o.category_id)) then raise sqlstate '42501' using message='Нет доступа к провинции'; end if;
+    if action='end' and not exists(select 1 from fauxlore.local_events e join fauxlore.province_values o on o.province_id=e.province_id and o.layer='states' where e.id=nullif(payload->>'event_id','')::bigint and fauxlore.judge_can_review(actor.id,o.category_id)) then raise sqlstate '42501' using message='Нет доступа к событию'; end if;
+  end if;$new$;
+ if position(old_text in fn)=0 then raise exception 'event authorization hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ old_text:=$old$from fauxlore.provinces p where p.kind='land'),'[]'::jsonb)$old$;
+ new_text:=$new$from fauxlore.provinces p where p.kind='land' and (actor.role='admin' or exists(select 1 from fauxlore.province_values o where o.layer='states' and o.province_id=p.id and fauxlore.judge_can_review(actor.id,o.category_id)))),'[]'::jsonb)$new$;
+ if position(old_text in fn)=0 then raise exception 'event province filter hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083151_judge_wall_verdicts.sql
+do $migration$
+declare fn text; old_text text; new_text text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ old_text:=$old$  elsif action='verdict' then
+    if actor.role<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;$old$;
+ new_text:=$new$  elsif action='verdict' then
+    if actor.role<>'admin' and (not fauxlore.judge_can_review(actor.id,nullif(payload->>'state_id','')::integer) or not exists(select 1 from fauxlore.wall_posts p join fauxlore.judge_assignments j on j.player_id=p.account_id where p.id=nullif(payload->>'post_id','')::bigint and j.judge_id=actor.id and p.account_id<>actor.id)) then raise sqlstate '42501' using message='Нет доступа к вердикту'; end if;$new$;
+ if position(old_text in fn)=0 then raise exception 'wall verdict hook missing'; end if; execute replace(fn,old_text,new_text);
+ fn:=pg_get_functiondef('fauxlore.wall_verdict_many(jsonb)'::regprocedure);
+ old_text:=$old$  if actor.role<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;$old$;
+ new_text:=$new$  if actor.role<>'admin' and not exists(select 1 from fauxlore.wall_posts p join fauxlore.judge_assignments j on j.player_id=p.account_id where p.id=nullif(payload->>'post_id','')::bigint and j.judge_id=actor.id and p.account_id<>actor.id) then raise sqlstate '42501' using message='Нет доступа к вердикту'; end if;$new$;
+ if position(old_text in fn)=0 then raise exception 'verdict role hook missing'; end if; fn:=replace(fn,old_text,new_text);
+ old_text:=$old$  if cardinality(target_ids)<>jsonb_array_length(payload->'state_ids') then$old$;
+ new_text:=$new$  if actor.role<>'admin' and exists(select 1 from unnest(target_ids) x where not fauxlore.judge_can_review(actor.id,x)) then raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+  if cardinality(target_ids)<>jsonb_array_length(payload->'state_ids') then$new$;
+ if position(old_text in fn)=0 then raise exception 'verdict states hook missing'; end if; execute replace(fn,old_text,new_text);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083226_judge_wall_visibility.sql
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ marker:=$old$'id',p.id,'body',p.body,'rich_body',p.rich_body$old$;
+ if position(marker in fn)=0 then raise exception 'wall listing hook missing'; end if;
+ fn:=replace(fn,marker,$new$'id',p.id,'can_verdict',case when actor.role='admin' then true else exists(select 1 from fauxlore.judge_assignments j where j.judge_id=actor.id and j.player_id=p.account_id and j.judge_id<>j.player_id and fauxlore.judge_can_review(actor.id,p.state_id)) end,'body',p.body,'rich_body',p.rich_body$new$);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083300_judge_state_statistics.sql
+create function public.judge_state_statistics_api()
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor fauxlore.accounts;
+begin
+ actor:=fauxlore.current_account();
+ if actor.id is null then raise sqlstate '42501' using message='Войдите в аккаунт'; end if;
+ return coalesce((select jsonb_agg(jsonb_build_object('id',sp.state_id,'name',c.name,'treasury',sp.treasury,'prestige',sp.prestige,'recruits',sp.recruits,'crime',sp.crime,'corruption',sp.corruption,'provinces',coalesce((select jsonb_agg(jsonb_build_object('id',p.id,'name',p.name,'type',p.province_type,'population',p.population,'development',p.development) order by p.name,p.id) from fauxlore.province_values v join fauxlore.provinces p on p.id=v.province_id where v.layer='states' and v.category_id=sp.state_id and p.kind='land'),'[]'::jsonb)) order by c.name) from fauxlore.state_profiles sp join fauxlore.map_categories c on c.layer='states' and c.id=sp.state_id where fauxlore.judge_can_review(actor.id,sp.state_id)),'[]'::jsonb);
+end $$;
+revoke all on function public.judge_state_statistics_api() from public,anon;
+grant execute on function public.judge_state_statistics_api() to authenticated;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083541_wall_verdict_resource_modifiers.sql
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ marker:=$old$      perform fauxlore.admin_modifiers_api('assign',effect_payload);$old$;
+ replacement:=$new$      if item ? 'resource' then
+        perform fauxlore.admin_modifiers_api('resource_assign',item||jsonb_build_object('state_id',verdict_state));
+      else
+        perform fauxlore.admin_modifiers_api('assign',effect_payload);
+      end if;$new$;
+ if position(marker in fn)=0 then raise exception 'wall modifier hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.wall_verdict_many(jsonb)'::regprocedure);
+ marker:=$old$      perform fauxlore.admin_modifiers_api('assign',item||jsonb_build_object('state_id',sid,'target_kind','state','province_id',null));$old$;
+ replacement:=$new$      if item ? 'resource' then
+        perform fauxlore.admin_modifiers_api('resource_assign',item||jsonb_build_object('state_id',sid));
+      else
+        perform fauxlore.admin_modifiers_api('assign',item||jsonb_build_object('state_id',sid,'target_kind','state','province_id',null));
+      end if;$new$;
+ if position(marker in fn)=0 then raise exception 'multi-state modifier hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083637_modifier_scope_targets.sql
+alter table fauxlore.admin_modifier_assignments add column target_scope text not null default 'state' check(target_scope in ('state','province','capital','cities','regions','race','religion'));
+alter table fauxlore.admin_modifier_assignments add column target_group_id integer;
+update fauxlore.admin_modifier_assignments set target_scope='province' where province_id is not null;
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_permanent_modifiers(integer)'::regprocedure);
+ marker:=$old$case when a.province_id is null then 'Государство' else 'Провинция' end,'',7,a.province_id$old$;
+ replacement:=$new$case a.target_scope when 'state' then 'Государство' when 'province' then 'Провинция' when 'capital' then 'Область:Столица' when 'cities' then 'Область:Города' when 'regions' then 'Область:Регионы' when 'race' then 'Область:Раса:'||a.target_group_id when 'religion' then 'Область:Религия:'||a.target_group_id end,'',7,a.province_id$new$;
+ if position(marker in fn)=0 then raise exception 'modifier scope projection hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.state_permanent_modifier_total(integer,text[],integer,text)'::regprocedure);
+ marker:=$old$    if condition_value='Максимум' then continue; end if;$old$;
+ replacement:=$new$    if scope_value like 'Область:%' then
+      if target_province is null then continue; end if;
+      if scope_value='Область:Столица' and province_row.province_type<>'Столичная' then continue; end if;
+      if scope_value='Область:Города' and province_row.province_type not in ('Столичная','Городская') then continue; end if;
+      if scope_value='Область:Регионы' and province_row.province_type<>'Регион' then continue; end if;
+      if scope_value like 'Область:Раса:%' and not exists(select 1 from fauxlore.province_values v where v.province_id=target_province and v.layer='races' and v.category_id=substring(scope_value from length('Область:Раса:')+1)::integer) then continue; end if;
+      if scope_value like 'Область:Религия:%' and not exists(select 1 from fauxlore.province_values v where v.province_id=target_province and v.layer='religions' and v.category_id=substring(scope_value from length('Область:Религия:')+1)::integer) then continue; end if;
+    end if;
+    if condition_value='Максимум' then continue; end if;$new$;
+ if position(marker in fn)=0 then raise exception 'modifier scope calculation hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$    returning id into modifier_key;
+    update fauxlore._settings$old$;
+ replacement:=$new$    returning id into modifier_key;
+    if coalesce(payload->>'scope','state') not in ('state','province','capital','cities','regions','race','religion') then raise sqlstate '22023' using message='Неизвестная область действия'; end if;
+    if (payload->>'target_kind'='province') is distinct from (coalesce(payload->>'scope',case when province_key is not null then 'province' else 'state' end)='province') then raise sqlstate '22023' using message='Неверная область провинции'; end if;
+    if coalesce(payload->>'scope','state') in ('capital','cities','regions','race','religion') and def.modifier_key not in ('tax_efficiency','population_growth','development','production','recruit_growth','recruit_limit','trade_influence','garrison_hire_cost','garrison_upkeep','garrison_limit','militia_coefficient') then raise sqlstate '22023' using message='Для этого эффекта область не поддерживается'; end if;
+    if payload->>'scope' in ('race','religion') and not exists(select 1 from fauxlore.province_values owner join fauxlore.province_values grp on grp.province_id=owner.province_id where owner.layer='states' and owner.category_id=state_key and grp.layer=case payload->>'scope' when 'race' then 'races' else 'religions' end and grp.category_id=nullif(payload->>'group_id','')::integer) then raise sqlstate '22023' using message='Раса или религия отсутствует в государстве'; end if;
+    update fauxlore.admin_modifier_assignments set target_scope=coalesce(payload->>'scope',case when province_key is null then 'state' else 'province' end),target_group_id=case when payload->>'scope' in ('race','religion') then (payload->>'group_id')::integer else null end where id=modifier_key;
+    update fauxlore._settings$new$;
+ if position(marker in fn)=0 then raise exception 'modifier assignment scope hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083716_fix_modifier_scope_assignment.sql
+do $migration$
+declare fn text; marker text := 'where id=modifier_key;';
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ if position(marker in fn)=0 then raise exception 'scope assignment fix hook missing'; end if;
+ execute replace(fn,marker,'where id=admin_modifiers_api.modifier_key;');
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083739_fix_modifier_assignment_variable.sql
+do $migration$
+declare fn text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ if position('modifier_key bigint;' in fn)=0 or position('where id=admin_modifiers_api.modifier_key;' in fn)=0 then raise exception 'assignment variable fix hook missing'; end if;
+ fn:=replace(fn,'modifier_key bigint;','assignment_result_id bigint;');
+ fn:=replace(fn,'returning id into modifier_key;','returning id into assignment_result_id;');
+ fn:=replace(fn,'where id=admin_modifiers_api.modifier_key;','where id=assignment_result_id;');
+ fn:=replace(fn,'''id'',modifier_key,','''id'',assignment_result_id,');
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102083950_verdict_modifier_scope.sql
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+
+ -- Use a short unique prefix so existing snapshot fields keep their order.
+ marker:=$old$      'provinces',coalesce((select jsonb_agg($old$;
+ replacement:=$new$      'groups',coalesce((select jsonb_agg(jsonb_build_object('state_id',g.state_id,'layer',g.layer,'id',g.id,'name',g.name) order by g.name,g.id) from (select distinct o.category_id state_id,v.layer,v.category_id id,c.name from fauxlore.province_values o join fauxlore.province_values v on v.province_id=o.province_id and v.layer in ('races','religions') join fauxlore.map_categories c on c.layer=v.layer and c.id=v.category_id where o.layer='states' and (actor.role='admin' or fauxlore.judge_can_review(actor.id,o.category_id))) g),'[]'::jsonb),
+      'provinces',coalesce((select jsonb_agg($new$;
+ if position(marker in fn)=0 then raise exception 'snapshot group hook missing'; end if;
+ execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.wall_verdict_many(jsonb)'::regprocedure);
+ marker:=$old$item||jsonb_build_object('state_id',sid,'target_kind','state','province_id',null)$old$;
+ replacement:=$new$item||jsonb_build_object('state_id',sid,'target_kind',case when item->>'province_id' is null then 'state' else 'province' end)$new$;
+ if position(marker in fn)=0 then raise exception 'verdict province hook missing'; end if;
+ execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084127_scoped_recruit_modifier_fix.sql
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$update fauxlore.admin_modifier_assignments set target_scope=$old$;
+ replacement:=$new$update fauxlore.admin_modifier_assignments set modifier_key=case when coalesce(payload->>'scope',case when province_key is null then 'state' else 'province' end)<>'state' and def.modifier_key='recruit_growth' then 'local_recruit_growth' when coalesce(payload->>'scope',case when province_key is null then 'state' else 'province' end)<>'state' and def.modifier_key='recruit_limit' then 'local_recruit_limit' else def.modifier_key end, target_scope=$new$;
+ if position(marker in fn)=0 then raise exception 'scoped recruit assignment hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+update fauxlore.admin_modifier_assignments set modifier_key=case modifier_key when 'recruit_growth' then 'local_recruit_growth' else 'local_recruit_limit' end where target_scope<>'state' and modifier_key in ('recruit_growth','recruit_limit');
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084212_instant_province_modifiers.sql
+create table fauxlore.instant_modifier_events (
+ id bigint generated always as identity primary key,
+ state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+ province_id integer not null references fauxlore.provinces(id) on delete cascade,
+ effect_key text not null check(effect_key in ('population','development')),
+ value integer not null, source text not null, created_by bigint not null references fauxlore.accounts(id),
+ created_at timestamptz not null default now()
+);
+alter table fauxlore.instant_modifier_events enable row level security;
+revoke all on fauxlore.instant_modifier_events from public,anon,authenticated;
+create function public.instant_modifier_api(payload jsonb) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare actor fauxlore.accounts; sid integer; province_key integer; group_key integer; effect_key text; scope_key text; amount numeric; ids integer[]; label text; row_value record;
+begin
+ actor:=fauxlore.current_account(); sid:=nullif(payload->>'state_id','')::integer;
+ if actor.id is null or (actor.role<>'admin' and not fauxlore.judge_can_review(actor.id,sid)) then raise sqlstate '42501' using message='Нет доступа к государству'; end if;
+ effect_key:=payload->>'effect';scope_key:=coalesce(payload->>'scope','state');amount:=nullif(payload->>'value','')::numeric;province_key:=nullif(payload->>'province_id','')::integer;group_key:=nullif(payload->>'group_id','')::integer;
+ label:=coalesce(nullif(left(btrim(payload->>'source'),120),''),'Разовое назначение');
+ if effect_key not in ('population','development') or scope_key not in ('state','province','capital','cities','regions','race','religion') or amount is null or amount=0 or amount<>trunc(amount) or abs(amount)>1000000000 or (scope_key='province' and province_key is null) or (scope_key in ('race','religion') and group_key is null) then raise sqlstate '22023' using message='Проверьте показатель, область и целое значение'; end if;
+ perform 1 from fauxlore.game_calendar where singleton for share;
+ select array_agg(p.id order by p.id) into ids from fauxlore.provinces p join fauxlore.province_values o on o.province_id=p.id and o.layer='states' and o.category_id=sid
+ where p.kind='land' and (scope_key='state' or scope_key='province' and p.id=province_key or scope_key='capital' and p.province_type='Столичная' or scope_key='cities' and p.province_type in ('Столичная','Городская') or scope_key='regions' and p.province_type='Регион' or scope_key in ('race','religion') and exists(select 1 from fauxlore.province_values g where g.province_id=p.id and g.layer=case scope_key when 'race' then 'races' else 'religions' end and g.category_id=group_key));
+ if coalesce(cardinality(ids),0)=0 then raise sqlstate '22023' using message='В области действия нет подходящих провинций'; end if;
+ for row_value in select p.id,p.population,p.development from fauxlore.provinces p where p.id=any(ids) order by p.id for update loop
+  if effect_key='population' and (row_value.population+amount<0 or row_value.population+amount>2147483647) or effect_key='development' and (row_value.development+amount<0 or row_value.development+amount>1000000) then raise sqlstate '22023' using message='Изменение выходит за пределы показателя провинции'; end if;
+ end loop;
+ if effect_key='population' then update fauxlore.provinces set population=population+amount where id=any(ids); else update fauxlore.provinces set development=development+amount where id=any(ids); end if;
+ insert into fauxlore.instant_modifier_events(state_id,province_id,effect_key,value,source,created_by) select sid,id,effect_key,amount::integer,label,actor.id from unnest(ids) id;
+ update fauxlore._settings set value_json=to_jsonb((value_json#>>'{}')::bigint+1) where key='data_revision';
+ return jsonb_build_object('applied',true,'province_count',cardinality(ids));
+end $$;
+revoke all on function public.instant_modifier_api(jsonb) from public,anon;
+grant execute on function public.instant_modifier_api(jsonb) to authenticated;
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ marker:=$old$      if item ? 'resource' then$old$;
+ replacement:=$new$      if item ? 'instant_effect' then
+        perform public.instant_modifier_api(item||jsonb_build_object('effect',item->>'instant_effect','state_id',verdict_state));
+      elsif item ? 'resource' then$new$;
+ if position(marker in fn)=0 then raise exception 'wall instant effect hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.wall_verdict_many(jsonb)'::regprocedure);
+ marker:=$old$      if item ? 'resource' then$old$;
+ replacement:=$new$      if item ? 'instant_effect' then
+        perform public.instant_modifier_api(item||jsonb_build_object('effect',item->>'instant_effect','state_id',sid));
+      elsif item ? 'resource' then$new$;
+ if position(marker in fn)=0 then raise exception 'multi-state instant effect hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084254_instant_modifier_history.sql
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_permanent_modifiers(integer)'::regprocedure);
+ marker:=$old$), '[]'::jsonb) from modifiers$old$;
+ replacement:=$new$), '[]'::jsonb) || coalesce((select jsonb_agg(jsonb_build_object('source_kind','admin_history','source',e.source,'key','instant_'||e.effect_key,'effect',case e.effect_key when 'population' then 'Разовое изменение населения' else 'Разовое изменение развития' end,'value',e.value,'unit',case e.effect_key when 'population' then 'чел.' else 'ур.' end,'scope',p.name,'condition','','status','Применён','duration','Разовое','target_province_id',e.province_id,'target_trade_zone_id',null) order by e.created_at desc,e.id desc) from fauxlore.instant_modifier_events e join fauxlore.provinces p on p.id=e.province_id where e.state_id=target_state),'[]'::jsonb) from modifiers$new$;
+ if position(marker in fn)=0 then raise exception 'instant history projection hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084353_instant_resource_history.sql
+create table fauxlore.instant_resource_modifier_events (
+ id bigint generated always as identity primary key,
+ state_id integer not null references fauxlore.state_profiles(state_id) on delete cascade,
+ resource text not null check(resource in ('prestige','treasury')),
+ estate text, value integer not null, source text not null,
+ created_by bigint not null references fauxlore.accounts(id),created_at timestamptz not null default now()
+);
+alter table fauxlore.instant_resource_modifier_events enable row level security;
+revoke all on fauxlore.instant_resource_modifier_events from public,anon,authenticated;
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=replace(pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure),chr(13),'');
+ marker:=$old$      if not found then raise sqlstate '22023' using message='Недостаточно ресурса или Казна не найдена'; end if;
+    else$old$;
+ replacement:=$new$      if not found then raise sqlstate '22023' using message='Недостаточно ресурса или Казна не найдена'; end if;
+      insert into fauxlore.instant_resource_modifier_events(state_id,resource,estate,value,source,created_by) values(state_key,payload->>'resource',case when payload->>'resource'='treasury' then payload->>'estate' else null end,value_key::integer,coalesce(nullif(left(btrim(payload->>'source'),120),''),'Разовое назначение'),actor.id);
+    else$new$;
+ if position(marker in fn)=0 then raise exception 'resource history assignment hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.state_permanent_modifiers(integer)'::regprocedure);
+ marker:=$old$ from modifiers$old$;
+ replacement:=$new$ || coalesce((select jsonb_agg(jsonb_build_object('source_kind','admin_history','source',e.source,'key','instant_resource_'||e.resource,'effect',case e.resource when 'treasury' then 'Разовое изменение Казны · '||e.estate else 'Разовое изменение Престижа' end,'value',e.value,'unit',case e.resource when 'treasury' then 'G' else 'ОП' end,'scope','Государство','condition','','status','Применён','duration','Разовое','target_province_id',null,'target_trade_zone_id',null) order by e.created_at desc,e.id desc) from fauxlore.instant_resource_modifier_events e where e.state_id=target_state),'[]'::jsonb) from modifiers$new$;
+ if position(marker in fn)=0 then raise exception 'resource history projection hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084440_judge_extended_statistics.sql
+do $migration$
+declare fn text; marker text := $old$'treasury',sp.treasury$old$;
+begin
+ fn:=pg_get_functiondef('public.judge_state_statistics_api()'::regprocedure);
+ if position(marker in fn)=0 then raise exception 'judge statistics hook missing'; end if;
+ execute replace(fn,marker,$new$'indicators',fauxlore.state_indicators(sp.state_id),'treasury',sp.treasury$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084534_garrison_flat_modifier.sql
+alter table fauxlore.permanent_modifier_definitions drop constraint permanent_modifier_definitions_source_kind_check;
+alter table fauxlore.permanent_modifier_definitions add constraint permanent_modifier_definitions_source_kind_check check (source_kind in ('authority','structure','economy','military','race','religion','constructor'));
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values('constructor','Назначение','garrison_limit_flat','Лимит гарнизонов',0,'ед.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$'garrison_upkeep','garrison_limit','militia_coefficient'$old$;
+ replacement:=$new$'garrison_upkeep','garrison_limit','garrison_limit_flat','militia_coefficient'$new$;
+ if position(marker in fn)=0 then raise exception 'garrison scope hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.garrison_capacity(integer)'::regprocedure);
+ marker:=$old$select floor(greatest(0,base.value)*(1+fauxlore.state_permanent_modifier_total(
+  base.state_id,array['garrison_limit'],province_key,null)))::integer$old$;
+ replacement:=$new$select floor(greatest(0,base.value*(1+fauxlore.state_permanent_modifier_total(
+  base.state_id,array['garrison_limit'],province_key,null))+fauxlore.state_permanent_modifier_total(base.state_id,array['garrison_limit_flat'],province_key,null)))::integer$new$;
+ marker:=replace(marker,chr(13),'');replacement:=replace(replacement,chr(13),'');
+ if position(marker in fn)=0 then raise exception 'garrison capacity hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084751_local_fortification_upkeep.sql
+do $migration$
+declare fn text; marker text := $old$base.modifier_state,array['fortification_upkeep'],null,null)$old$;
+begin
+ fn:=pg_get_functiondef('fauxlore.garrison_site_upkeep(integer)'::regprocedure);
+ if position(marker in fn)=0 then raise exception 'fortification upkeep hook missing'; end if;
+ execute replace(fn,marker,$new$base.modifier_state,array['fortification_upkeep'],base.province_id,null)$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084841_port_upkeep_modifiers.sql
+alter table fauxlore.admin_modifier_assignments drop constraint admin_modifier_assignments_target_scope_check;
+alter table fauxlore.admin_modifier_assignments add constraint admin_modifier_assignments_target_scope_check check(target_scope in ('state','province','capital','cities','regions','race','religion','marker'));
+alter table fauxlore.admin_modifier_assignments add column target_marker_id bigint references fauxlore.map_markers(id) on delete cascade;
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values('constructor','Назначение','port_upkeep','Содержание портов',0,'%','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$not in ('state','province','capital','cities','regions','race','religion')$old$;
+ if position(marker in fn)=0 then raise exception 'port scope list hook missing'; end if;
+ fn:=replace(fn,marker,$new$not in ('state','province','capital','cities','regions','race','religion','marker')$new$);
+ marker:=$old$    update fauxlore.admin_modifier_assignments set modifier_key=$old$;
+ replacement:=$new$    if payload->>'scope'='marker' and (def.modifier_key<>'port_upkeep' or not exists(select 1 from fauxlore.map_markers m left join fauxlore.military_port_builds b on b.marker_id=m.id where m.id=nullif(payload->>'marker_id','')::bigint and m.type='port' and coalesce(m.state_id,b.state_id)=state_key)) then raise sqlstate '22023' using message='Порт не принадлежит выбранному государству'; end if;
+    update fauxlore.admin_modifier_assignments set target_marker_id=case when payload->>'scope'='marker' then (payload->>'marker_id')::bigint else null end,modifier_key=$new$;
+ if position(marker in fn)=0 then raise exception 'port scope assignment hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$      'groups',coalesce((select jsonb_agg($old$;
+ replacement:=$new$      'ports',coalesce((select jsonb_agg(jsonb_build_object('id',m.id,'name',m.name,'state_id',coalesce(m.state_id,b.state_id)) order by m.name,m.id) from fauxlore.map_markers m left join fauxlore.military_port_builds b on b.marker_id=m.id where m.type='port' and coalesce(m.state_id,b.state_id) is not null and (actor.role='admin' or fauxlore.judge_can_review(actor.id,coalesce(m.state_id,b.state_id)))),'[]'::jsonb),
+      'groups',coalesce((select jsonb_agg($new$;
+ if position(marker in fn)=0 then raise exception 'port catalog hook missing'; end if; execute replace(fn,marker,replacement);
+ fn:=pg_get_functiondef('fauxlore.state_permanent_modifiers(integer)'::regprocedure);
+ marker:=$old$when 'religion' then 'Область:Религия:'||a.target_group_id end$old$;
+ replacement:=$new$when 'religion' then 'Область:Религия:'||a.target_group_id when 'marker' then 'Область:Порт:'||a.target_marker_id end$new$;
+ if position(marker in fn)=0 then raise exception 'port projection hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+create or replace function fauxlore.port_upkeep(target_state integer) returns numeric
+language sql stable security definer set search_path='' as $$
+ select coalesce(sum(floor(200*fauxlore.state_cost_multiplier(target_state)*greatest(0,1+fauxlore.state_permanent_modifier_total(target_state,array['port_upkeep'],null,null)+coalesce((select sum(a.value) from fauxlore.admin_modifier_assignments a cross join fauxlore.game_calendar g where a.state_id=target_state and a.modifier_key='port_upkeep' and a.target_scope='marker' and a.target_marker_id=m.id and (a.expires_year is null or (g.year*10000+g.turn)<(a.expires_year*10000+a.expires_turn))),0)))),0)
+ from fauxlore.map_markers m left join fauxlore.military_port_builds b on b.marker_id=m.id
+ where m.type='port' and coalesce(m.state_id,b.state_id)=target_state
+$$;
+revoke all on function fauxlore.port_upkeep(integer) from public,anon,authenticated;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102084947_validate_port_modifier_scope.sql
+do $migration$
+declare fn text; marker text := $old$    if payload->>'scope'='marker' and$old$;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ if position(marker in fn)=0 then raise exception 'port validation hook missing'; end if;
+ execute replace(fn,marker,$new$    if def.modifier_key='port_upkeep' and coalesce(payload->>'scope','state') not in ('state','marker') then raise sqlstate '22023' using message='Выберите все порты или конкретный порт'; end if;
+    if payload->>'scope'='marker' and$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085058_unit_category_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','infantry_hire_cost','Стоимость пехоты',0,'%','Государство',''),
+ ('constructor','Назначение','siege_hire_cost','Стоимость осадных орудий',0,'%','Государство',''),
+ ('constructor','Назначение','artillery_hire_cost','Стоимость артиллерии',0,'%','Государство',''),
+ ('constructor','Назначение','infantry_upkeep','Содержание пехоты',0,'%','Государство',''),
+ ('constructor','Назначение','siege_upkeep','Содержание осадных орудий',0,'%','Государство',''),
+ ('constructor','Назначение','artillery_upkeep','Содержание артиллерии',0,'%','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.military_unit_cost_factor(integer,bigint,text)'::regprocedure);
+ marker:=$old$      case when u.category='Кавалерия' then 'cavalry_hire_cost' end,$old$;
+ replacement:=$new$      case when u.category='Пехота' then 'infantry_hire_cost' end,
+      case when u.category='Осада' then 'siege_hire_cost' end,
+      case when u.category='Артиллерия' then 'artillery_hire_cost' end,
+      case when u.category='Кавалерия' then 'cavalry_hire_cost' end,$new$;
+ if position(marker in fn)=0 then raise exception 'unit hire factor hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$      case when u.category='Кавалерия' then 'cavalry_upkeep' end,$old$;
+ replacement:=$new$      case when u.category='Пехота' then 'infantry_upkeep' end,
+      case when u.category='Осада' then 'siege_upkeep' end,
+      case when u.category='Артиллерия' then 'artillery_upkeep' end,
+      case when u.category='Кавалерия' then 'cavalry_upkeep' end,$new$;
+ if position(marker in fn)=0 then raise exception 'unit upkeep factor hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085209_stability_development_limit_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','state_stability_flat','Стабильность государства',0,'п.п.','Государство',''),
+ ('constructor','Назначение','development_limit_flat','Лимит развития',0,'ур.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+ marker:=$old$'stability',(eb.value+(select sum(value) from group_blocks))/3$old$;
+ replacement:=$new$'stability',greatest(0,least(1,(eb.value+(select sum(value) from group_blocks))/3+fauxlore.state_permanent_modifier_total(target_state,array['state_stability_flat'],null,null)))$new$;
+ if position(marker in fn)=0 then raise exception 'stability calculation hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$sp.development_limit$old$;
+ if position(marker in fn)=0 then raise exception 'development limit hook missing'; end if;
+ fn:=replace(fn,marker,$new$greatest(0,sp.development_limit+fauxlore.state_permanent_modifier_total(target_state,array['development_limit_flat'],null,null))$new$);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085326_estate_loyalty_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','clergy_loyalty','Лояльность Духовенства',0,'п.п.','Государство',''),
+ ('constructor','Назначение','burgher_loyalty','Лояльность Горожан',0,'п.п.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.effective_estate_loyalties(integer)'::regprocedure);
+ marker:=$old$when 'Крестьяне' then fauxlore.state_permanent_modifier_total(target_state,array['peasant_loyalty'],null,null) else 0 end+influence$old$;
+ replacement:=$new$when 'Крестьяне' then fauxlore.state_permanent_modifier_total(target_state,array['peasant_loyalty'],null,null) when 'Духовенство' then fauxlore.state_permanent_modifier_total(target_state,array['clergy_loyalty'],null,null) when 'Горожане' then fauxlore.state_permanent_modifier_total(target_state,array['burgher_loyalty'],null,null) else 0 end+influence$new$;
+ if position(marker in fn)=0 then raise exception 'estate loyalty hook missing'; end if;execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085528_race_loyalty_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','race_human_loyalty','Лояльность Людей',0,'п.п.','Государство',''),
+ ('constructor','Назначение','race_dwarf_loyalty','Лояльность Дварфов',0,'п.п.','Государство',''),
+ ('constructor','Назначение','race_elf_loyalty','Лояльность Эльфов',0,'п.п.','Государство',''),
+ ('constructor','Назначение','race_halfelf_loyalty','Лояльность Полуэльфов',0,'п.п.','Государство',''),
+ ('constructor','Назначение','race_beast_loyalty','Лояльность Зверолюдей',0,'п.п.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_group_permanent_loyalty(integer,text,integer)'::regprocedure);
+ marker:=$old$select coalesce(sum((m.value->>'value')::numeric),0)$old$;
+ replacement:=$new$select coalesce(sum((m.value->>'value')::numeric),0)+case when group_kind='race' then coalesce((select fauxlore.state_permanent_modifier_total(target_state,array[case name when 'Люди' then 'race_human_loyalty' when 'Дварфы' then 'race_dwarf_loyalty' when 'Эльфы' then 'race_elf_loyalty' when 'Полуэльфы' then 'race_halfelf_loyalty' when 'Зверолюди' then 'race_beast_loyalty' end],null,null) from target_group),0) else 0 end$new$;
+ if position(marker in fn)=0 then raise exception 'group loyalty hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085647_estate_stabilization_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','nobility_stabilization','Стабилизация Знати',0,'п.п.','Государство',''),
+ ('constructor','Назначение','clergy_stabilization','Стабилизация Духовенства',0,'п.п.','Государство',''),
+ ('constructor','Назначение','burgher_stabilization','Стабилизация Горожан',0,'п.п.','Государство',''),
+ ('constructor','Назначение','peasant_stabilization','Стабилизация Крестьян',0,'п.п.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+ marker:=$old$case status when 'Ключевое' then 1.5 when 'Значимое' then 1 when 'Бесправное' then .25 else 0 end))) value from loyalties$old$;
+ replacement:=$new$case status when 'Ключевое' then 1.5 when 'Значимое' then 1 when 'Бесправное' then .25 else 0 end+fauxlore.state_permanent_modifier_total(target_state,array[case name when 'Знать' then 'nobility_stabilization' when 'Духовенство' then 'clergy_stabilization' when 'Горожане' then 'burgher_stabilization' when 'Крестьяне' then 'peasant_stabilization' end],null,null)))) value from loyalties$new$;
+ if position(marker in fn)=0 then raise exception 'estate stabilization hook missing'; end if;execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102085851_commander_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','leader_limit_flat','Лимит полководцев',0,'ед.','Государство',''),
+ ('constructor','Назначение','leader_prestige_cost_flat','Стоимость полководца',0,'ОП','Государство','');
+create function fauxlore.leader_prestige_cost(target_state integer) returns integer language sql stable security definer set search_path='' as $$
+ select greatest(0,10+floor(fauxlore.state_permanent_modifier_total(target_state,array['leader_prestige_cost_flat'],null,null)))::integer
+$$;
+revoke all on function fauxlore.leader_prestige_cost(integer) from public,anon,authenticated;
+do $migration$
+declare fn text; marker text; replacement text; amount integer;
+begin
+ fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+ marker:=$old$then 1 else 0 end)$old$;
+ amount:=(length(fn)-length(replace(fn,marker,'')))/length(marker);
+ if amount<>3 then raise exception 'commander limit snapshot hook count %',amount; end if;
+ fn:=replace(fn,marker,$new$then 1 else 0 end+floor(fauxlore.state_permanent_modifier_total(sid,array['leader_limit_flat'],null,null))::integer)$new$);
+ marker:=$old$'leader_hire_cost',floor($old$;
+ if position(marker in fn)=0 then raise exception 'commander cost snapshot hook missing'; end if;fn:=replace(fn,marker,$new$'leader_prestige_cost',fauxlore.leader_prestige_cost(sid),'leader_hire_cost',floor($new$);
+ execute fn;
+ fn:=pg_get_functiondef('fauxlore.military_actions_extra(text,integer,jsonb)'::regprocedure);
+ marker:=$old$then 1 else 0 end) into limit_value;$old$;
+ if position(marker in fn)=0 then raise exception 'commander limit action hook missing'; end if;fn:=replace(fn,marker,$new$then 1 else 0 end+floor(fauxlore.state_permanent_modifier_total(sid,array['leader_limit_flat'],null,null))::integer) into limit_value;$new$);
+ marker:=$old$if prestige_value<10 or tradition_value<5 then raise sqlstate '22023' using message='Нужно 10 ОП и 5% традиций'; end if;$old$;
+ if position(marker in fn)=0 then raise exception 'commander prestige check hook missing'; end if;fn:=replace(fn,marker,$new$if prestige_value<fauxlore.leader_prestige_cost(sid) or tradition_value<5 then raise sqlstate '22023' using message='Недостаточно Престижа или традиций для найма'; end if;$new$);
+ marker:=$old$prestige=prestige-10,treasury=treasury-price$old$;
+ if position(marker in fn)=0 then raise exception 'commander prestige charge hook missing'; end if;fn:=replace(fn,marker,$new$prestige=prestige-fauxlore.leader_prestige_cost(sid),treasury=treasury-price$new$);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102090026_estate_loan_interest_modifiers.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','loan_nobility_rate','Процентная ставка займов у Знати',0,'п.п.','Государство',''),
+ ('constructor','Назначение','loan_clergy_rate','Процентная ставка займов у Духовенства',0,'п.п.','Государство',''),
+ ('constructor','Назначение','loan_burgher_rate','Процентная ставка займов у Горожан',0,'п.п.','Государство',''),
+ ('constructor','Назначение','loan_peasant_rate','Процентная ставка займов у Крестьян',0,'п.п.','Государство','');
+alter table fauxlore.state_estate_loans drop constraint state_estate_loans_interest_rate_check;
+alter table fauxlore.state_estate_loans add constraint state_estate_loans_interest_rate_check check(interest_rate between 0 and 999.99);
+create function fauxlore.estate_loan_interest(target_state integer,lender text) returns numeric language sql stable security definer set search_path='' as $$
+ select round(greatest(0,least(999.99,5+100*fauxlore.state_permanent_modifier_total(target_state,array[case lender when 'Знать' then 'loan_nobility_rate' when 'Духовенство' then 'loan_clergy_rate' when 'Горожане' then 'loan_burgher_rate' when 'Крестьяне' then 'loan_peasant_rate' end],null,null))),2)
+$$;
+revoke all on function fauxlore.estate_loan_interest(integer,text) from public,anon,authenticated;
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_estate_loans_api(text,text,jsonb,uuid)'::regprocedure);
+ marker:=$old$'state_id',state_key,'rate',5,'term_turns',5,$old$;
+ replacement:=$new$'state_id',state_key,'rate',5,'rates',jsonb_build_object('Знать',fauxlore.estate_loan_interest(state_key,'Знать'),'Духовенство',fauxlore.estate_loan_interest(state_key,'Духовенство'),'Горожане',fauxlore.estate_loan_interest(state_key,'Горожане'),'Крестьяне',fauxlore.estate_loan_interest(state_key,'Крестьяне')),'term_turns',5,$new$;
+ if position(marker in fn)=0 then raise exception 'loan rates snapshot hook missing'; end if; fn:=replace(fn,marker,replacement);
+ marker:=$old$insert into fauxlore.state_estate_loans(state_id,lender,principal,total_due,due_turn,created_year,created_turn,created_by)$old$;
+ replacement:=$new$insert into fauxlore.state_estate_loans(state_id,lender,principal,interest_rate,total_due,due_turn,created_year,created_turn,created_by)$new$;
+ if position(marker in fn)=0 then raise exception 'loan insert hook missing'; end if; fn:=replace(fn,marker,replacement);
+ marker:=$old$values(state_key,lender_value,amount_value,floor(amount_value*1.05),cal.turn+5,cal.year,cal.turn,actor.id)$old$;
+ replacement:=$new$values(state_key,lender_value,amount_value,fauxlore.estate_loan_interest(state_key,lender_value),floor(amount_value*(1+fauxlore.estate_loan_interest(state_key,lender_value)/100)),cal.turn+5,cal.year,cal.turn,actor.id)$new$;
+ if position(marker in fn)=0 then raise exception 'loan amount hook missing'; end if; execute replace(fn,marker,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102090356_population_growth_percentage_points.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values('constructor','Назначение','population_growth_pp','Прирост населения',0,'п.п.','Государство','');
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$'tax_efficiency','population_growth','development'$old$;
+ if position(marker in fn)=0 then raise exception 'population scope hook missing'; end if;fn:=replace(fn,marker,$new$'tax_efficiency','population_growth','population_growth_pp','development'$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_population_growth(integer)'::regprocedure);
+ marker:=$old$p.population*.015*(cfg.config#>>array['raceGrowthModifiers',p.race])::numeric$old$;
+ replacement:=$new$p.population*(.015*(cfg.config#>>array['raceGrowthModifiers',p.race])::numeric+fauxlore.state_permanent_modifier_total(target_state,array['population_growth_pp'],p.id,null))$new$;
+ if position(marker in fn)=0 then raise exception 'population growth projection hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$coalesce(sum(floor(p.population$old$;
+ if position(marker in fn)=0 then raise exception 'population lower-bound hook missing'; end if; fn:=replace(fn,marker,$new$coalesce(sum(greatest(-p.population,floor(p.population$new$);
+ marker:=$old$where v.province_id=p.id and v.layer='resources'))))),0)$old$;
+ if position(marker in fn)=0 then raise exception 'population projection closing hook missing'; end if; fn:=replace(fn,marker,$new$where v.province_id=p.id and v.layer='resources')))))),0)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.apply_turn_population_and_recruit_growth()'::regprocedure);
+ marker:=$old$province_row.population*.015*(cfg#>>array['raceGrowthModifiers',province_row.race])::numeric$old$;
+ replacement:=$new$province_row.population*(.015*(cfg#>>array['raceGrowthModifiers',province_row.race])::numeric+fauxlore.state_permanent_modifier_total(state_row.state_id,array['population_growth_pp'],province_row.id,null))$new$;
+ if position(marker in fn)=0 then raise exception 'population growth turn hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$province_growth:=floor(province_row.population$old$;
+ if position(marker in fn)=0 then raise exception 'population turn lower-bound hook missing'; end if;fn:=replace(fn,marker,$new$province_growth:=greatest(-province_row.population,floor(province_row.population$new$);
+ marker:=$old$where v.province_id=province_row.id and v.layer='resources'))))::integer;$old$;
+ if position(marker in fn)=0 then raise exception 'population turn closing hook missing'; end if;fn:=replace(fn,marker,$new$where v.province_id=province_row.id and v.layer='resources')))))::integer;$new$);
+ marker:=$old$if province_growth>0 then$old$;
+ if position(marker in fn)=0 then raise exception 'population turn sign hook missing'; end if;execute replace(fn,marker,$new$if province_growth<>0 then$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102090612_align_growth_multiplier.sql
+do $migration$
+declare fn text; marker text := $old$*(1+fauxlore.state_permanent_modifier_total(state_row.state_id,array['population_growth','livestock_population_growth']$old$;
+begin
+ fn:=pg_get_functiondef('fauxlore.apply_turn_population_and_recruit_growth()'::regprocedure);
+ if position(marker in fn)=0 then raise exception 'population multiplier hook missing'; end if;
+ execute replace(fn,marker,$new$*greatest(0,1+fauxlore.state_permanent_modifier_total(state_row.state_id,array['population_growth','livestock_population_growth']$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Applied migration: 20261102090816_control_modifier_effects.sql
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values('constructor','Назначение','control_modifier_pp','КМ',0,'п.п.','Государство','');
+create function fauxlore.effective_province_control(province_key integer,target_state integer default null) returns numeric
+language sql stable security definer set search_path='' as $$
+ select greatest(0,least(100,coalesce(p.control,100)+100*fauxlore.state_permanent_modifier_total(coalesce(target_state,case when p.occupation is not null and lower(p.occupation)<>lower(coalesce(owner.name,'')) then occupier.id else ov.category_id end),array['control_modifier_pp'],p.id,null)))
+ from fauxlore.provinces p left join fauxlore.province_values ov on ov.province_id=p.id and ov.layer='states'
+ left join fauxlore.map_categories owner on owner.layer='states' and owner.id=ov.category_id
+ left join fauxlore.map_categories occupier on occupier.layer='states' and lower(occupier.name)=lower(p.occupation)
+ where p.id=province_key
+$$;
+revoke all on function fauxlore.effective_province_control(integer,integer) from public,anon,authenticated;
+do $migration$
+declare fn text; marker text; replacement text; signature text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$'tax_efficiency','population_growth','population_growth_pp','development'$old$;
+ if position(marker in fn)=0 then raise exception 'control scope hook missing'; end if;
+ execute replace(fn,marker,$new$'tax_efficiency','population_growth','population_growth_pp','control_modifier_pp','development'$new$);
+ fn:=pg_get_functiondef('fauxlore.state_recruitment(integer)'::regprocedure);
+ marker:=$old$p.control/100*p.share$old$;
+ if position(marker in fn)=0 then raise exception 'recruit control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(p.id,target_state)/100*p.share$new$);
+ fn:=pg_get_functiondef('fauxlore.province_value_for_state(integer,integer)'::regprocedure);
+ marker:=$old$coalesce(p.control,100)$old$;
+ if position(marker in fn)=0 then raise exception 'province value control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(p.id,target_state)$new$);
+ foreach signature in array array['fauxlore.clear_trade_zones_after_budget()','fauxlore.finish_trade_value_turn()','fauxlore.report_food_security_after_turn()','fauxlore.trade_resource_surplus(integer,text)'] loop
+   fn:=pg_get_functiondef(signature::regprocedure);marker:=$old$coalesce(p.control,100)::numeric/100$old$;
+   if position(marker in fn)=0 then raise exception 'trade control hook missing %',signature; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(p.id,null)/100$new$);
+ end loop;
+ fn:=pg_get_functiondef('fauxlore.turn_api(text,text,jsonb,uuid)'::regprocedure);
+ marker:=$old$greatest(0,least(100,coalesce(province_row.control,100)))::numeric/100$old$;
+ if position(marker in fn)=0 then raise exception 'turn tax control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(province_row.id,beneficiary_id)/100$new$);
+ fn:=pg_get_functiondef('fauxlore.militia_preview(integer)'::regprocedure);
+ marker:=$old$greatest(0,least(100,coalesce(province_row.control,100)))/100$old$;
+ if position(marker in fn)=0 then raise exception 'militia control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(province_row.id,state_key)/100$new$);
+ fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+ marker:=$old$coalesce(p.control,100)=100$old$;
+ if position(marker in fn)=0 then raise exception 'military control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(p.id,sid)=100$new$);
+ fn:=pg_get_functiondef('public.military_transport_api(text,bigint,bigint,integer)'::regprocedure);
+ marker:=$old$coalesce(land_row.control,100)<100$old$;
+ if position(marker in fn)=0 then raise exception 'transport origin control hook missing'; end if;fn:=replace(fn,marker,$new$fauxlore.effective_province_control(land_row.id,army.state_id)<100$new$);
+ marker:=$old$coalesce(target_row.control,100)<100$old$;
+ if position(marker in fn)=0 then raise exception 'transport destination control hook missing'; end if;execute replace(fn,marker,$new$fauxlore.effective_province_control(target_row.id,army.state_id)<100$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','nobility_influence_pp','Влияние Знати',0,'п.п.','Государство',''),
+ ('constructor','Назначение','clergy_influence_pp','Влияние Духовенства',0,'п.п.','Государство',''),
+ ('constructor','Назначение','burgher_influence_pp','Влияние Горожан',0,'п.п.','Государство',''),
+ ('constructor','Назначение','peasant_influence_pp','Влияние Крестьян',0,'п.п.','Государство','');
+create function fauxlore.adjust_estate_influences(target_state integer, input_rows jsonb) returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+declare row_value jsonb; names text[]:='{}'; statuses text[]:='{}'; baselines numeric[]:='{}'; deltas numeric[]:='{}'; values_array numeric[]:='{}';
+ base numeric; delta numeric; sum_changed numeric:=0; sum_unchanged numeric:=0; changed_count integer:=0; unchanged_count integer:=0; count_value integer; idx integer;
+ powerless numeric:=0; privileged numeric:=0; result jsonb:='{}'::jsonb; key_name text;
+begin
+ for row_value in select value from jsonb_array_elements(input_rows) loop
+  key_name:=case row_value->>'name' when 'Знать' then 'nobility_influence_pp' when 'Духовенство' then 'clergy_influence_pp' when 'Горожане' then 'burgher_influence_pp' when 'Крестьяне' then 'peasant_influence_pp' end;
+  base:=greatest(0,coalesce((row_value->>'influence')::numeric,0)); delta:=coalesce(fauxlore.state_permanent_modifier_total(target_state,array[key_name],null,null),0);
+  names:=array_append(names,row_value->>'name'); statuses:=array_append(statuses,coalesce(row_value->>'status',''));baselines:=array_append(baselines,base);deltas:=array_append(deltas,delta);
+  if delta<>0 then changed_count:=changed_count+1;sum_changed:=sum_changed+greatest(0,least(1,base+delta)); else unchanged_count:=unchanged_count+1;sum_unchanged:=sum_unchanged+base;end if;
+ end loop;
+ count_value:=coalesce(cardinality(names),0);if count_value=0 then return result;end if;
+ for idx in 1..count_value loop
+  if changed_count=0 then base:=baselines[idx];
+  elsif unchanged_count=0 then base:=case when sum_changed>0 then greatest(0,least(1,baselines[idx]+deltas[idx]))/sum_changed else 1.0/count_value end;
+  elsif deltas[idx]<>0 then base:=case when sum_changed>1 then greatest(0,least(1,baselines[idx]+deltas[idx]))/sum_changed else greatest(0,least(1,baselines[idx]+deltas[idx])) end;
+  elsif sum_changed>=1 then base:=0;
+  elsif sum_unchanged>0 then base:=(1-sum_changed)*baselines[idx]/sum_unchanged;
+  else base:=(1-sum_changed)/unchanged_count;end if;
+  values_array:=array_append(values_array,base);
+  if statuses[idx]='Бесправное' then powerless:=powerless+base;else privileged:=privileged+base;end if;
+ end loop;
+ for idx in 1..count_value loop
+  base:=values_array[idx];
+  if changed_count>0 and privileged>0 and powerless>.1 then base:=case when statuses[idx]='Бесправное' then base*.1/powerless else base*.9/privileged end;end if;
+  result:=result||jsonb_build_object(names[idx],base);
+ end loop;
+ return result;
+end $$;
+revoke all on function fauxlore.adjust_estate_influences(integer,jsonb) from public,anon,authenticated;
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.effective_estate_loyalties(integer)'::regprocedure);
+ marker:=$old$), loyalties as ($old$;
+ replacement:=$new$), adjusted_weights as (select fauxlore.adjust_estate_influences(target_state,jsonb_agg(jsonb_build_object('name',name,'status',status,'influence',influence))) values_json from influences), loyalties as ($new$;
+ if position(marker in fn)=0 then raise exception 'estate influence CTE hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$+influence-case status$old$;
+ if position(marker in fn)=0 then raise exception 'estate influence loyalty hook missing'; end if;fn:=replace(fn,marker,$new$+adjusted_influence-case status$new$);
+ marker:=$old$from influences cross join cfg$old$;
+ replacement:=$new$from (select i.*,(a.values_json->>i.name)::numeric adjusted_influence from influences i cross join adjusted_weights a) influences cross join cfg$new$;
+ if position(marker in fn)=0 then raise exception 'estate influence projection hook missing'; end if;fn:=replace(fn,marker,replacement);
+ marker:=$old$select name,status,effective_loyalty,influence from loyalties$old$;
+ if position(marker in fn)=0 then raise exception 'estate influence output hook missing'; end if;execute replace(fn,marker,$new$select name,status,effective_loyalty,adjusted_influence from loyalties$new$);
+end $migration$;
+notify pgrst,'reload schema';
+
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','race_assimilation_turns','Ассимиляция расы',0,'ход','Государство',''),
+ ('constructor','Назначение','religion_assimilation_turns','Ассимиляция религии',0,'ход','Государство','');
+alter table fauxlore.provinces add column race_assimilation_modifier_applied integer not null default 0,
+ add column religion_assimilation_modifier_applied integer not null default 0;
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.process_province_assimilation()'::regprocedure);
+ marker:=$old$status_value text; remaining integer; stored_target integer; changed integer:=0; touched boolean:=false;$old$;
+ if position(marker in fn)=0 then raise exception 'assimilation declarations missing'; end if;
+ fn:=replace(fn,marker,$new$status_value text; remaining integer; stored_target integer; changed integer:=0; touched boolean:=false; old_modifier integer; desired_modifier integer; adjusted_remaining integer;$new$);
+ marker:=$old$p.religion_assimilation_turns,p.religion_assimilation_target_id$old$;
+ if position(marker in fn)=0 then raise exception 'assimilation columns missing'; end if;
+ fn:=replace(fn,marker,$new$p.religion_assimilation_turns,p.religion_assimilation_target_id,p.race_assimilation_modifier_applied,p.religion_assimilation_modifier_applied$new$);
+ marker:=$old$remaining:=province_row.race_assimilation_turns;stored_target:=province_row.race_assimilation_target_id;$old$;
+ if position(marker in fn)=0 then raise exception 'race timer missing'; end if;
+ fn:=replace(fn,marker,$new$remaining:=province_row.race_assimilation_turns;stored_target:=province_row.race_assimilation_target_id;old_modifier:=province_row.race_assimilation_modifier_applied;$new$);
+ marker:=$old$remaining:=province_row.religion_assimilation_turns;stored_target:=province_row.religion_assimilation_target_id;$old$;
+ if position(marker in fn)=0 then raise exception 'religion timer missing'; end if;
+ fn:=replace(fn,marker,$new$remaining:=province_row.religion_assimilation_turns;stored_target:=province_row.religion_assimilation_target_id;old_modifier:=province_row.religion_assimilation_modifier_applied;$new$);
+ marker:=$old$remaining:=fauxlore.assimilation_duration(coalesce(status_value,'Невмешательство'));$old$;
+ if position(marker in fn)=0 then raise exception 'assimilation initialization missing'; end if;
+ fn:=replace(fn,marker,$new$remaining:=fauxlore.assimilation_duration(coalesce(status_value,'Невмешательство'));old_modifier:=0;$new$);
+ marker:=$old$      if remaining<=1 then$old$;
+ if position(marker in fn)=0 then raise exception 'assimilation calculation missing'; end if;
+ fn:=replace(fn,marker,$new$      desired_modifier:=round(fauxlore.state_permanent_modifier_total(province_row.state_id,array[case group_kind when 'race' then 'race_assimilation_turns' else 'religion_assimilation_turns' end],province_row.id,null))::integer;
+      adjusted_remaining:=greatest(1,least(300,remaining+desired_modifier-old_modifier));
+      old_modifier:=old_modifier+adjusted_remaining-remaining;remaining:=adjusted_remaining;
+      if group_kind='race' then update fauxlore.provinces set race_assimilation_modifier_applied=old_modifier where id=province_row.id;
+      else update fauxlore.provinces set religion_assimilation_modifier_applied=old_modifier where id=province_row.id; end if;
+      if remaining<=1 then$new$);
+ execute fn;
+ fn:=pg_get_functiondef('fauxlore.set_province_assimilation(integer,jsonb)'::regprocedure);
+ marker:=$old$race_assimilation_turns=nullif(race_turns,0),race_assimilation_target_id=case when race_turns>0 then official_race else null end,$old$;
+ if position(marker in fn)=0 then raise exception 'manual race timer missing';end if;
+ fn:=replace(fn,marker,$new$race_assimilation_turns=nullif(race_turns,0),race_assimilation_target_id=case when race_turns>0 then official_race else null end,race_assimilation_modifier_applied=0,$new$);
+ marker:=$old$religion_assimilation_turns=nullif(religion_turns,0),religion_assimilation_target_id=case when religion_turns>0 then official_religion else null end$old$;
+ if position(marker in fn)=0 then raise exception 'manual religion timer missing';end if;
+ fn:=replace(fn,marker,$new$religion_assimilation_turns=nullif(religion_turns,0),religion_assimilation_target_id=case when religion_turns>0 then official_religion else null end,religion_assimilation_modifier_applied=0$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$'control_modifier_pp'$old$;
+ if position(marker in fn)=0 then raise exception 'modifier scope whitelist missing';end if;
+ fn:=replace(fn,marker,$new$'race_assimilation_turns','religion_assimilation_turns','control_modifier_pp'$new$);execute fn;
+end $migration$;
+do $migration$
+declare fn text; marker text; name text;
+begin
+ foreach name in array array['fauxlore.capture_test_turn_assimilation()','fauxlore.turn_snapshot_payload()'] loop
+  fn:=pg_get_functiondef(name::regprocedure);
+  marker:=$old$'religion_assimilation_target_id',religion_assimilation_target_id$old$;
+  if position(marker in fn)=0 then raise exception 'assimilation snapshot hook missing: %',name; end if;
+  fn:=replace(fn,marker,$new$'religion_assimilation_target_id',religion_assimilation_target_id,'race_assimilation_modifier_applied',race_assimilation_modifier_applied,'religion_assimilation_modifier_applied',religion_assimilation_modifier_applied$new$);execute fn;
+ end loop;
+ fn:=pg_get_functiondef('fauxlore.restore_test_turn_assimilation()'::regprocedure);
+ marker:=$old$religion_assimilation_target_id=(saved->>'religion_assimilation_target_id')::integer$old$;
+ if position(marker in fn)=0 then raise exception 'assimilation restore hook missing'; end if;
+ fn:=replace(fn,marker,$new$religion_assimilation_target_id=(saved->>'religion_assimilation_target_id')::integer,race_assimilation_modifier_applied=coalesce((saved->>'race_assimilation_modifier_applied')::integer,0),religion_assimilation_modifier_applied=coalesce((saved->>'religion_assimilation_modifier_applied')::integer,0)$new$);execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=replace(pg_get_functiondef('fauxlore.process_province_assimilation()'::regprocedure),chr(13),'');
+ marker:=$old$      if group_kind='race' then update fauxlore.provinces set race_assimilation_modifier_applied=old_modifier where id=province_row.id;
+      else update fauxlore.provinces set religion_assimilation_modifier_applied=old_modifier where id=province_row.id; end if;$old$;
+ marker:=replace(marker,chr(13),'');
+ if position(marker in fn)=0 then raise exception 'assimilation modifier update hook missing';end if;
+ fn:=replace(fn,marker,$new$      if group_kind='race' and old_modifier is distinct from province_row.race_assimilation_modifier_applied then
+        update fauxlore.provinces set race_assimilation_modifier_applied=old_modifier where id=province_row.id;
+      elsif group_kind='religion' and old_modifier is distinct from province_row.religion_assimilation_modifier_applied then
+        update fauxlore.provinces set religion_assimilation_modifier_applied=old_modifier where id=province_row.id;
+      end if;$new$);execute fn;
+end $migration$;
+
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','military_tradition_pp','Военные традиции',0,'п.п.','Государство',''),
+ ('constructor','Назначение','naval_tradition_pp','Морские традиции',0,'п.п.','Государство','');
+alter table fauxlore.military_traditions add column land_modifier_spent numeric not null default 0 check(land_modifier_spent>=0),
+ add column naval_modifier_spent numeric not null default 0 check(naval_modifier_spent>=0);
+create function fauxlore.effective_tradition(target_state integer,domain_value text) returns numeric
+language sql stable security definer set search_path='' as $$
+ select greatest(0,least(100,case when domain_value='land' then land-land_modifier_spent else naval-naval_modifier_spent end+
+  100*fauxlore.state_permanent_modifier_total(target_state,array[case when domain_value='land' then 'military_tradition_pp' else 'naval_tradition_pp' end],null,null)))
+ from fauxlore.military_traditions where state_id=target_state
+$$;
+revoke all on function fauxlore.effective_tradition(integer,text) from public,anon,authenticated;
+create function fauxlore.spend_tradition(target_state integer,domain_value text,amount numeric) returns void
+language plpgsql security definer set search_path='' as $$
+declare effective numeric; modifier numeric; raw_value numeric;
+begin
+ if domain_value not in ('land','naval') or amount<0 then raise exception 'Invalid tradition operation';end if;
+ perform 1 from fauxlore.military_traditions where state_id=target_state for update;
+ effective:=fauxlore.effective_tradition(target_state,domain_value);
+ modifier:=100*fauxlore.state_permanent_modifier_total(target_state,array[case when domain_value='land' then 'military_tradition_pp' else 'naval_tradition_pp' end],null,null);
+ raw_value:=greatest(0,effective-amount)-modifier;
+ if domain_value='land' then update fauxlore.military_traditions set land=greatest(0,least(100,raw_value)),land_modifier_spent=greatest(0,-raw_value) where state_id=target_state;
+ else update fauxlore.military_traditions set naval=greatest(0,least(100,raw_value)),naval_modifier_spent=greatest(0,-raw_value) where state_id=target_state;end if;
+end $$;
+revoke all on function fauxlore.spend_tradition(integer,text,numeric) from public,anon,authenticated;
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=replace(pg_get_functiondef('fauxlore.military_actions_extra(text,integer,jsonb)'::regprocedure),chr(13),'');
+ marker:=$old$select case when payload->>'domain'='land' then land else naval end into tradition_value
+    from fauxlore.military_traditions where state_id=sid for update;$old$;
+ marker:=replace(marker,chr(13),'');if position(marker in fn)=0 then raise exception 'tradition hire read missing';end if;
+ fn:=replace(fn,marker,$new$perform 1 from fauxlore.military_traditions where state_id=sid for update;
+  tradition_value:=fauxlore.effective_tradition(sid,payload->>'domain');$new$);
+ marker:=$old$update fauxlore.military_traditions set land=case when payload->>'domain'='land' then land-5 else land end,
+    naval=case when payload->>'domain'='naval' then naval-5 else naval end where state_id=sid;$old$;
+ marker:=replace(marker,chr(13),'');if position(marker in fn)=0 then raise exception 'tradition hire spend missing';end if;
+ fn:=replace(fn,marker,$new$perform fauxlore.spend_tradition(sid,payload->>'domain',5);$new$);execute fn;
+ fn:=replace(pg_get_functiondef('fauxlore.military_finish_turn()'::regprocedure),chr(13),'');
+ marker:=$old$update fauxlore.military_traditions set land=greatest(0,land-2),naval=greatest(0,naval-2) where state_id=state_row.state_id;$old$;
+ if position(marker in fn)=0 then raise exception 'tradition decay missing';end if;
+ fn:=replace(fn,marker,$new$perform fauxlore.spend_tradition(state_row.state_id,'land',2);perform fauxlore.spend_tradition(state_row.state_id,'naval',2);$new$);execute fn;
+ fn:=replace(pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure),chr(13),'');
+ marker:=$old$(select to_jsonb(t)-'state_id' from fauxlore.military_traditions t where state_id=sid)$old$;
+ if position(marker in fn)=0 then raise exception 'tradition snapshot missing';end if;
+ fn:=replace(fn,marker,$new$(select jsonb_build_object('land',fauxlore.effective_tradition(sid,'land'),'naval',fauxlore.effective_tradition(sid,'naval')) from fauxlore.military_traditions t where state_id=sid)$new$);execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.spend_tradition(integer,text,numeric)'::regprocedure);
+ marker:=$old$effective:=fauxlore.effective_tradition(target_state,domain_value);$old$;
+ if position(marker in fn)=0 then raise exception 'tradition zero guard missing';end if;
+ fn:=replace(fn,marker,marker||' if effective<=0 or amount=0 then return; end if;');execute fn;
+end $migration$;
+
+insert into fauxlore.permanent_modifier_definitions(source_kind,source_key,modifier_key,effect,value,unit,scope,condition_text) values
+ ('constructor','Назначение','crime_pp','Преступность',0,'п.п.','Государство',''),
+ ('constructor','Назначение','corruption_pp','Коррупция',0,'п.п.','Государство','');
+create function fauxlore.effective_social_rate(target_state integer,rate_kind text,base_value numeric) returns numeric
+language sql stable security definer set search_path='' as $$
+ select greatest(0,least(1,coalesce(base_value,.2)+case when target_state is null then 0 else fauxlore.state_permanent_modifier_total(target_state,array[case rate_kind when 'crime' then 'crime_pp' else 'corruption_pp' end],null,null) end))
+$$;
+revoke all on function fauxlore.effective_social_rate(integer,text,numeric) from public,anon,authenticated;
+do $migration$
+declare fn text; signature text; old_part text; new_part text;
+begin
+ foreach signature in array array['fauxlore.clear_trade_zones_after_budget()','fauxlore.finish_trade_value_turn()','fauxlore.report_food_security_after_turn()','fauxlore.trade_resource_surplus(integer,text)'] loop
+  fn:=pg_get_functiondef(signature::regprocedure);old_part:='coalesce(owner_profile.crime,.2)';
+  if position(old_part in fn)=0 then raise exception 'crime production hook missing: %',signature;end if;
+  fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(owner_profile.state_id,'crime',owner_profile.crime)$new$);execute fn;
+ end loop;
+ fn:=pg_get_functiondef('fauxlore.state_cost_multiplier(integer)'::regprocedure);
+ fn:=replace(fn,'coalesce(sp.corruption,0)',$new$fauxlore.effective_social_rate(target_state,'corruption',sp.corruption)$new$);
+ fn:=replace(fn,'coalesce(sp.crime,0)',$new$fauxlore.effective_social_rate(target_state,'crime',sp.crime)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+ old_part:=$old$'crime',sp.crime,'corruption',sp.corruption$old$;
+ if position(old_part in fn)=0 then raise exception 'social indicators missing';end if;
+ fn:=replace(fn,old_part,$new$'crime',fauxlore.effective_social_rate(target_state,'crime',sp.crime),'corruption',fauxlore.effective_social_rate(target_state,'corruption',sp.corruption)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_indicators(integer)'::regprocedure);
+ old_part:='sp.corruption/';if position(old_part in fn)=0 then raise exception 'corruption bonus missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(target_state,'corruption',sp.corruption)/$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_population_growth(integer)'::regprocedure);
+ old_part:='sp.crime';if position(old_part in fn)=0 then raise exception 'crime growth missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(target_state,'crime',sp.crime)$new$);
+ fn:=replace(fn,'sp.corruption',$new$fauxlore.effective_social_rate(target_state,'corruption',sp.corruption) corruption$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_recruitment(integer)'::regprocedure);
+ old_part:='sp.crime';if position(old_part in fn)=0 then raise exception 'crime recruits missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(target_state,'crime',sp.crime)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.effective_estate_loyalties(integer)'::regprocedure);
+ old_part:='(select corruption from fauxlore.state_profiles where state_id=target_state)';
+ if position(old_part in fn)=0 then raise exception 'estate corruption missing';end if;
+ fn:=replace(fn,old_part,$new$(select fauxlore.effective_social_rate(target_state,'corruption',corruption) from fauxlore.state_profiles where state_id=target_state)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.province_value_for_state(integer,integer)'::regprocedure);
+ old_part:='coalesce(crime,.2)';if position(old_part in fn)=0 then raise exception 'province production crime missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(owner_state,'crime',crime)$new$);
+ fn:=replace(fn,'(select crime from fauxlore.state_profiles where state_id=target_state)',$new$(select fauxlore.effective_social_rate(target_state,'crime',crime) from fauxlore.state_profiles where state_id=target_state)$new$);
+ fn:=replace(fn,'(select corruption from fauxlore.state_profiles where state_id=target_state)',$new$(select fauxlore.effective_social_rate(target_state,'corruption',corruption) from fauxlore.state_profiles where state_id=target_state)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.turn_api(text,text,jsonb,uuid)'::regprocedure);
+ old_part:='(select crime from fauxlore.state_profiles where state_id=beneficiary_id)';
+ if position(old_part in fn)=0 then raise exception 'turn taxation crime missing';end if;
+ fn:=replace(fn,old_part,$new$(select fauxlore.effective_social_rate(beneficiary_id,'crime',crime) from fauxlore.state_profiles where state_id=beneficiary_id)$new$);
+ fn:=replace(fn,'(select corruption from fauxlore.state_profiles where state_id=beneficiary_id)',$new$(select fauxlore.effective_social_rate(beneficiary_id,'corruption',corruption) from fauxlore.state_profiles where state_id=beneficiary_id)$new$);execute fn;
+end $migration$;
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.report_food_security_after_turn()'::regprocedure);
+ marker:=$old$coalesce(sp.crime,.2) crime$old$;
+ if position(marker in fn)=0 then raise exception 'turn crime base missing';end if;
+ fn:=replace(fn,marker,$new$coalesce(sp.crime,.2) crime,coalesce(sp.corruption,.2) corruption$new$);
+ marker:=$old$state_crime:=state_row.crime;$old$;
+ if position(marker in fn)=0 then raise exception 'turn crime start missing';end if;
+ fn:=replace(fn,marker,$new$state_crime:=fauxlore.effective_social_rate(state_row.state_id,'crime',state_row.crime);$new$);
+ marker:=$old$(indicators->>'corruption')::numeric+(corruption_steps->>'corruption_step_pp')::numeric/100$old$;
+ if position(marker in fn)=0 then raise exception 'turn corruption base update missing';end if;
+ fn:=replace(fn,marker,$new$state_row.corruption+(corruption_steps->>'corruption_step_pp')::numeric/100$new$);
+ marker:=$old$state_crime+(steps->>'crime_step_pp')::numeric/100$old$;
+ if position(marker in fn)=0 then raise exception 'turn crime base update missing';end if;
+ fn:=replace(fn,marker,$new$state_row.crime+(steps->>'crime_step_pp')::numeric/100$new$);
+ marker:=$old$'crime_rate_after_pct',round(next_crime*100,2),'crime_change_pp',round((next_crime-state_crime)*100,2),$old$;
+ if position(marker in fn)=0 then raise exception 'turn crime report missing';end if;
+ fn:=replace(fn,marker,$new$'crime_base_after',next_crime,'crime_rate_after_pct',round(fauxlore.effective_social_rate(state_row.state_id,'crime',next_crime)*100,2),'crime_change_pp',round((fauxlore.effective_social_rate(state_row.state_id,'crime',next_crime)-state_crime)*100,2),$new$);
+ marker:=$old$'corruption_rate_at_turn_start_pct',(indicators->>'corruption')::numeric*100,'corruption_rate_after_pct',next_corruption*100,$old$;
+ if position(marker in fn)=0 then raise exception 'turn corruption report missing';end if;
+ fn:=replace(fn,marker,$new$'corruption_base_after',next_corruption,'corruption_rate_at_turn_start_pct',(indicators->>'corruption')::numeric*100,'corruption_rate_after_pct',fauxlore.effective_social_rate(state_row.state_id,'corruption',next_corruption)*100,$new$);
+ marker:=$old$(next_corruption-(indicators->>'corruption')::numeric)*100$old$;
+ if position(marker in fn)=0 then raise exception 'turn corruption change missing';end if;
+ fn:=replace(fn,marker,$new$(fauxlore.effective_social_rate(state_row.state_id,'corruption',next_corruption)-(indicators->>'corruption')::numeric)*100$new$);
+ marker:=$old$next_corruption/(effects_config#>>'{stateEffects,corruptionLoyaltyDivisor}')::numeric$old$;
+ -- report the effective next-turn effect while storing the unmodified base.
+ fn:=replace(fn,marker,$new$fauxlore.effective_social_rate(state_row.state_id,'corruption',next_corruption)/(effects_config#>>'{stateEffects,corruptionLoyaltyDivisor}')::numeric$new$);
+ marker:=$old$crime=(r->>'crime_rate_after_pct')::numeric/100,corruption=(r->>'corruption_rate_after_pct')::numeric/100$old$;
+ if position(marker in fn)=0 then raise exception 'turn base persistence missing';end if;
+ fn:=replace(fn,marker,$new$crime=(r->>'crime_base_after')::numeric,corruption=(r->>'corruption_base_after')::numeric$new$);execute fn;
+end $migration$;
+do $migration$
+declare fn text; signature text; old_part text;
+begin
+ foreach signature in array array['fauxlore.map_payload_unfiltered()','fauxlore.province_payload(fauxlore.provinces)'] loop
+  fn:=pg_get_functiondef(signature::regprocedure);
+  old_part:='(select sp.crime from fauxlore.state_profiles sp where sp.state_id=c.id)';
+  if position(old_part in fn)=0 then raise exception 'map crime field missing: %',signature;end if;
+  fn:=replace(fn,old_part,$new$(select fauxlore.effective_social_rate(c.id,'crime',sp.crime) from fauxlore.state_profiles sp where sp.state_id=c.id)$new$);
+  fn:=replace(fn,'(select sp.corruption from fauxlore.state_profiles sp where sp.state_id=c.id)',$new$(select fauxlore.effective_social_rate(c.id,'corruption',sp.corruption) from fauxlore.state_profiles sp where sp.state_id=c.id)$new$);
+  fn:=replace(fn,'coalesce(sp.crime,0.2)',$new$fauxlore.effective_social_rate(sp.state_id,'crime',sp.crime)$new$);
+  fn:=replace(fn,'coalesce(sp.corruption,0.2)',$new$fauxlore.effective_social_rate(sp.state_id,'corruption',sp.corruption)$new$);execute fn;
+ end loop;
+ fn:=pg_get_functiondef('fauxlore.game_state_api(text,text,jsonb,uuid)'::regprocedure);
+ old_part:='coalesce(sp.corruption,0.2)';if position(old_part in fn)=0 then raise exception 'state profile corruption missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(sp.state_id,'corruption',sp.corruption)$new$);
+ fn:=replace(fn,'coalesce(sp.crime,0.2)',$new$fauxlore.effective_social_rate(sp.state_id,'crime',sp.crime)$new$);execute fn;
+ fn:=pg_get_functiondef('fauxlore.state_api(text,text,jsonb,uuid)'::regprocedure);
+ old_part:='coalesce(s.corruption,0.2)';if position(old_part in fn)=0 then raise exception 'admin state corruption missing';end if;
+ fn:=replace(fn,old_part,$new$fauxlore.effective_social_rate(s.state_id,'corruption',s.corruption)$new$);execute fn;
+ fn:=pg_get_functiondef('public.judge_state_statistics_api()'::regprocedure);
+ fn:=replace(fn,$old$'crime',sp.crime,'corruption',sp.corruption$old$,$new$'crime',fauxlore.effective_social_rate(sp.state_id,'crime',sp.crime),'corruption',fauxlore.effective_social_rate(sp.state_id,'corruption',sp.corruption)$new$);execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+do $migration$
+declare fn text;
+begin
+ fn:=pg_get_functiondef('fauxlore.apply_permanent_development_on_turn()'::regprocedure);
+ if position('if growth_value<=0 then continue; end if;' in fn)=0 then raise exception 'development growth guard missing';end if;
+ fn:=replace(fn,'if growth_value<=0 then continue; end if;','if growth_value=0 or p.development is null then continue; end if;');
+ if position('accumulated:=p.development_fraction+growth_value;' in fn)=0 then raise exception 'development accumulation missing';end if;
+ fn:=replace(fn,'accumulated:=p.development_fraction+growth_value;','accumulated:=greatest(-p.development,least(1000000-p.development,p.development_fraction+growth_value));');execute fn;
+end $migration$;
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$order by d.effect,d.source_kind,d.source_key,d.modifier_key,d.scope,d.condition_text offset definition_index limit 1;$old$;
+ if position(marker in fn)=0 then raise exception 'modifier catalog selection missing';end if;
+ fn:=replace(fn,marker,marker||$new$
+ if payload ? 'definition_key' and payload->>'definition_key' is distinct from def.modifier_key then
+  raise sqlstate '22023' using message='Каталог модификаторов изменился. Обновите страницу и повторите назначение';end if;$new$);execute fn;
+end $migration$;
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$if payload ? 'definition_key' and payload->>'definition_key' is distinct from def.modifier_key then$old$;
+ if position(marker in fn)=0 then raise exception 'modifier scope identity hook missing';end if;
+ fn:=replace(fn,marker,$new$if province_key is not null and def.modifier_key in ('crime_pp','corruption_pp','development_limit_flat','state_stability_flat','nobility_loyalty','clergy_loyalty','burgher_loyalty','peasant_loyalty','nobility_influence_pp','clergy_influence_pp','burgher_influence_pp','peasant_influence_pp','nobility_stabilization','clergy_stabilization','burgher_stabilization','peasant_stabilization','race_human_loyalty','race_dwarf_loyalty','race_elf_loyalty','race_halfelf_loyalty','race_beast_loyalty','internal_trade_income','trade_zone_income','loan_nobility_rate','loan_clergy_rate','loan_burgher_rate','loan_peasant_rate','military_tradition_pp','naval_tradition_pp','leader_limit_flat','leader_prestige_cost_flat','mercenary_hire_cost','mercenary_upkeep','infantry_hire_cost','cavalry_hire_cost','siege_hire_cost','artillery_hire_cost','fleet_hire_cost','infantry_upkeep','cavalry_upkeep','siege_upkeep','artillery_upkeep','fleet_upkeep') then
+  raise sqlstate '22023' using message='Этот модификатор назначается государству';end if;
+ if payload ? 'definition_key' and payload->>'definition_key' is distinct from def.modifier_key then$new$);execute fn;
+end $migration$;
+
+create function fauxlore.sync_assimilation_modifiers(target_state integer) returns void
+language plpgsql security definer set search_path='' as $$
+declare p record; desired integer; adjusted integer; applied integer;
+begin
+ for p in select pr.id,pr.race_assimilation_turns,pr.race_assimilation_target_id,pr.race_assimilation_modifier_applied,
+ pr.religion_assimilation_turns,pr.religion_assimilation_target_id,pr.religion_assimilation_modifier_applied
+ from fauxlore.provinces pr join fauxlore.province_values owner on owner.province_id=pr.id and owner.layer='states' and owner.category_id=target_state
+ where pr.kind='land' and (pr.race_assimilation_turns is not null or pr.religion_assimilation_turns is not null) order by pr.id for update of pr loop
+  if p.race_assimilation_turns is not null and p.race_assimilation_target_id is not null then
+   desired:=round(fauxlore.state_permanent_modifier_total(target_state,array['race_assimilation_turns'],p.id,null))::integer;
+   adjusted:=greatest(1,least(300,p.race_assimilation_turns+desired-p.race_assimilation_modifier_applied));
+   applied:=p.race_assimilation_modifier_applied+adjusted-p.race_assimilation_turns;
+   if adjusted<>p.race_assimilation_turns or applied<>p.race_assimilation_modifier_applied then
+    update fauxlore.provinces set race_assimilation_turns=adjusted,race_assimilation_modifier_applied=applied where id=p.id;end if;
+  end if;
+  if p.religion_assimilation_turns is not null and p.religion_assimilation_target_id is not null then
+   desired:=round(fauxlore.state_permanent_modifier_total(target_state,array['religion_assimilation_turns'],p.id,null))::integer;
+   adjusted:=greatest(1,least(300,p.religion_assimilation_turns+desired-p.religion_assimilation_modifier_applied));
+   applied:=p.religion_assimilation_modifier_applied+adjusted-p.religion_assimilation_turns;
+   if adjusted<>p.religion_assimilation_turns or applied<>p.religion_assimilation_modifier_applied then
+    update fauxlore.provinces set religion_assimilation_turns=adjusted,religion_assimilation_modifier_applied=applied where id=p.id;end if;
+  end if;
+ end loop;
+end $$;
+revoke all on function fauxlore.sync_assimilation_modifiers(integer) from public,anon,authenticated;
+do $migration$
+declare fn text;marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$declare actor fauxlore.accounts; state_key integer; province_key integer; definition_index integer; def record;$old$;
+ if position(marker in fn)=0 then raise exception 'modifier declarations missing';end if;
+ fn:=replace(fn,marker,$new$declare actor fauxlore.accounts; state_key integer; province_key integer; definition_index integer; def record; deleted_modifier text;$new$);
+ marker:=$old$where id=assignment_result_id;$old$;
+ if position(marker in fn)=0 then raise exception 'assignment update missing';end if;
+ fn:=replace(fn,marker,marker||$new$
+    if def.modifier_key in ('race_assimilation_turns','religion_assimilation_turns') then perform fauxlore.sync_assimilation_modifiers(state_key);end if;$new$);
+ marker:=$old$delete from fauxlore.admin_modifier_assignments where id=(payload->>'modifier_id')::bigint;$old$;
+ if position(marker in fn)=0 then raise exception 'assignment deletion missing';end if;
+ fn:=replace(fn,marker,$new$delete from fauxlore.admin_modifier_assignments where id=(payload->>'modifier_id')::bigint returning state_id,modifier_key into state_key,deleted_modifier;$new$);
+ marker:=$old$if not found then raise sqlstate 'P0002' using message='Назначение модификатора не найдено'; end if;$old$;
+ if position(marker in fn)=0 then raise exception 'assignment delete guard missing';end if;
+ fn:=replace(fn,marker,marker||$new$
+    if deleted_modifier in ('race_assimilation_turns','religion_assimilation_turns') then perform fauxlore.sync_assimilation_modifiers(state_key);end if;$new$);execute fn;
+end $migration$;
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.admin_modifiers_api(text,jsonb)'::regprocedure);
+ marker:=$old$case when def.modifier_key='population_growth' then 'Прирост населения' else def.effect end,value_key,def.unit,$old$;
+ if position(marker in fn)=0 then raise exception 'modifier display hook missing';end if;
+ fn:=replace(fn,marker,$new$case def.modifier_key when 'population_growth' then 'Прирост населения' when 'development' then 'Постоянное изменение развития' when 'internal_trade_income' then 'Внутренняя торговля' when 'trade_zone_income' then 'Доход от торговой зоны' when 'garrison_hire_cost' then 'Стоимость найма в гарнизон' when 'garrison_upkeep' then 'Стоимость содержания гарнизонов' when 'fortification_upkeep' then 'Содержание укреплений' when 'militia_coefficient' then 'Коэффициент сбора ополчения' when 'cavalry_hire_cost' then 'Стоимость кавалерии' when 'fleet_hire_cost' then 'Стоимость флота' else def.effect end,value_key,case when def.modifier_key in ('production','internal_trade_income','trade_zone_income','recruit_growth','recruit_limit','trade_influence','garrison_hire_cost','garrison_upkeep') then 'п.п.' else def.unit end,$new$);execute fn;
+end $migration$;
+
+do $migration$
+declare fn text; marker text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ marker:=$old$j.judge_id<>j.player_id and fauxlore.judge_can_review(actor.id,p.state_id)$old$;
+ if position(marker in fn)=0 then raise exception 'judge wall visibility hook missing';end if;
+ fn:=replace(fn,marker,$new$j.judge_id<>j.player_id and exists(select 1 from fauxlore.account_states current_state where current_state.account_id=p.account_id and fauxlore.judge_can_review(actor.id,current_state.state_id))$new$);execute fn;
+end $migration$;

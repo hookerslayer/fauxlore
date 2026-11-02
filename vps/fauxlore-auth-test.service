@@ -1,0 +1,20 @@
+[Unit]
+Description=Fauxlore isolated OAuth test service
+After=postgresql.service
+
+[Service]
+Type=simple
+User=fauxlore_auth
+Group=fauxlore_auth
+WorkingDirectory=/opt/fauxlore-auth
+EnvironmentFile=/etc/fauxlore/auth-test.env
+LoadCredential=google_client_secret:/etc/fauxlore/google-client-secret
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn auth_app:create_app --factory --host 127.0.0.1 --port 18081 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

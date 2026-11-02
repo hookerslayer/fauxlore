@@ -1,0 +1,16 @@
+[Unit]
+Description=Fauxlore isolated PostgREST session bridge
+After=fauxlore-postgrest-test.service
+Requires=fauxlore-postgrest-test.service
+
+[Service]
+User=fauxlore_rpc
+Group=fauxlore_rpc
+SupplementaryGroups=fauxlore_postgrest
+WorkingDirectory=/opt/fauxlore-auth
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn postgrest_bridge_app:create_app --factory --host 127.0.0.1 --port 18086 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

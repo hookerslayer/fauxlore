@@ -1,0 +1,16 @@
+[Unit]
+Description=Fauxlore isolated rollback test session bridge
+Requires=fauxlore-postgrest-rollback-test.service
+After=fauxlore-postgrest-rollback-test.service
+
+[Service]
+User=fauxlore_rpc
+Group=fauxlore_rpc
+SupplementaryGroups=fauxlore_postgrest
+WorkingDirectory=/opt/fauxlore-auth
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn postgrest_rollback_bridge_app:create_app --factory --host 127.0.0.1 --port 18090 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

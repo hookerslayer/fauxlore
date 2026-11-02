@@ -1,0 +1,11 @@
+[Unit]
+Description=Run isolated Fauxlore PostgreSQL backup weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+Unit=fauxlore-db-backup-preview.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Fauxlore PostgREST production candidate (loopback only)
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+User=fauxlore_postgrest
+Group=fauxlore_postgrest
+ExecStart=/opt/fauxlore-postgrest/postgrest /etc/fauxlore/postgrest-production.conf
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

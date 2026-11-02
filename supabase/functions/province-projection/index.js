@@ -9,7 +9,10 @@ const headers = {
 
 const json = (status, body) => new Response(JSON.stringify(body), {status, headers});
 
-Deno.serve(async request => {
+export async function handleProvinceProjection(request, {
+  getEnv = name => globalThis.Deno?.env.get(name),
+  fetchImpl = globalThis.fetch,
+} = {}) {
   if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers});
   if (request.method !== 'POST') return json(405, {error: 'Метод не поддерживается'});
   const authorization = request.headers.get('authorization');
@@ -33,10 +36,10 @@ Deno.serve(async request => {
   if (stateMode && !['provinces','politics','trade','finance'].includes(view)) return json(400, {error: 'Неизвестный вид расчёта'});
 
   try {
-    const url = Deno.env.get('SUPABASE_URL');
+    const url = getEnv('SUPABASE_URL');
     if (!url) throw new Error('Не настроен адрес базы');
     const read = async path => {
-      const response = await fetch(`${url}/rest/v1/rpc/fauxlore_api`, {
+      const response = await fetchImpl(`${url}/rest/v1/rpc/fauxlore_api`, {
       method: 'POST',
       headers: {authorization, apikey, 'Content-Type': 'application/json'},
       body: JSON.stringify({path, method: 'GET', body: {}, request_id: null}),
@@ -45,7 +48,7 @@ Deno.serve(async request => {
       return response.json();
     };
     const readRpc = async (name,args) => {
-      const response=await fetch(`${url}/rest/v1/rpc/${name}`,{
+      const response=await fetchImpl(`${url}/rest/v1/rpc/${name}`,{
         method:'POST',headers:{authorization,apikey,'Content-Type':'application/json'},body:JSON.stringify(args),
       });
       if(!response.ok)throw new Error(`RPC ${name}: ${response.status}`);
@@ -67,10 +70,10 @@ Deno.serve(async request => {
       const indicators = await read(`${prefix}/states/${stateId}/indicators`);
       const context = {...state, permanent_modifiers: indicators.permanent_modifiers || []};
       if (view === 'trade' || view === 'finance') {
-        const secret = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+        const secret = getEnv('SUPABASE_SERVICE_ROLE_KEY');
         if (!secret) throw new Error('Не настроен серверный ключ прогнозов');
         const [sourceResponse, overview, duty, estateRates] = await Promise.all([
-          fetch(`${url}/rest/v1/rpc/projection_source_api`, {
+          fetchImpl(`${url}/rest/v1/rpc/projection_source_api`, {
             method: 'POST',
             headers: {authorization: `Bearer ${secret}`, apikey: secret, 'Content-Type': 'application/json'},
             body: '{}',
@@ -144,7 +147,7 @@ Deno.serve(async request => {
             read(`${prefix}/states/${stateId}/tax-rates`),read('my/trade-agreements'),
             readRpc('garrison_api',{action:'snapshot',target_state:stateId,province_key:null,payload:{}}),
             readRpc('colonization_api',{action:'snapshot',target_state:stateId,payload:{}}),
-            readRpc('military_api',{action:'snapshot',target_state:stateId,payload:{}}),
+            readRpc('military_api',{action:'upkeep_snapshot',target_state:stateId,payload:{}}),
           ]);
           projection.finance=buildFinanceProjection({stateId,taxForecast,tradeProjection:projection,
             agreements,garrisonData,colonyData,taxRates,indicators,militaryData});
@@ -229,4 +232,6 @@ Deno.serve(async request => {
     console.error('province-projection', error);
     return json(500, {error: 'Не удалось рассчитать показатели провинции'});
   }
-});
+}
+
+if (globalThis.Deno?.serve) Deno.serve(handleProvinceProjection);

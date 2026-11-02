@@ -1,0 +1,21 @@
+[Unit]
+Description=Fauxlore production candidate Google OAuth and sessions (loopback only)
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=fauxlore_auth
+Group=fauxlore_auth
+EnvironmentFile=/etc/fauxlore/auth-production.env
+LoadCredential=google_client_secret:/etc/fauxlore/google-client-secret
+WorkingDirectory=/opt/fauxlore-auth
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn auth_app:create_app --factory --host 127.0.0.1 --port 18181 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run daily Fauxlore production-candidate PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+Unit=fauxlore-db-backup-production-candidate.service
+
+[Install]
+WantedBy=timers.target

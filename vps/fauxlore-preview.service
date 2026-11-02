@@ -1,0 +1,19 @@
+[Unit]
+Description=Fauxlore local read-only preview
+After=postgresql.service
+
+[Service]
+Type=simple
+User=fauxlore_preview
+Group=fauxlore_preview
+WorkingDirectory=/opt/fauxlore-preview
+Environment="FAUXLORE_PREVIEW_DATABASE=dbname=fauxlore_restore_filtered port=5433"
+ExecStart=/usr/bin/python3 -m uvicorn preview:app --host 127.0.0.1 --port 18080
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

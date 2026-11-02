@@ -1,0 +1,13 @@
+[Unit]
+Description=Fauxlore test PostgREST with forced transaction rollback
+After=postgresql.service
+
+[Service]
+User=fauxlore_postgrest
+Group=fauxlore_postgrest
+ExecStart=/opt/fauxlore-postgrest/postgrest /etc/fauxlore/postgrest-rollback.conf
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

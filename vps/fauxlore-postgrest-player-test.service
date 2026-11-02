@@ -1,0 +1,15 @@
+[Unit]
+Description=Temporary isolated player browser preview (rollback RPCs)
+Requires=fauxlore-postgrest-rollback-bridge-test.service
+After=fauxlore-postgrest-rollback-bridge-test.service
+
+[Service]
+User=fauxlore_rpc
+Group=fauxlore_rpc
+WorkingDirectory=/opt/fauxlore-auth
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn postgrest_player_preview:app --host 127.0.0.1 --port 18092 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

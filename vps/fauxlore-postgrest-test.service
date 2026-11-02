@@ -1,0 +1,16 @@
+[Unit]
+Description=Fauxlore isolated PostgREST test (loopback only)
+After=postgresql.service
+
+[Service]
+User=fauxlore_postgrest
+Group=fauxlore_postgrest
+ExecStart=/opt/fauxlore-postgrest/postgrest /etc/fauxlore/postgrest-preview.conf
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

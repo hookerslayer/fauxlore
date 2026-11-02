@@ -1,4 +1,4 @@
-export const isSupabaseBackend = window.FAUXLORE_CONFIG?.backend === 'supabase';
+export const isSupabaseBackend = ['supabase', 'vps-preview', 'vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend);
 let clientPromise;
 const inflight = new Map();
 
@@ -12,6 +12,18 @@ export async function localEventsApi(action,payload={}) {
 async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;
+    if (config?.backend === 'vps-postgrest') {
+      const {createPostgrestClient} = await import('./vps-postgrest-client.js');
+      return createPostgrestClient();
+    }
+    if (config?.backend === 'vps-preview') {
+      const {createPreviewClient} = await import('./vps-preview-client.js');
+      return createPreviewClient();
+    }
+    if (config?.backend === 'vps') {
+      const {createVpsClient} = await import('./vps-client.js');
+      return createVpsClient();
+    }
     if (!/^https:\/\/[a-z0-9]+\.supabase\.co$/.test(config?.supabaseUrl || '') || !config?.supabasePublishableKey?.startsWith('sb_publishable_')) {
       throw new Error('Не настроено подключение к Supabase');
     }
@@ -304,13 +316,16 @@ function mapCache(mode, value) {
     opening.onupgradeneeded = () => opening.result.createObjectStore('map');
     opening.onerror = () => reject(opening.error);
     opening.onsuccess = () => {
-      const db = opening.result, tx = db.transaction('map', mode), store = tx.objectStore('map');
-      const key = window.FAUXLORE_CONFIG.supabaseUrl;
-      const req = mode === 'readonly' ? store.get(key) : store.put(value, key);
-      let result;
-      req.onsuccess = () => { result = req.result; };
-      tx.oncomplete = () => { db.close(); resolve(result); };
-      tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+      const db = opening.result;
+      try {
+        const tx = db.transaction('map', mode), store = tx.objectStore('map');
+        const key = window.FAUXLORE_CONFIG?.supabaseUrl || window.FAUXLORE_CONFIG?.backend || 'default';
+        const req = mode === 'readonly' ? store.get(key) : store.put(value, key);
+        let result;
+        req.onsuccess = () => { result = req.result; };
+        tx.oncomplete = () => { db.close(); resolve(result); };
+        tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+      } catch (error) { db.close(); reject(error); }
     };
   });
 }
@@ -334,6 +349,10 @@ export async function supabaseLogin() {
   if (!popup) throw new Error('Разрешите всплывающее окно для входа через Google');
   let cleanup = () => {};
   try {
+    if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {
+      const {completeVpsLogin} = await import('./vps-client.js');
+      return await completeVpsLogin(popup, () => supabaseApi('auth/me'));
+    }
     const db = await client(), nonce = crypto.randomUUID();
     const callback = new URL('supabase-return.html', location.href);
     callback.searchParams.set('login', nonce);

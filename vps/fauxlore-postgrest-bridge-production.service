@@ -1,0 +1,20 @@
+[Unit]
+Description=Fauxlore production candidate session bridge (loopback only)
+After=postgresql.service fauxlore-postgrest-production.service
+Requires=postgresql.service fauxlore-postgrest-production.service
+
+[Service]
+User=fauxlore_rpc
+Group=fauxlore_rpc
+SupplementaryGroups=fauxlore_postgrest
+EnvironmentFile=/etc/fauxlore/production.env
+WorkingDirectory=/opt/fauxlore-auth
+ExecStart=/opt/fauxlore-auth-venv/bin/python -m uvicorn postgrest_bridge_app:create_app --factory --host 127.0.0.1 --port 18186 --no-access-log
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

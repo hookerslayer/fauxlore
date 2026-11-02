@@ -2,7 +2,7 @@ import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=wall-filters2-20261031';
+import {renderWall} from './wall.js?v=wall-posting-control-20261102';
 import {renderRules} from './rules.js?v=rules-fauxlore-20261031';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=state-costs-20261101';
 import {renderLocalEventAdmin} from './local-events.js?v=event-popover-20261031';

@@ -2,7 +2,7 @@ const estates=['Корона','Знать','Духовенство','Горож�
 const floor=value=>Math.floor(Number(value)||0);
 const sum=rows=>floor(rows.reduce((total,[,value])=>total+(Number(value)||0),0));
 
-export function buildFinanceProjection({stateId,taxForecast,tradeProjection,agreements,garrisonData,colonyData,taxRates,indicators,militaryData}){
+export function buildFinanceProjection({stateId,taxForecast,tradeProjection,agreements,colonyData,taxRates,indicators,militaryData}){
   const accepted=(agreements?.agreements||[]).filter(item=>item.status==='accepted'&&
     (Number(item.from_state_id)===stateId||Number(item.to_state_id)===stateId));
   const tradeGoldIn=floor(accepted.reduce((total,item)=>total+Number((Number(item.from_state_id)===stateId?

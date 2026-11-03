@@ -3,9 +3,9 @@ import {supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=verdict-judges-20261102';
+import {renderWall} from './wall.js?v=wall-lazy-media-20261103';
 import {renderRules} from './rules.js?v=rules-fauxlore-20261031';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=commander-modifiers-20261102';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=compact-diplomacy-20261103';
 import {renderLocalEventAdmin} from './local-events.js?v=judge-events-20261102';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
@@ -761,11 +761,12 @@ async function loadTaxEditor(host,stateId,isAdmin){
   }catch(error){saveButton.disabled=true;const message=host.querySelector('[data-tax-save-message]');if(message)message.textContent=error.message;}
 }
 
-async function renderStateEconomy(host,stateId,isAdmin,onRefresh=()=>{}){
+async function renderStateEconomy(host,stateId,isAdmin,onRefresh=()=>{},cachedIndicators=null){
   const target=host.querySelector('[data-state-economy]');if(!target)return;
   target.innerHTML='<p class="hint">Загружаю финансовые показатели…</p>';
   try{
-    const [test,indicators,loans,investmentData,socialData,fiscalData,tradeProjection]=await Promise.all([isAdmin?api('admin/turn/test'):Promise.resolve(null),api(`${isAdmin?'admin':'my'}/states/${stateId}/indicators`),api(`${isAdmin?'admin':'my'}/states/${stateId}/loans`),estateInvestmentApi('snapshot',stateId),estateSocialApi('snapshot',stateId),estateFiscalApi('snapshot',stateId),stateProvinceProjectionApi(stateId,'finance')]);
+    const [test,loans,investmentData,socialData,fiscalData,tradeProjection]=await Promise.all([isAdmin?api('admin/turn/test'):Promise.resolve(null),api(`${isAdmin?'admin':'my'}/states/${stateId}/loans`),estateInvestmentApi('snapshot',stateId),estateSocialApi('snapshot',stateId),estateFiscalApi('snapshot',stateId),stateProvinceProjectionApi(stateId,'finance')]);
+    const indicators=cachedIndicators||tradeProjection.indicators||await api(`${isAdmin?'admin':'my'}/states/${stateId}/indicators`);
     if(!target.isConnected)return;
     const finance=tradeProjection.finance;
     if(!finance)throw new Error('Сервер не вернул финансовый прогноз');
@@ -1137,19 +1138,14 @@ function renderPlayerStateSection(host,tab,quiet=false){
     if(!host.isConnected||activeMenuSection!==tab)return;
     if(!states.length){host.innerHTML='<h3>Государство</h3><p class="hint">За вашим аккаунтом пока не закреплено государство. Администратор должен назначить его игроку.</p>';return;}
     const chosen=states.find(state=>user.state_ids?.includes(Number(state.id)))||states[0];
-    const indicators=await api(`my/states/${Number(chosen.id)}/indicators`);
+    const indicators=tab==='Экономика'?null:await api(`my/states/${Number(chosen.id)}/indicators`);
     if(!host.isConnected||activeMenuSection!==tab)return;
     const stateCategory=categories.find(category=>category.layer==='states'&&category.id===Number(chosen.id));
-    const crime=Number(indicators.crime??chosen.crime??stateCategory?.crime??.2);
+    const crime=Number(indicators?.crime??chosen.crime??stateCategory?.crime??.2);
     const category=(layer,name)=>name?{name,id:categories.find(c=>c.layer===layer&&c.name===name)?.id}:null;
-    const provinces=(chosen.provinces||[]).map(p=>({...allProvinces.find(item=>item.id===p.id),...p,layers:{states:{...indicators,id:Number(chosen.id),name:chosen.name,crime},races:category('races',p.race),religions:category('religions',p.religion),resources:category('resources',p.resource)}}));
+    const provinces=(chosen.provinces||[]).map(p=>({...allProvinces.find(item=>item.id===p.id),...p,layers:{states:{...(indicators||{}),id:Number(chosen.id),name:chosen.name,crime},races:category('races',p.race),religions:category('religions',p.religion),resources:category('resources',p.resource)}}));
     provinces.push(...allProvinces.filter(p=>p.kind==='land'&&p.occupation===chosen.name&&!provinces.some(owned=>owned.id===p.id)));
-    try{
-      const rates=await api(`my/states/${Number(chosen.id)}/estate-tax-rates`);
-      const estateRates=Object.fromEntries(rates.groups.map(row=>[row.estate,Number(row.rate)]));
-      provinces.forEach(province=>{if(Number(province.layers?.states?.id)===Number(chosen.id))province.layers.states.estate_tax_rates=estateRates;});
-    }catch{/* Other player sections remain available if tax data is temporarily unavailable. */}
-    if(activeMenuSection===tab)renderStateDetails(host,{...chosen,crime,corruption:indicators.corruption},tab,provinces,false);
+    if(activeMenuSection===tab)renderStateDetails(host,{...chosen,crime,corruption:indicators?.corruption??chosen.corruption??stateCategory?.corruption??.2},tab,provinces,false,indicators);
   }).catch(error=>{if(host.isConnected&&activeMenuSection===tab)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;});
 }
 
@@ -1267,7 +1263,7 @@ async function renderStateJournal(host,stateId){
     });
   }catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
 }
-function renderStateDetails(host,state,tab,provinces,isAdmin){
+function renderStateDetails(host,state,tab,provinces,isAdmin,cachedIndicators=null){
   const renderedRevision={data:mapDataRevision,live:mapLiveRevision};
   let staleNoticeShown=false;
   const ensureCurrentStateSnapshot=anchor=>{
@@ -1407,7 +1403,7 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
     }
   }
   if(tab==='Статистика'){loadStateFinances(host,Number(state.id),isAdmin);loadTaxEditor(host,Number(state.id),isAdmin);}
-  if(tab==='Экономика')renderStateEconomy(host,Number(state.id),isAdmin,()=>renderStateDetails(host,state,tab,provinces,isAdmin));
+  if(tab==='Экономика')renderStateEconomy(host,Number(state.id),isAdmin,()=>renderStateDetails(host,state,tab,provinces,isAdmin),cachedIndicators);
   if(tab==='Дипломатия')renderDynasticDiplomacy(host.querySelector('[data-state-diplomacy]'),{stateId:Number(state.id)});
   if(tab==='Военное дело')void renderMilitaryPanel(host.querySelector('[data-state-military]'),{stateId:Number(state.id),notify:message=>showStatus(message,4000),onMapChange:()=>emit('map:refresh')});
   if(tab==='Торговля')renderTradeDashboard(host.querySelector('[data-state-trade]'),Number(state.id),productionRows,state.name);
@@ -1496,7 +1492,7 @@ function renderStateDetails(host,state,tab,provinces,isAdmin){
       if(last?.crime_change_pp!=null)host.querySelector('[data-crime-last-change]').textContent=`За последний ход: ${last.crime_change_pp>0?'+':''}${Number(last.crime_change_pp).toLocaleString('ru-RU')} п.п.`;
       const input=host.querySelector('[name="development_limit"]');if(input&&(input.dataset.originalValue===undefined||input.value===input.dataset.originalValue)){input.value=data.development_limit;input.dataset.originalValue=input.value;}
     };
-    api(indicatorPath).then(applyIndicators).catch(error=>{if(overviewRoot?.isConnected&&host.querySelector('.state-detail')===overviewRoot){const warning=host.querySelector('[data-indicator-warning]');if(warning)warning.textContent=`Не удалось загрузить показатели: ${error.message}`;}});
+    (cachedIndicators?Promise.resolve(cachedIndicators):api(indicatorPath)).then(applyIndicators).catch(error=>{if(overviewRoot?.isConnected&&host.querySelector('.state-detail')===overviewRoot){const warning=host.querySelector('[data-indicator-warning]');if(warning)warning.textContent=`Не удалось загрузить показатели: ${error.message}`;}});
     host.querySelector('[data-development-limit-form]')?.addEventListener('submit',async event=>{
       event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),message=form.querySelector('[role="status"]');
       button.disabled=true;

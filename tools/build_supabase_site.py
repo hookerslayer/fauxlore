@@ -7,6 +7,11 @@ PUBLIC = ('index.html', 'viewer.js', 'viewer.css', 'ui.js', 'wall.js', 'wall-edi
           'supabase-api.js', 'vps-preview-client.js', 'vps-client.js', 'vps-postgrest-client.js', 'projection-sync.js', 'view-state.js', 'local-events.js', 'supabase-return.html', 'supabase-return.js', 'app-config.js')
 
 
+def public_source(name):
+    # The repository root is the legacy GitHub Pages redirect, not the app.
+    return ROOT / ('vps/production-index.html' if name == 'index.html' else name)
+
+
 def main():
     target = ROOT / '.local/supabase-site'
     target.mkdir(parents=True, exist_ok=True)
@@ -28,7 +33,7 @@ def main():
     for name in PUBLIC:
         destination = target / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / name, destination)
+        shutil.copy2(public_source(name), destination)
     for name in ('assets', 'map-data/tiles'):
         shutil.copytree(ROOT / name, target / name, dirs_exist_ok=True)
     for name in ('province-adjacency.json',):

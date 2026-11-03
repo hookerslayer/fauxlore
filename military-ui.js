@@ -213,7 +213,7 @@ export async function renderMilitaryDiplomacy(host,{stateId,notify}={}){
   if(!host)return;
   host.innerHTML='<p class="hint">Загружаю отношения…</p>';
   try{
-    const data=await militaryApi('snapshot',stateId);if(!host.isConnected)return;
+    const data=await militaryApi('diplomacy_snapshot',stateId);if(!host.isConnected)return;
     const refresh=()=>renderMilitaryDiplomacy(host,{stateId,notify});
     const own=data.states.find(s=>s.id===data.state_id)?.name||'Государство';
     host.innerHTML=`<section class="application-panel"><h4>Отношения государства «${escape(own)}»</h4><div class="table-scroll"><table class="state-data-table"><thead><tr><th>Государство</th><th>Отношения</th></tr></thead><tbody>${data.states.filter(s=>s.id!==data.state_id).map(s=>`<tr><td>${escape(s.name)}</td><td>${relations[s.relation]||escape(s.relation)}</td></tr>`).join('')}</tbody></table></div></section><section class="application-panel"><h4>Военные договоры</h4>${data.diplomacy.map(d=>`<article class="marriage-candidate"><strong>${kinds[d.kind]} · ${escape(data.states.find(s=>s.id===d.from_state_id)?.name)} → ${escape(data.states.find(s=>s.id===d.to_state_id)?.name)}</strong><p>${status[d.status]||escape(d.status)}${d.justified===true?' · оправданная война':d.justified===false?' · неоправданная война':''}</p>${d.casus_belli?`<p>Повод: ${escape(d.casus_belli)}</p>`:''}${d.terms?`<p>Условия: ${escape(d.terms)}</p>`:''}${d.status==='pending'&&d.to_state_id===data.state_id?`<div class="inline-actions"><button data-military-decision="accept" data-request-id="${d.id}">Принять</button><button data-military-decision="reject" data-request-id="${d.id}">Отклонить</button></div>`:''}${d.kind==='passage'&&d.status==='accepted'?`<button data-military-decision="end" data-request-id="${d.id}">Расторгнуть</button>`:''}</article>`).join('')||'<p class="hint">Договоров пока нет.</p>'}</section>`;
@@ -223,7 +223,7 @@ export async function renderMilitaryDiplomacy(host,{stateId,notify}={}){
 
 export async function renderMilitaryContract(host,kind,{stateId,notify}={}){
   if(!host)return;
-  const data=await militaryApi('snapshot',stateId);
+  const data=await militaryApi('diplomacy_snapshot',stateId);
   if(!host.isConnected)return;
   const targets=data.states.filter(s=>s.id!==data.state_id&&(kind!=='peace'||s.relation.includes('war')));
   host.innerHTML=`<form class="stack"><label class="field"><span>Государство</span><select name="to_state_id">${targets.map(s=>`<option value="${s.id}">${escape(s.name)}</option>`).join('')}</select></label>${kind==='war'?`<label class="field"><span>Casus Belli</span><select name="casus_belli">${casusBelli.map(x=>`<option>${escape(x)}</option>`).join('')}</select></label>`:''}${kind==='peace'||kind==='passage'?`<label class="field"><span>${kind==='peace'?'Условия мира':'Условия прохода'}</span><textarea name="terms" ${kind==='peace'?'required':''} rows="4"></textarea></label>`:''}<p class="hint">Стоимость действия: 0 ОП. ${kind==='war'?'Война начнётся после решения администратора.':''}</p><button class="primary" type="submit" ${targets.length?'':'disabled'}>Отправить</button></form>`;

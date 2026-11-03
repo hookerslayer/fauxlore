@@ -30,7 +30,7 @@ try {
         (body.action === 'snapshot' || (url.endsWith('/military_api') && body.action === 'upkeep_snapshot')) &&
         body.target_state === snapshot.state_id && snapshot.finance_inputs) {
       const endpoint = url.slice(`${origin}/rest/v1/rpc/`.length);
-      const key = {garrison_api: 'garrison', colonization_api: 'colonization', military_api: 'military'}[endpoint];
+      const key = {colonization_api: 'colonization', military_api: 'military'}[endpoint];
       if (key && url === `${origin}/rest/v1/rpc/${endpoint}`) {
         return new Response(JSON.stringify(snapshot.finance_inputs[key]), {status: 200});
       }

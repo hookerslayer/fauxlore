@@ -13,7 +13,7 @@ let privateReads=0, mapReads=0;
 globalThis.fetch=async (_url,options)=>{
   if(String(_url).endsWith('/local_events_api'))return new Response(JSON.stringify(localProjection),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/military_api'))return new Response(JSON.stringify({upkeep_breakdown:{army:60,ports:280,garrison_by_estate:{Знать:40}}}),{status:200,headers:{'Content-Type':'application/json'}});
-  if(String(_url).endsWith('/garrison_api'))return new Response(JSON.stringify({provinces:[{sponsor:'Знать',units:[{quantity:100,upkeep:1}],fort_level:0,wall_level:0}]}),{status:200,headers:{'Content-Type':'application/json'}});
+  assert.ok(!String(_url).endsWith('/garrison_api'),'Finance must not request the unused garrison snapshot');
   if(String(_url).endsWith('/colonization_api'))return new Response(JSON.stringify({missions:[{id:1,upkeep_per_turn:1400}]}),{status:200,headers:{'Content-Type':'application/json'}});
   if(String(_url).endsWith('/projection_source_api')){
     privateReads++;
@@ -130,6 +130,8 @@ assert.equal(typeof trade.adjusted_internal_income,'number');
 assert.equal(typeof trade.market_income,'number');
 assert.equal(typeof trade.zone_income_by_estate['Корона'],'number');
 const finance=await (await call({state_id:5,view:'finance'})).json();
+assert.deepEqual(finance.indicators,{permanent_modifiers:indicatorModifiers,corruption:0},
+  'Finance reuses and returns the same server-calculated indicators');
 const expenseRows=Object.fromEntries(finance.finance.treasury_expense_rows);
 assert.equal(expenseRows['Содержание армии и флота'],60);
 assert.equal(expenseRows['Содержание портов'],280);

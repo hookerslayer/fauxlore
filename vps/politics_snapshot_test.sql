@@ -37,10 +37,14 @@ BEGIN
   ELSIF EXISTS (SELECT 1 FROM fauxlore.account_states s WHERE s.account_id=account.id
                 AND s.layer='states' AND s.state_id=target_state) THEN prefix := 'my';
   ELSE RAISE EXCEPTION 'Access denied' USING ERRCODE = '42501'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM fauxlore.state_profiles WHERE state_id=target_state) THEN
+    RAISE EXCEPTION 'Государство не найдено' USING ERRCODE = 'P0002';
+  END IF;
   RETURN jsonb_build_object(
-    'tax_rates', fauxlore.state_tax_rates_api(prefix || '/states/' || target_state || '/tax-rates', 'GET', '{}'::jsonb, NULL),
+    'tax_rates', (SELECT jsonb_build_object('prestige',s.prestige,'buckets',
+      coalesce((SELECT jsonb_object_agg(t.estate,t.balance) FROM fauxlore.state_treasuries t WHERE t.state_id=s.state_id),'{}'::jsonb))
+      FROM fauxlore.state_profiles s WHERE s.state_id=target_state),
     'agreements', fauxlore.trade_api('my/trade-agreements', 'GET', '{}'::jsonb, NULL),
-    'garrison', public.garrison_api('snapshot', target_state, NULL, '{}'::jsonb),
     'colonization', fauxlore.colonization_api('snapshot', target_state, '{}'::jsonb),
     'military', public.military_api('upkeep_snapshot', target_state, '{}'::jsonb)
   );

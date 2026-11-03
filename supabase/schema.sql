@@ -20368,3 +20368,225 @@ begin
    'assignments',coalesce((select jsonb_agg($new$);execute fn;
 end $migration$;
 notify pgrst,'reload schema';
+do $migration$
+declare
+  fn text := pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+  list_hook text := '  if action=''list'' then';
+  image_hook text := '''images'',p.images';
+  author_hook text := 'case when a.avatar_base64 is not null and a.avatar_type is not null then ''data:''||a.avatar_type||'';base64,''||a.avatar_base64 else null end';
+  comment_hook text := 'case when ca.avatar_base64 is not null and ca.avatar_type is not null then ''data:''||ca.avatar_type||'';base64,''||ca.avatar_base64 else null end';
+  media_action text := $sql$  if action='media' then
+    return (select jsonb_build_object(
+      'images',p.images,
+      'avatar',case when a.avatar_base64 is not null and a.avatar_type is not null then 'data:'||a.avatar_type||';base64,'||a.avatar_base64 else null end,
+      'comments',coalesce((select jsonb_agg(jsonb_build_object('id',c.id,'avatar',case when ca.avatar_base64 is not null and ca.avatar_type is not null then 'data:'||ca.avatar_type||';base64,'||ca.avatar_base64 else null end) order by c.created_at,c.id) from fauxlore.wall_comments c join fauxlore.accounts ca on ca.id=c.account_id where c.post_id=p.id),'[]'::jsonb))
+      from fauxlore.wall_posts p join fauxlore.accounts a on a.id=p.account_id where p.id=(payload->>'post_id')::bigint);
+  end if;
+$sql$;
+begin
+  if position(list_hook in fn)=0 or position(image_hook in fn)=0 or position(author_hook in fn)=0 or position(comment_hook in fn)=0 then raise exception 'Wall media hooks missing'; end if;
+  fn:=replace(fn,list_hook,media_action||list_hook);
+  fn:=replace(fn,image_hook,'''images'',case when payload->>''defer_media''=''true'' then ''[]''::jsonb else p.images end');
+  fn:=replace(fn,author_hook,'case when payload->>''defer_media''=''true'' and action=''list'' then null else '||author_hook||' end');
+  fn:=replace(fn,comment_hook,'case when payload->>''defer_media''=''true'' and action=''list'' then null else '||comment_hook||' end');
+  execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Reuse the authoritative loyalty calculation within one state-indicators call.
+-- Existing entry points remain unchanged for all other callers.
+do $migration$
+declare
+  fn text; old text; replacement text;
+begin
+  fn:=pg_get_functiondef('fauxlore.state_indicators_before_urbanization(integer)'::regprocedure);
+  old:='CREATE OR REPLACE FUNCTION fauxlore.state_indicators_before_urbanization(target_state integer)';
+  if position(old in fn)=0 then raise exception 'indicator base signature missing'; end if;
+  fn:=replace(fn,old,'CREATE OR REPLACE FUNCTION fauxlore.state_indicators_base_cached_loyalties(target_state integer, cached_loyalties jsonb)');
+  old:='loyalties as (select * from fauxlore.effective_estate_loyalties(target_state))';
+  replacement:='loyalties as (select * from jsonb_to_recordset(cached_loyalties) as l(name text, status text, effective_loyalty numeric, influence numeric))';
+  if position(old in fn)=0 then raise exception 'indicator base loyalty hook missing'; end if;
+  execute replace(fn,old,replacement);
+  revoke all on function fauxlore.state_indicators_base_cached_loyalties(integer,jsonb) from public,anon,authenticated;
+
+  fn:=pg_get_functiondef('fauxlore.state_permanent_modifiers_for_display(integer)'::regprocedure);
+  old:='CREATE OR REPLACE FUNCTION fauxlore.state_permanent_modifiers_for_display(target_state integer)';
+  if position(old in fn)=0 then raise exception 'indicator display signature missing'; end if;
+  fn:=replace(fn,old,'CREATE OR REPLACE FUNCTION fauxlore.state_modifiers_display_cached_loyalties(target_state integer, cached_loyalties jsonb)');
+  old:='loyalty as materialized (select * from fauxlore.effective_estate_loyalties(target_state))';
+  replacement:='loyalty as materialized (select * from jsonb_to_recordset(cached_loyalties) as l(name text, status text, effective_loyalty numeric, influence numeric))';
+  if position(old in fn)=0 then raise exception 'indicator display loyalty hook missing'; end if;
+  execute replace(fn,old,replacement);
+  revoke all on function fauxlore.state_modifiers_display_cached_loyalties(integer,jsonb) from public,anon,authenticated;
+
+  fn:=pg_get_functiondef('fauxlore.state_indicators(integer)'::regprocedure);
+  old:=E'AS $function$\nselect fauxlore.state_indicators_before_urbanization(target_state)';
+  replacement:=E'AS $function$\nwith cached_loyalties as materialized (select coalesce(jsonb_agg(to_jsonb(l)),''[]''::jsonb) value from fauxlore.effective_estate_loyalties(target_state) l)\nselect fauxlore.state_indicators_base_cached_loyalties(target_state,cache.value)';
+  if position(old in fn)=0 then raise exception 'indicator function hook missing'; end if;
+  fn:=replace(fn,old,replacement);
+  old:='fauxlore.state_permanent_modifiers_for_display(target_state)';
+  if position(old in fn)=0 then raise exception 'indicator display hook missing'; end if;
+  fn:=replace(fn,old,'fauxlore.state_modifiers_display_cached_loyalties(target_state,cache.value)');
+  old:='join fauxlore.state_profiles sp on sp.state_id=target_state';
+  if position(old in fn)=0 then raise exception 'indicator state join missing'; end if;
+  fn:=replace(fn,old,old||E'\ncross join cached_loyalties cache');
+  execute fn;
+end $migration$;
+
+
+notify pgrst,'reload schema';
+
+-- Run inside a transaction: compare the complete server map before and after.
+do $migration$
+declare fn text; old text; replacement text; kind text;
+begin
+ fn:=pg_get_functiondef('fauxlore.map_payload_unfiltered()'::regprocedure);
+ old:='with state_tax_rates as materialized';
+ if position(old in fn)=0 then raise exception 'map state cache hook missing'; end if;
+ replacement:=$sql$with state_social_rates as materialized (
+  select sp.state_id id, fauxlore.effective_social_rate(sp.state_id,'crime',sp.crime) crime,
+    fauxlore.effective_social_rate(sp.state_id,'corruption',sp.corruption) corruption
+  from fauxlore.state_profiles sp
+), state_tax_rates as materialized$sql$;
+ fn:=replace(fn,old,replacement);
+ foreach kind in array array['crime','corruption'] loop
+  old:=format('(select fauxlore.effective_social_rate(c.id,%L,sp.%s) from fauxlore.state_profiles sp where sp.state_id=c.id)',kind,kind);
+  replacement:=format('(select r.%s from state_social_rates r where r.id=c.id)',kind);
+  if (length(fn)-length(replace(fn,old,'')))/length(old)<>2 then raise exception 'map province social hook missing or ambiguous: %',kind; end if;
+  fn:=replace(fn,old,replacement);
+  old:=format('fauxlore.effective_social_rate(sp.state_id,%L,sp.%s)',kind,kind);
+  -- One occurrence is the new materialized source; replace the category consumer only.
+  if (length(fn)-length(replace(fn,old,'')))/length(old)<>2 then raise exception 'map category social hook missing or ambiguous: %',kind; end if;
+  fn:=replace(fn,old,format('coalesce((select r.%s from state_social_rates r where r.id=sp.state_id),0.2)',kind));
+  fn:=replace(fn,format('select sp.state_id id, coalesce((select r.%s from state_social_rates r where r.id=sp.state_id),0.2) %s',kind,kind),format('select sp.state_id id, fauxlore.effective_social_rate(sp.state_id,%L,sp.%s) %s',kind,kind,kind));
+  fn:=replace(fn,format('    coalesce((select r.%s from state_social_rates r where r.id=sp.state_id),0.2) %s',kind,kind),format('    fauxlore.effective_social_rate(sp.state_id,%L,sp.%s) %s',kind,kind,kind));
+ end loop;
+ execute fn;
+end $migration$;
+
+notify pgrst,'reload schema';
+
+-- Deploy the updated projection worker before this migration: older workers
+-- still request the garrison field from finance_inputs.
+do $migration$
+declare fn text; marker text; matches integer;
+begin
+ if to_regprocedure('fauxlore_vps_preview.finance_inputs(integer)') is null then return; end if;
+ fn:=pg_get_functiondef('fauxlore_vps_preview.finance_inputs(integer)'::regprocedure);
+ marker:=$old$'garrison',public.garrison_api('snapshot',target_state,NULL,'{}'::jsonb),$old$;
+ matches:=(length(fn)-length(replace(fn,marker,'')))/length(marker);
+ if matches=0 then
+  marker:=$old$'garrison', public.garrison_api('snapshot', target_state, NULL, '{}'::jsonb),$old$;
+  matches:=(length(fn)-length(replace(fn,marker,'')))/length(marker);
+ end if;
+ if matches<>1 then raise exception 'finance garrison hook missing or ambiguous'; end if;
+ execute replace(fn,marker,'');
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Keep the existing state authorization and reuse the exact snapshot expressions.
+do $migration$
+declare fn text; first_pos integer; last_pos integer; fragment text; hook text; replacement text;
+begin
+ fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+ first_pos:=position('''states'',(select coalesce(jsonb_agg' in fn);
+ last_pos:=position('''battles'',(select coalesce(jsonb_agg' in fn);
+ if first_pos=0 or last_pos<=first_pos then raise exception 'military diplomacy snapshot hooks missing'; end if;
+ fragment:=rtrim(substring(fn from first_pos for last_pos-first_pos), E' \t\r\n,');
+ if position('''diplomacy'',' in fragment)=0 then raise exception 'military diplomacy data hook missing'; end if;
+ hook:='elsif action=''upkeep_snapshot'' then';
+ if (length(fn)-length(replace(fn,hook,'')))/length(hook)<>1 then raise exception 'military action hook missing or ambiguous'; end if;
+ replacement:='elsif action=''diplomacy_snapshot'' then'||E'\n  return jsonb_build_object(''state_id'',sid,'||fragment||');'||E'\n '||hook;
+ execute replace(fn,hook,replacement);
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Reuse identical stable province and state inputs within recruitment.
+-- Apply inside a transaction so parity failure rolls back the function replacement.
+do $migration$
+declare fn text; old text; replacement text; n integer;
+begin
+ fn:=pg_get_functiondef('fauxlore.state_recruitment(integer)'::regprocedure);
+ old:='fauxlore.effective_province_control(p.id,target_state)';
+ n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ if n<>2 then raise exception 'recruitment control hook missing or ambiguous'; end if;
+ fn:=replace(fn,old,'p.cached_control');
+ old:=$old$fauxlore.group_status_effect(target_state,'race',p.race_id,'recruit')$old$;
+ n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ if n<>2 then raise exception 'recruitment race hook missing or ambiguous'; end if;
+ fn:=replace(fn,old,'p.cached_race');
+ old:=$old$fauxlore.group_status_effect(target_state,'religion',(select category_id from fauxlore.province_values where province_id=p.id and layer='religions'),'recruit')$old$;
+ n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ if n<>2 then raise exception 'recruitment religion hook missing or ambiguous'; end if;
+ fn:=replace(fn,old,'p.cached_religion');
+ old:=$old$fauxlore.effective_social_rate(target_state,'crime',sp.crime)$old$;
+ if position(old in fn)=0 then raise exception 'recruitment crime hook missing'; end if;
+ fn:=replace(fn,old,'(select crime from state_crime)');
+ old:='left join provinces p on true';
+ if position(old in fn)=0 then raise exception 'recruitment provinces hook missing'; end if;
+ fn:=replace(fn,old,'left join province_inputs p on true');
+ old:=E')\nselect jsonb_build_object(';
+ if position(old in fn)=0 then raise exception 'recruitment CTE hook missing'; end if;
+ replacement:=$sql$), province_inputs as materialized (
+  select p.*,fauxlore.effective_province_control(p.id,target_state) cached_control,
+    fauxlore.group_status_effect(target_state,'race',p.race_id,'recruit') cached_race,
+    fauxlore.group_status_effect(target_state,'religion',(select category_id from fauxlore.province_values where province_id=p.id and layer='religions'),'recruit') cached_religion
+  from provinces p
+), state_crime as materialized (
+  select fauxlore.effective_social_rate(target_state,'crime',sp.crime) crime from fauxlore.state_profiles sp where sp.state_id=target_state
+)
+select jsonb_build_object($sql$;
+ execute replace(fn,old,replacement);
+end $migration$;
+
+notify pgrst,'reload schema';
+
+-- finance_inputs is a VPS-only, already-authorized helper. The projection worker
+-- consumes only prestige and estate buckets from its tax_rates field.
+do $migration$
+declare fn text; old text; n integer;
+begin
+ if to_regprocedure('fauxlore_vps_preview.finance_inputs(integer)') is null then return; end if;
+ fn:=pg_get_functiondef('fauxlore_vps_preview.finance_inputs(integer)'::regprocedure);
+ old:=$old$'tax_rates',fauxlore.state_tax_rates_api(prefix||'/states/'||target_state||'/tax-rates','GET','{}'::jsonb,NULL)$old$;
+ n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ if n=0 then
+  old:=$old$'tax_rates', fauxlore.state_tax_rates_api(prefix || '/states/' || target_state || '/tax-rates', 'GET', '{}'::jsonb, NULL)$old$;
+  n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ end if;
+ if n<>1 then raise exception 'finance tax input hook missing or ambiguous'; end if;
+ fn:=replace(fn,old,$new$'tax_rates',(select jsonb_build_object('prestige',s.prestige,'buckets',coalesce((select jsonb_object_agg(t.estate,t.balance) from fauxlore.state_treasuries t where t.state_id=s.state_id),'{}'::jsonb)) from fauxlore.state_profiles s where s.state_id=target_state)$new$);
+ old:='  RETURN jsonb_build_object(';
+ if (length(fn)-length(replace(fn,old,'')))/length(old)<>1 then raise exception 'finance tax validation hook missing or ambiguous'; end if;
+ fn:=replace(fn,old,$new$  IF NOT EXISTS (SELECT 1 FROM fauxlore.state_profiles WHERE state_id=target_state) THEN
+    RAISE EXCEPTION 'Государство не найдено' USING ERRCODE='P0002';
+  END IF;
+  RETURN jsonb_build_object($new$);
+ execute fn;
+end $migration$;
+notify pgrst,'reload schema';
+
+-- Reuse exactly the same stable province-control and crime inputs.
+-- Run in a transaction so the parity check can roll back the replacement.
+
+do $migration$
+declare fn text; old text; replacement text; n integer;
+begin
+ fn:=pg_get_functiondef('fauxlore.province_value_for_state(integer,integer)'::regprocedure);
+ old:='share numeric:=0; control_value numeric; population numeric;';
+ if position(old in fn)=0 then raise exception 'province value declaration hook missing'; end if;
+ fn:=replace(fn,old,'share numeric:=0; control_value numeric; control_percent numeric; population numeric;');
+ old:='control_value:=fauxlore.effective_province_control(p.id,target_state)::numeric/100;';
+ if position(old in fn)=0 then raise exception 'province value control calculation hook missing'; end if;
+ fn:=replace(fn,old,'control_percent:=fauxlore.effective_province_control(p.id,target_state)::numeric; control_value:=control_percent/100;');
+ old:='greatest(0,least(100,fauxlore.effective_province_control(p.id,target_state)))';
+ if position(old in fn)=0 then raise exception 'province value control use hook missing'; end if;
+ fn:=replace(fn,old,'greatest(0,least(100,control_percent))');
+ old:=$old$coalesce((select fauxlore.effective_social_rate(target_state,'crime',crime) from fauxlore.state_profiles where state_id=target_state),.2)$old$;
+ n:=(length(fn)-length(replace(fn,old,'')))/length(old);
+ if n<>1 then raise exception 'province value crime hook missing or ambiguous'; end if;
+ replacement:=$new$case when owner_state=target_state then crime_rate else coalesce((select fauxlore.effective_social_rate(target_state,'crime',crime) from fauxlore.state_profiles where state_id=target_state),.2) end$new$;
+ execute replace(fn,old,replacement);
+end $migration$;
+
+notify pgrst,'reload schema';

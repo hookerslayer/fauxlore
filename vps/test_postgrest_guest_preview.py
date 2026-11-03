@@ -30,3 +30,13 @@ class GuestPreviewTests(TestCase):
             request = upstream.call_args.args[0]
             assert request.get_header('Cookie') is None
             assert request.get_header('Authorization') is None
+
+    def test_wall_media_is_allowed_for_guest_preview(self):
+        with patch('postgrest_guest_preview.urlopen') as upstream:
+            response = upstream.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{}'
+            result = self.client.post('/api/rpc/wall_api',
+                json={'action': 'media', 'payload': {'post_id': 1}})
+            assert result.status_code == 200
+            assert upstream.call_count == 1

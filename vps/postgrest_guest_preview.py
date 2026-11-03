@@ -20,7 +20,7 @@ async def guest_rpc(request: Request, name: str):
     elif name == 'map_revision_api':
         allowed = data == {}
     elif name == 'wall_api':
-        allowed = (set(data) <= {'action', 'payload'} and data.get('action') in ('settings', 'filters', 'list') and
+        allowed = (set(data) <= {'action', 'payload'} and data.get('action') in ('settings', 'filters', 'list', 'media') and
                    isinstance(data.get('payload', {}), dict))
     else:
         allowed = False

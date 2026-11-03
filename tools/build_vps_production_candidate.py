@@ -2,7 +2,7 @@
 import shutil
 from pathlib import Path
 
-from build_supabase_site import PUBLIC
+from build_supabase_site import PUBLIC, public_source
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / '.local' / 'fauxlore-production-candidate'
@@ -16,7 +16,7 @@ def main():
     for name in PUBLIC:
         destination = TARGET / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / name, destination)
+        shutil.copy2(public_source(name), destination)
     for name in ('assets', 'map-data/tiles'):
         shutil.copytree(ROOT / name, TARGET / name)
     shutil.copy2(ROOT / 'map-data/province-adjacency.json', TARGET / 'map-data/province-adjacency.json')

@@ -42,10 +42,23 @@ class SessionStoreTests(unittest.TestCase):
         self.store.revoke('invalid')
         self.connection.execute.assert_not_called()
 
+    def test_touch_extends_only_valid_token_and_uses_configured_idle_ttl(self):
+        token = self.store.create(self.user_id)
+        self.connection.reset_mock()
+        self.connection.execute.return_value.fetchone.return_value = (True,)
+        self.connection.execute.side_effect = None
+        self.assertTrue(self.store.touch(token))
+        sql, params = self.connection.execute.call_args.args
+        self.assertIn('fauxlore_vps_preview.renew_session', sql)
+        self.assertEqual(params, (hashlib.sha256(token.encode('ascii')).digest(), 43200))
+        self.connection.reset_mock()
+        self.assertFalse(self.store.touch('invalid'))
+        self.connection.execute.assert_not_called()
+
     def test_rejects_unverified_uuid_type_and_bad_lifetime(self):
         with self.assertRaises(ValueError):
             self.store.create(str(self.user_id))
-        for ttl in (0, -1, 86401, True):
+        for ttl in (0, -1, 43201, True):
             with self.assertRaises(ValueError):
                 SessionStore(self.connection, ttl)
         self.connection.execute.assert_not_called()

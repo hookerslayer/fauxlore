@@ -80,6 +80,20 @@ class AuthRouterTests(unittest.TestCase):
         self.assertIn('Max-Age=0', response.headers['set-cookie'])
         store_class.return_value.revoke.assert_called_once()
 
+    @patch('auth_router.SessionStore')
+    def test_authenticated_session_status_renews_cookie(self, store_class):
+        token = 'x' * 43
+        self.client.cookies.set(auth_router.SESSION_COOKIE, token)
+        store_class.return_value.resolve.return_value = uuid4()
+        store_class.return_value.touch.return_value = True
+        response = self.client.get('/auth/session')
+        self.assertEqual(response.json(), {'authenticated': True})
+        self.assertIn(f'{auth_router.SESSION_COOKIE}={token}', response.headers['set-cookie'])
+        self.assertIn('Max-Age=43200', response.headers['set-cookie'])
+        self.assertIn('HttpOnly', response.headers['set-cookie'])
+        store_class.return_value.resolve.assert_called_once_with(token)
+        store_class.return_value.touch.assert_called_once_with(token)
+
     @patch('auth_router.complete_google_callback')
     def test_cancelled_google_login_does_not_exchange_or_create_session(self, complete):
         state = self.start()
@@ -110,6 +124,8 @@ class AuthRouterTests(unittest.TestCase):
             elif 'resolve_session' in query:
                 match = sessions.get(params[0])
                 result.fetchone.return_value = (match,) if match else None
+            elif 'renew_session' in query:
+                result.fetchone.return_value = (params[0] in sessions,)
             elif 'DELETE FROM fauxlore_vps_preview.sessions' in query:
                 sessions.pop(params[0], None)
             else:

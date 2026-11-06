@@ -10,8 +10,8 @@ DO $$ DECLARE uid uuid; subject text; BEGIN
   IF uid IS NULL THEN RAISE EXCEPTION 'Missing linked user fixture'; END IF;
   PERFORM set_config('test.session_user',uid::text,true);
   PERFORM set_config('test.session_subject',subject,true);
-  INSERT INTO fauxlore_vps_preview.sessions(token_hash,auth_user_id,expires_at)
-    VALUES (decode(repeat('ab',32),'hex'),uid,now()+interval '1 hour');
+  INSERT INTO fauxlore_vps_preview.sessions(token_hash,auth_user_id,created_at,expires_at)
+    VALUES (decode(repeat('ab',32),'hex'),uid,now(),now()+interval '1 hour');
 END $$;
 SET LOCAL ROLE fauxlore_auth;
 DO $$ BEGIN

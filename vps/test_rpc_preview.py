@@ -25,6 +25,8 @@ class RpcPreviewTests(unittest.TestCase):
             result = Mock()
             if 'resolve_session' in sql:
                 result.fetchone.return_value = (self.user_id,)
+            elif 'renew_session' in sql:
+                result.fetchone.return_value = (True,)
             elif 'public.fauxlore_api' in sql:
                 if params[0] == 'admin/states':
                     raise psycopg.errors.InsufficientPrivilege('denied')

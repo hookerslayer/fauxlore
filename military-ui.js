@@ -1,5 +1,5 @@
-import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=local-events-20261031';
-import {renderGarrisonPanel} from './garrison-ui.js?v=state-costs-20261101';
+import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=login-fallback-20261107';
+import {renderGarrisonPanel} from './garrison-ui.js?v=login-fallback-20261107';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=value=>Math.floor(Number(value)||0).toLocaleString('ru-RU');
@@ -24,7 +24,8 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
   const openFormationId=host.querySelector('.military-formation-dialog[open]')?.dataset.formationDialog;
   if(!alreadyRendered)host.innerHTML='<p class="hint">Загружаю военное дело…</p>';
   try{
-    const [data,militia,garrisons]=await Promise.all([militaryApi('snapshot',stateId),militiaApi('snapshot',stateId),garrisonApi('snapshot',stateId)]);
+    const withMilitia=activeMilitaryTab==='Ополчение';
+    const [data,militia,garrisons]=await Promise.all([militaryApi('snapshot',stateId),withMilitia?militiaApi('snapshot',stateId):Promise.resolve({call:null,preview:{total:0},turn:0}),garrisonApi('snapshot',stateId)]);
     if(!host.isConnected)return;
     const refresh=()=>renderMilitaryPanel(host,{stateId,notify,onMapChange});
     const tabs=['Обзор','Армии и флот','Гарнизоны','Ополчение','Наёмники','Полководцы','Каталог'];
@@ -167,7 +168,7 @@ export async function renderMilitaryPanel(host,{stateId,notify,onMapChange}={}){
       });
       host.querySelectorAll('[data-allocate-leader]').forEach(form=>form.onsubmit=event=>{event.preventDefault();const allocation=Object.fromEntries([...new FormData(form)].map(([name,value])=>[name,Number(value)]));void run(host,'allocate_leader',stateId,{leader_id:Number(form.dataset.allocateLeader),allocation},notify,refresh);});
     }
-    host.querySelectorAll('[data-military-tab]').forEach(button=>button.onclick=()=>{activeMilitaryTab=button.dataset.militaryTab;void refresh();});
+    host.querySelectorAll('[data-military-tab]').forEach(button=>button.onclick=()=>{if(button.dataset.militaryTab===activeMilitaryTab)return;activeMilitaryTab=button.dataset.militaryTab;const content=host.querySelector('.state-menu > .stack');if(content)content.innerHTML='<p class="hint" role="status">Загружаю раздел…</p>';host.querySelectorAll('[data-military-tab]').forEach(tab=>{const active=tab===button;tab.classList.toggle('active',active);if(active)tab.setAttribute('aria-current','page');else tab.removeAttribute('aria-current');});void refresh();});
     host.querySelectorAll('[data-hire-mercenary]').forEach(button=>button.onclick=()=>void run(host,'hire_mercenary',stateId,{group_id:Number(button.dataset.hireMercenary)},notify,refresh));
     host.querySelector('[data-hire-leader]')?.addEventListener('submit',event=>{event.preventDefault();void run(host,'hire_leader',stateId,Object.fromEntries(new FormData(event.currentTarget)),notify,refresh);});
     if(openFormationId){

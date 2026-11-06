@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from auth_router import SESSION_COOKIE
 from province_projection import PROJECTION_SLOTS, build_province_snapshot, build_state_snapshot, run_province_worker
-from session_store import SessionStore
+from session_store import DEFAULT_TTL, SessionStore
 
 _ORIGIN = 'https://sixiemeterre.ru'
 PROJECTION_WAIT_SECONDS = 20
@@ -119,13 +119,23 @@ def create_rpc_router(*, connection_factory):
                                            (' READ ONLY' if read_only else ''))
                     elif read_only:
                         connection.execute('SET TRANSACTION READ ONLY')
-                    user_id = SessionStore(connection).resolve(request.cookies.get(SESSION_COOKIE))
+                    session_token = request.cookies.get(SESSION_COOKIE)
+                    store = SessionStore(connection)
+                    user_id = store.resolve(session_token)
                     if user_id is None:
+                        raise HTTPException(status_code=401, detail='Authentication required')
+                    # renew_session is an UPDATE and conflicts with the REPEATABLE
+                    # READ transaction used by projections (SerializationFailure).
+                    # Projection requests only validate the session; /auth/session
+                    # and the PostgREST bridge perform the renewal.
+                    renewed = True
+                    if not renewed:
                         raise HTTPException(status_code=401, detail='Authentication required')
                     # The identity comes only from a server-side, unexpired session.
                     connection.execute('SET LOCAL ROLE authenticated')
                     connection.execute("SELECT set_config('request.jwt.claim.sub', %s, true)", (str(user_id),))
-                    return operation(connection)
+                    result = operation(connection)
+                    return result
         except psycopg.errors.InsufficientPrivilege as exc:
             raise HTTPException(status_code=403, detail='Access denied') from exc
         except psycopg.errors.NoDataFound as exc:

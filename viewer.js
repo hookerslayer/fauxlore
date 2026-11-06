@@ -1,7 +1,7 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=player-state-finance-20261103';
-import {localEventsApi} from './supabase-api.js?v=local-events-20261031';
-import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=event-popover-20261031';
-import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=local-events-20261031';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=login-fallback-20261107';
+import {localEventsApi} from './supabase-api.js?v=login-fallback-20261107';
+import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=login-fallback-20261107';
+import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=login-fallback-20261107';
 import {isOlderMapRevision,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.
@@ -543,7 +543,7 @@ function drawLabels() {
 function pickMilitary(x,y){
   if(activeSettings.layer!=='military')return null;
   const hits=militaryHitTargets.filter(hit=>x>=hit.left&&x<=hit.right&&y>=hit.top&&y<=hit.bottom);
-  return hits.sort((a,b)=>Math.hypot(x-a.x,y-a.y)-Math.hypot(x-b.x,y-b.y))[0]||null;
+  return hits.sort((a,b)=>Math.hypot(x-a.x,y-a.y)-Math.hypot(x-b.x,y-b.y));
 }
 function pickConstruction(x,y){
   for(let i=constructionHitTargets.length-1;i>=0;i--){const hit=constructionHitTargets[i];if(x>=hit.left&&x<=hit.right&&y>=hit.top&&y<=hit.bottom)return hit;}
@@ -648,10 +648,11 @@ function mapClick(x,y){
   if(eventHit){showLocalEvent(eventHit.event,{x:eventHit.x,y:eventHit.y});selectedLocalEventId=String(eventHit.event.id);return;}
   closeLocalEvent();
   const militaryHit=pickMilitary(x,y);
-  if(militaryHit){
+  if(militaryHit?.length){
     selectedMarkerPopup=null;
     window.dispatchEvent(new Event('map:close-marker-popup'));
-    window.dispatchEvent(new CustomEvent('map:military-selected',{detail:{...militaryHit.item,screenX:x,screenY:y}}));
+    if(militaryHit.length===1)window.dispatchEvent(new CustomEvent('map:military-selected',{detail:{...militaryHit[0].item,screenX:x,screenY:y}}));
+    else window.dispatchEvent(new CustomEvent('map:military-choose',{detail:{items:militaryHit.map(hit=>hit.item),screenX:x,screenY:y}}));
     return;
   }
   const marker=pickMarker(x,y);

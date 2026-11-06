@@ -20590,3 +20590,115 @@ begin
 end $migration$;
 
 notify pgrst,'reload schema';
+-- Only expose ports that pass the same ownership check as naval recruitment.
+do $migration$
+declare fn text; old_fragment text; new_fragment text;
+begin
+  fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  old_fragment:=$old$'port',exists(select 1 from fauxlore.map_markers m where m.province_id=p.id and m.type='port')$old$;
+  new_fragment:=$new$'port',exists(select 1 from fauxlore.map_markers m join fauxlore.map_adjacency a on a.singleton join lateral jsonb_array_elements_text(a.neighbors->m.province_id::text) n(value) on true join fauxlore.province_values v on v.province_id=n.value::integer and v.layer='states' and v.category_id=sid where m.province_id=p.id and m.type='port')$new$;
+  if position(old_fragment in fn)=0 then raise exception 'Military snapshot port expression changed'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end
+$migration$;
+
+-- Event listing is public; write actions still require an authorized account.
+grant execute on function public.local_events_api(text,jsonb) to anon;
+
+-- Local candidates come from inhabited owned provinces and compatible races.
+do $migration$
+declare fn text; old_fragment text; new_fragment text;
+begin
+  fn:=pg_get_functiondef('fauxlore.character_lifecycle_api(text,text,jsonb,uuid)'::regprocedure);
+  old_fragment:=$old$candidate_race:=race_values[1+floor(random()*cardinality(race_values))::integer];
+        select id into candidate_religion from fauxlore.map_categories where layer='religions' order by random() limit 1;$old$;
+  new_fragment:=$new$select race.category_id,faith.category_id into candidate_race,candidate_religion
+        from fauxlore.province_values owner
+        join fauxlore.provinces p on p.id=owner.province_id and p.kind='land' and p.population>0
+        join fauxlore.province_values race on race.province_id=p.id and race.layer='races' and race.category_id=any(race_values)
+        join fauxlore.province_values faith on faith.province_id=p.id and faith.layer='religions'
+        where owner.layer='states' and owner.category_id=state_value
+        order by -ln(greatest(random(),0.000000000001))/p.population limit 1;
+        if not found then raise sqlstate '22023' using message='Нет населённой провинции с совместимой расой и указанной религией для поиска местного супруга'; end if;$new$;
+  if position(old_fragment in fn)=0 then raise exception 'Local marriage candidate generation changed'; end if;
+  execute replace(fn,old_fragment,new_fragment);
+end
+$migration$;
+-- Public player contacts are optional and edited only by their owner.
+alter table fauxlore.accounts add column if not exists telegram_url text;
+alter table fauxlore.accounts add column if not exists vk_url text;
+create or replace function public.player_contacts_api(action text, target_state integer default null, payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; telegram text; vk text;
+begin
+  actor:=fauxlore.current_account();
+  if action='own' then
+    return jsonb_build_object('telegram_url',actor.telegram_url,'vk_url',actor.vk_url);
+  elsif action='save' then
+    if jsonb_typeof(payload) is distinct from 'object' or exists(select 1 from jsonb_object_keys(payload) k where k not in ('telegram_url','vk_url')) then
+      raise sqlstate '22023' using message='Неверные поля контактов'; end if;
+    telegram:=nullif(btrim(coalesce(payload->>'telegram_url','')),'');
+    vk:=nullif(btrim(coalesce(payload->>'vk_url','')),'');
+    if (telegram is not null and (length(telegram)>200 or telegram !~* '^https://(t\.me|telegram\.me)/[a-z0-9_]{1,64}/?$'))
+       or (vk is not null and (length(vk)>200 or vk !~* '^https://(www\.)?vk\.com/[a-z0-9_.]{1,100}/?$')) then
+      raise sqlstate '22023' using message='Укажите ссылку https://t.me/... или https://vk.com/...'; end if;
+    update fauxlore.accounts set telegram_url=telegram,vk_url=vk where id=actor.id;
+    return jsonb_build_object('ok',true);
+  elsif action='state' then
+    if target_state is null then raise sqlstate '22023' using message='Выберите государство'; end if;
+    return coalesce((select jsonb_agg(jsonb_build_object('id',a.id,'nickname',a.nickname,'telegram_url',a.telegram_url,'vk_url',a.vk_url) order by a.nickname,a.id)
+      from fauxlore.account_states s join fauxlore.accounts a on a.id=s.account_id
+      where s.layer='states' and s.state_id=target_state and a.role<>'admin'),'[]'::jsonb);
+  end if;
+  raise sqlstate '22023' using message='Неизвестное действие';
+end $function$;
+revoke all on function public.player_contacts_api(text,integer,jsonb) from public,anon;
+grant execute on function public.player_contacts_api(text,integer,jsonb) to authenticated;
+
+alter table fauxlore.wall_posts drop constraint wall_posts_body_check;
+alter table fauxlore.wall_posts add constraint wall_posts_body_check check (length(body) between 1 and 30000);
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.wall_api(text,jsonb)'::regprocedure);
+ marker:=$old$'id',p.id,'can_verdict'$old$; replacement:=$new$'id',p.id,'can_edit',coalesce(actor.role='admin' and p.account_id=actor.id,false),'can_verdict'$new$;
+ if position(marker in fn)=0 then raise exception 'Wall post list hook missing'; end if; fn:=replace(fn,marker,replacement);
+ marker:=$old$'id',c.id,'body',c.body,'created_at'$old$; replacement:=$new$'id',c.id,'can_edit',coalesce(actor.role='admin' and c.account_id=actor.id,false),'body',c.body,'created_at'$new$;
+ if position(marker in fn)=0 then raise exception 'Wall comment list hook missing'; end if; fn:=replace(fn,marker,replacement);
+ marker:=$old$if length(body_value) not between 1500 and 30000 then raise sqlstate '22023' using message='Пост должен содержать от 1500 до 30000 символов'; end if;$old$;
+ replacement:=$new$if length(body_value)>30000 or length(body_value)<(case when actor.role='admin' then 1 else 1500 end) then raise sqlstate '22023' using message=(case when actor.role='admin' then 'Пост должен содержать от 1 до 30000 символов' else 'Пост должен содержать от 1500 до 30000 символов' end); end if;$new$;
+ if position(marker in fn)=0 then raise exception 'Wall length hook missing'; end if; fn:=replace(fn,marker,replacement);
+ marker:=$old$  if action='delete' then$old$;
+ replacement:=$new$  if action in ('edit_post','edit_comment') then
+    if actor.role<>'admin' then raise sqlstate '42501' using message='Нужна роль администратора'; end if;
+    if action='edit_post' then
+      body_value:=case when payload ? 'rich_body' then fauxlore.wall_document_text(payload->'rich_body') else btrim(coalesce(payload->>'body','')) end;
+      if length(body_value) not between 1 and 30000 then raise sqlstate '22023' using message='Пост должен содержать от 1 до 30000 символов'; end if;
+      update fauxlore.wall_posts set body=body_value,rich_body=case when payload ? 'rich_body' then payload->'rich_body' else null end where id=(payload->>'post_id')::bigint and account_id=actor.id;
+    else
+      body_value:=btrim(coalesce(payload->>'body',''));
+      if length(body_value) not between 1 and 3000 then raise sqlstate '22023' using message='Комментарий должен содержать от 1 до 3000 символов'; end if;
+      update fauxlore.wall_comments set body=body_value where id=(payload->>'comment_id')::bigint and account_id=actor.id;
+    end if;
+    if not found then raise sqlstate '42501' using message='Можно редактировать только свои записи'; end if;
+    return jsonb_build_object('updated',true);
+  end if;
+  if action='delete' then$new$;
+ if position(marker in fn)=0 then raise exception 'Wall edit hook missing'; end if; execute replace(fn,marker,replacement);
+end
+$migration$;
+
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+ fn:=pg_get_functiondef('fauxlore.colonization_api(text,integer,jsonb)'::regprocedure);
+ marker:=$old$select ac.id from fauxlore.accounts ac where ac.role='admin'$old$;
+ replacement:=$new$select ac.id from fauxlore.accounts ac where ac.role='admin' and final_value<40 and roll_value between 0 and 10$new$;
+ if position(marker in fn)=0 then raise exception 'Colonization notification recipient hook missing'; end if;
+ fn:=replace(fn,marker,replacement);
+ marker:=$old$where ast.layer='states' and ast.state_id=state_key$old$;
+ replacement:=$new$where ast.layer='states' and ast.state_id=state_key and (not exists(select 1 from fauxlore.accounts owner_account where owner_account.id=ast.account_id and owner_account.role='admin') or (final_value<40 and roll_value between 0 and 10))$new$;
+ if position(marker in fn)=0 then raise exception 'Colonization owner recipient hook missing'; end if;
+ execute replace(fn,marker,replacement);
+end
+$migration$;

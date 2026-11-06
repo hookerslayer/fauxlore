@@ -793,3 +793,73 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .wall-toolbar{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.wall-toolbar button{min-height:36px;padding:5px 9px}.wall-editor{min-height:200px;max-height:60vh;overflow:auto;padding:10px;border:1px solid #656c5c;border-radius:4px;background:#111410;line-height:1.5;overflow-wrap:anywhere}.wall-editor:focus{outline:2px solid #dfbf62;outline-offset:2px}.wall-editor:empty:before{content:attr(data-placeholder);color:#aeb7af;pointer-events:none}.wall-editor p,.wall-text p{margin:0 0 .6em}.wall-editor h2,.wall-editor h3,.wall-text h2,.wall-text h3{margin:.7em 0 .35em}.wall-editor ul,.wall-editor ol,.wall-text ul,.wall-text ol{padding-left:1.7em;margin:.5em 0}.wall-text:has(p),.wall-text:has(h2),.wall-text:has(h3),.wall-text:has(ul),.wall-text:has(ol){white-space:normal}
 
 .wall-filter{display:grid;gap:6px;max-width:100%}.wall-filter select{width:100%;max-width:420px;min-height:40px}
+
+.wall-author{flex-wrap:wrap}.wall-post-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.wall-author .badge{margin-left:auto}.wall-delete{position:static;width:auto;padding:5px 9px}.wall-comment [data-edit-comment]{justify-self:start}
+
+.profile-header-layout{display:grid;grid-template-columns:minmax(240px,1fr) minmax(260px,360px);align-items:start;gap:16px;max-width:960px}
+/* Economy sub-tabs and overview */
+.economy-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--ui-border-subtle);margin:0 0 16px}
+.economy-tabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;color:var(--ui-muted);font:inherit;padding:9px 12px;cursor:pointer;white-space:nowrap}
+.economy-tabs button:hover{color:var(--ui-text)}
+.economy-tabs button.active{color:var(--ui-text);border-bottom-color:var(--ui-accent)}
+.economy-panel{display:grid;gap:16px}
+.economy-panel[hidden]{display:none}
+.economy-overview{display:grid;gap:16px}
+.economy-kpi{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.economy-kpi-card{display:grid;gap:4px;padding:14px 16px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-raised)}
+.economy-kpi-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ui-muted)}
+.economy-kpi-value{font-size:26px;line-height:1.15;font-variant-numeric:tabular-nums}
+.economy-kpi-delta{font-size:12px;color:var(--ui-muted)}
+.economy-kpi-card small{color:var(--ui-muted);font-size:11px}
+.economy-overview-grid2{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
+.economy-flows-grid{display:grid;gap:16px}
+.economy-flows-head{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.economy-flows-row{display:flex;gap:16px;align-items:stretch}
+.economy-flows-row>.application-panel{flex:1 1 0;min-width:0;align-self:stretch}
+.economy-flows-grid h4{margin:0}
+.economy-bars{display:grid;gap:10px}
+.economy-bar-row{display:grid;grid-template-columns:150px minmax(60px,1fr) 96px;align-items:center;gap:10px;font-size:12px}
+.economy-bar-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.economy-bar{height:8px;border-radius:4px;background:var(--ui-border-subtle);overflow:hidden}
+.economy-bar i{display:block;height:100%;border-radius:4px;background:var(--bar-tone,var(--ui-positive))}
+.economy-bar-value{text-align:right;font-variant-numeric:tabular-nums}
+.economy-estate-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.economy-estate-card{display:grid;gap:8px;padding:14px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-raised)}
+.economy-estate-card header{display:flex;justify-content:space-between;gap:8px}
+.economy-estate-card header span{color:var(--ui-muted);font-variant-numeric:tabular-nums}
+.economy-loyalty{display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:8px;font-size:12px;color:var(--ui-muted)}
+.economy-loyalty-track{height:6px;border-radius:3px;background:var(--ui-border-subtle);overflow:hidden}
+.economy-loyalty-track i{display:block;height:100%;background:var(--ui-positive)}
+.economy-estate-actions{display:flex;gap:8px;flex-wrap:wrap}
+.economy-estate-actions button{min-height:32px;padding:6px 12px;border:1px solid var(--ui-border);border-radius:7px;background:transparent;color:var(--ui-text);font:inherit;font-size:12px;cursor:pointer}
+.economy-estate-actions button:hover{background:var(--ui-surface-hover)}
+.economy-zero-note{margin:0}
+.economy-books{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:stretch}
+.economy-book{display:flex;flex-direction:column;min-height:230px;min-width:0;background:var(--ui-bg);border:1px solid var(--ui-border);border-radius:var(--ui-radius);padding:12px 14px}
+.economy-book>header{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.economy-book h3{font-size:14px;margin:0}
+.economy-book .sum{font-weight:700;font-variant-numeric:tabular-nums;font-size:13px}
+.economy-book-head,.economy-book-row{display:grid;grid-template-columns:minmax(0,1fr) 84px 84px 44px;gap:10px;align-items:center}
+.economy-book-head{padding-bottom:6px;border-bottom:1px solid var(--ui-border-subtle);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ui-muted)}
+.economy-book-head span:nth-child(3),.economy-book-head span:nth-child(4){text-align:right}
+.economy-book-row{height:34px;border-bottom:1px solid rgba(57,64,55,.45);font-size:12px}
+.economy-book-row:last-child{border-bottom:0}
+.economy-book-row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.economy-book-row .bar{height:6px;border-radius:3px;background:var(--ui-border-subtle);overflow:hidden}
+.economy-book-row .bar i{display:block;height:100%;border-radius:3px;background:var(--bar-tone,var(--ui-positive))}
+.economy-book-row .num,.economy-book-row .pct{text-align:right;font-variant-numeric:tabular-nums}
+.economy-book-row .pct{color:var(--ui-muted);font-size:11px}
+.economy-book footer{display:flex;justify-content:space-between;align-items:baseline;margin-top:auto;padding-top:8px;border-top:1px solid var(--ui-border);font-weight:700}
+.economy-book footer strong{font-variant-numeric:tabular-nums}
+.economy-fold{background:var(--ui-bg);border:1px solid var(--ui-border);border-radius:var(--ui-radius);margin-top:12px;overflow:hidden}
+.economy-fold>summary{cursor:pointer;padding:11px 14px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline;gap:12px;list-style:none}
+.economy-fold>summary::-webkit-details-marker{display:none}
+.economy-fold>summary .hint{font-weight:400;font-size:12px;color:var(--ui-muted)}
+.economy-fold>summary::after{content:'▾';color:var(--ui-muted)}
+.economy-fold[open]>summary::after{content:'▴'}
+.economy-fold-body{padding:0 14px 14px}
+.economy-estates-table td,.economy-estates-table th{font-size:12px}
+@media (max-width:900px){.economy-books{grid-template-columns:1fr}}
+@media (max-width:760px){.economy-book-row{grid-template-columns:minmax(0,1fr) 60px 72px 40px}.economy-book-head{display:none}}
+@media (max-width:1000px){.economy-kpi{grid-template-columns:repeat(2,minmax(0,1fr))}.economy-overview-grid2{grid-template-columns:1fr}.economy-flows-row{flex-direction:column}.economy-flows-head{display:none}}
+@media (max-width:620px){.economy-kpi{grid-template-columns:1fr}.economy-estate-cards{grid-template-columns:1fr}.economy-bar-row{grid-template-columns:110px 1fr 82px}}.profile-identity{min-width:0}.profile-contacts{margin:0;padding:12px}.profile-contacts h3{margin:0 0 8px}.profile-contacts-form{display:grid;grid-template-columns:1fr 1fr;gap:8px}.profile-contacts-form .field{gap:3px;min-width:0}.profile-contacts-form input{min-width:0}.profile-contacts-form button{justify-self:start}.profile-contacts-form .form-message{grid-column:1/-1;margin:0}.profile-contacts-form .form-message:empty{display:none}@media(max-width:700px){.profile-header-layout{grid-template-columns:1fr;gap:10px}.profile-contacts-form{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:400px){.profile-contacts-form{grid-template-columns:1fr}}

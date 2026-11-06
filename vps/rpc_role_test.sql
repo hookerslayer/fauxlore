@@ -15,4 +15,5 @@ GRANT CONNECT ON DATABASE fauxlore_restore_filtered TO fauxlore_rpc;
 GRANT authenticated TO fauxlore_rpc;
 GRANT USAGE ON SCHEMA fauxlore_vps_preview TO fauxlore_rpc;
 GRANT EXECUTE ON FUNCTION fauxlore_vps_preview.resolve_session(bytea) TO fauxlore_rpc;
+GRANT EXECUTE ON FUNCTION fauxlore_vps_preview.renew_session(bytea,integer) TO fauxlore_rpc;
 COMMIT;

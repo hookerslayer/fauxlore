@@ -13,7 +13,7 @@ async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;
     if (config?.backend === 'vps-postgrest') {
-      const {createPostgrestClient} = await import('./vps-postgrest-client.js');
+      const {createPostgrestClient} = await import('./vps-postgrest-client.js?v=player-contacts-20261105');
       return createPostgrestClient();
     }
     if (config?.backend === 'vps-preview') {
@@ -85,6 +85,13 @@ export function supabaseApi(path, options = {}) {
   if ((options.method || 'GET') !== 'GET') return request(path, options);
   if (!inflight.has(path)) inflight.set(path, request(path, options).finally(() => inflight.delete(path)));
   return inflight.get(path);
+}
+
+export async function playerContactsApi(action, stateId=null, payload={}) {
+  const db=await client();
+  const {data,error}=await db.rpc('player_contacts_api',{action,target_state:stateId,payload});
+  if(error)throw new Error(error.message||'Не удалось загрузить контакты');
+  return data;
 }
 
 export async function militaryApi(action, stateId, payload = {}) {
@@ -346,7 +353,15 @@ export async function loadSupabaseInitialMap() {
 
 export async function supabaseLogin() {
   const popup = window.open('about:blank', 'fauxlore-supabase-login', 'popup,width=520,height=680');
-  if (!popup) throw new Error('Разрешите всплывающее окно для входа через Google');
+  if (!popup) {
+    // Embedded browsers and strict popup blockers cannot open the OAuth window.
+    // Fall back to a full-page redirect; /auth/complete returns to the game.
+    if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {
+      window.location.assign('/auth/google/start');
+      return new Promise(() => {});
+    }
+    throw new Error('Разрешите всплывающее окно для входа через Google');
+  }
   let cleanup = () => {};
   try {
     if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {

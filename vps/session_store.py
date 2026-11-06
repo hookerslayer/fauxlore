@@ -6,7 +6,8 @@ import secrets
 from uuid import UUID
 
 _TOKEN_PATTERN = re.compile(r'^[A-Za-z0-9_-]{43}$')
-_MAX_TTL = 86400
+DEFAULT_TTL = 12 * 60 * 60
+_MAX_TTL = DEFAULT_TTL
 
 
 def _token_hash(token):
@@ -18,7 +19,7 @@ def _token_hash(token):
 class SessionStore:
     """Database operations are transactional; the caller owns commit/rollback."""
 
-    def __init__(self, connection, ttl_seconds=43200):
+    def __init__(self, connection, ttl_seconds=DEFAULT_TTL):
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= _MAX_TTL:
             raise ValueError('Invalid session lifetime')
         self.connection = connection
@@ -46,6 +47,17 @@ class SessionStore:
             'SELECT fauxlore_vps_preview.resolve_session(%s)', (digest,),
         ).fetchone()
         return None if row is None else row[0]
+
+    def touch(self, token: str):
+        """Extend a valid session by its configured idle lifetime."""
+        digest = _token_hash(token)
+        if digest is None:
+            return False
+        row = self.connection.execute(
+            'SELECT fauxlore_vps_preview.renew_session(%s, %s)',
+            (digest, self.ttl_seconds),
+        ).fetchone()
+        return row is not None and row[0] is True
 
     def revoke(self, token: str):
         digest = _token_hash(token)

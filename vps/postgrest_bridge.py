@@ -14,9 +14,10 @@ from starlette.concurrency import run_in_threadpool
 from auth_router import SESSION_COOKIE
 from rpc_preview import bounded_json, require_same_origin
 from session_store import SessionStore
+from session_store import DEFAULT_TTL
 
 # This initial list is deliberately small while original database grants are audited.
-ALLOWED_RPC = frozenset({'fauxlore_api', 'map_revision_api', 'wall_api', 'state_journal_api', 'local_events_api',
+ALLOWED_RPC = frozenset({'fauxlore_api', 'map_revision_api', 'wall_api', 'state_journal_api', 'local_events_api', 'player_contacts_api',
                          'government_form_preview_api', 'military_api', 'colonization_api', 'militia_api',
                          'garrison_api', 'estate_investment_api', 'estate_social_api', 'estate_fiscal_api',
                          'military_map_api', 'military_order_api', 'military_split_api', 'military_transport_api',
@@ -66,7 +67,11 @@ def create_bridge(*, connection_factory, secret, transport=None, rollback_test=F
 
     def resolve(token):
         with connection_factory() as connection:
-            return SessionStore(connection).resolve(token)
+            store = SessionStore(connection)
+            user_id = store.resolve(token)
+            if user_id is not None:
+                store.touch(token)
+            return user_id
 
     @router.post('/api/rpc/{name}')
     async def call(request: Request, name: str):
@@ -83,6 +88,13 @@ def create_bridge(*, connection_factory, secret, transport=None, rollback_test=F
         status, body = await run_in_threadpool(send, name, data, token)
         if len(body) > 30_000_000:
             raise HTTPException(status_code=502, detail='Database response too large')
-        return Response(body, status_code=status, media_type='application/json', headers={'Cache-Control': 'no-store'})
+        headers = {'Cache-Control': 'no-store'}
+        if user_id:
+            from starlette.responses import Response as StarletteResponse
+            response = StarletteResponse(body, status_code=status, media_type='application/json', headers=headers)
+            response.set_cookie(SESSION_COOKIE, request.cookies.get(SESSION_COOKIE), max_age=DEFAULT_TTL,
+                                secure=True, httponly=True, samesite='lax', path='/')
+            return response
+        return Response(body, status_code=status, media_type='application/json', headers=headers)
 
     return router

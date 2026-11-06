@@ -26,8 +26,8 @@ DO $$ DECLARE digest bytea := decode(repeat('ab',32),'hex'); BEGIN
   IF fauxlore_vps_preview.lookup_google_user('nonexistent-test-subject') IS NOT NULL THEN
     RAISE EXCEPTION 'Unknown Google subject resolved';
   END IF;
-  INSERT INTO fauxlore_vps_preview.sessions(token_hash,auth_user_id,expires_at)
-  VALUES (digest,current_setting('test.user_id')::uuid,now()+interval '1 minute');
+  INSERT INTO fauxlore_vps_preview.sessions(token_hash,auth_user_id,created_at,expires_at)
+  VALUES (digest,current_setting('test.user_id')::uuid,now(),now()+interval '1 minute');
   IF fauxlore_vps_preview.resolve_session(digest) IS DISTINCT FROM current_setting('test.user_id')::uuid THEN
     RAISE EXCEPTION 'Session did not resolve';
   END IF;

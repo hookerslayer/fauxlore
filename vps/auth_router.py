@@ -10,13 +10,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from google_callback import complete_google_callback
 from google_identity import IdentityError
 from oauth_flow import OAuthFlowError
-from session_store import SessionStore
+from session_store import DEFAULT_TTL, SessionStore
 
 OAUTH_COOKIE = '__Host-fauxlore_oauth'
 SESSION_COOKIE = '__Host-fauxlore_session'
-_COMPLETION_SCRIPT = ("if (window.opener) window.opener.postMessage({type:'fauxlore:vps-oauth',"
-                      "success:new URLSearchParams(location.search).get('status')==='ok'},location.origin);"
-                      "window.close();")
+_COMPLETION_SCRIPT = ("const ok=new URLSearchParams(location.search).get('status')==='ok';"
+                      "if(window.opener){window.opener.postMessage({type:'fauxlore:vps-oauth',success:ok},location.origin);"
+                      "window.close();}"
+                      "else if(ok){location.replace('/');}")
 _COMPLETION_HASH = base64.b64encode(hashlib.sha256(_COMPLETION_SCRIPT.encode()).digest()).decode()
 
 
@@ -86,9 +87,16 @@ def create_auth_router(*, pending, client_secret, google_transport, connection_f
 
     @router.get('/auth/session')
     def session_status(request: Request):
+        token = request.cookies.get(SESSION_COOKIE)
         with connection_factory() as connection:
-            user_id = SessionStore(connection).resolve(request.cookies.get(SESSION_COOKIE))
-        return JSONResponse({'authenticated': user_id is not None}, headers={'Cache-Control': 'no-store'})
+            store = SessionStore(connection)
+            user_id = store.resolve(token)
+            renewed = user_id is not None and store.touch(token)
+        response = JSONResponse({'authenticated': user_id is not None}, headers={'Cache-Control': 'no-store'})
+        if renewed:
+            response.set_cookie(SESSION_COOKIE, token, max_age=DEFAULT_TTL,
+                                secure=True, httponly=True, samesite='lax', path='/')
+        return response
 
     @router.post('/auth/logout')
     def logout(request: Request):

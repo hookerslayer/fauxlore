@@ -11,6 +11,66 @@ from psycopg.types.json import Jsonb
 PROJECTION_SLOTS = threading.BoundedSemaphore(1)
 WORKER = '/opt/fauxlore-projection/vps/province_worker.mjs'
 MAX_SNAPSHOT_BYTES = 12_000_000
+_SOURCE_CACHE = {'key': None, 'value': None, 'at': 0.0}
+_SOURCE_LOCK = threading.Lock()
+_SOURCE_TTL = 120.0
+_INDICATOR_CACHE = {}
+_INDICATOR_TTL = 120.0
+_INDICATOR_LIMIT = 64
+_FINANCE_CACHE = {}
+_FINANCE_TTL = 120.0
+_FINANCE_LIMIT = 64
+
+
+def cached_finance_inputs(connection, state_id, prefix, rev_key):
+    """Cache finance inputs per state and data revision for a short TTL."""
+    key = (state_id, prefix, rev_key)
+    now = time.monotonic()
+    with _SOURCE_LOCK:
+        entry = _FINANCE_CACHE.get(key)
+        if entry is not None and now - entry[0] < _FINANCE_TTL:
+            return entry[1]
+    value = connection.execute('SELECT fauxlore_vps_preview.finance_inputs(%s)',
+                               (state_id,)).fetchone()[0]
+    with _SOURCE_LOCK:
+        _FINANCE_CACHE[key] = (now, value)
+        if len(_FINANCE_CACHE) > _FINANCE_LIMIT:
+            _FINANCE_CACHE.pop(next(iter(_FINANCE_CACHE)))
+    return value
+
+
+def cached_projection_source(connection, rev_key):
+    """Return the map source for the current revision, computed once per revision."""
+    now = time.monotonic()
+    with _SOURCE_LOCK:
+        if (_SOURCE_CACHE['value'] is not None and _SOURCE_CACHE['key'] == rev_key
+                and now - _SOURCE_CACHE['at'] < _SOURCE_TTL):
+            return _SOURCE_CACHE['value'], True
+    connection.execute('RESET ROLE')
+    source = connection.execute('SELECT public.projection_source_api()').fetchone()[0]
+    connection.execute('SET LOCAL ROLE authenticated')
+    with _SOURCE_LOCK:
+        _SOURCE_CACHE['key'] = rev_key
+        _SOURCE_CACHE['value'] = source
+        _SOURCE_CACHE['at'] = now
+    return source, False
+
+
+def cached_indicators(connection, path, state_id, rev_key):
+    """Cache state indicators per state and data revision for a short TTL."""
+    key = (state_id, path, rev_key)
+    now = time.monotonic()
+    with _SOURCE_LOCK:
+        entry = _INDICATOR_CACHE.get(key)
+        if entry is not None and now - entry[0] < _INDICATOR_TTL:
+            return entry[1]
+    value = connection.execute("SELECT public.fauxlore_api(%s, 'GET', %s, NULL)",
+                               (path, Jsonb({}))).fetchone()[0]
+    with _SOURCE_LOCK:
+        _INDICATOR_CACHE[key] = (now, value)
+        if len(_INDICATOR_CACHE) > _INDICATOR_LIMIT:
+            _INDICATOR_CACHE.pop(next(iter(_INDICATOR_CACHE)))
+    return value
 
 
 def _read(connection, path):
@@ -74,11 +134,12 @@ def build_state_snapshot(connection, state_id: int, view: str):
     if view not in ('trade', 'finance'):
         routes['map'] = _read(connection, 'map')
     # The worker independently checks membership before looking at private data.
+    revision = connection.execute('select fauxlore.map_revision()').fetchone()[0] or {}
+    rev_key = (str(revision.get('data_revision')), str(revision.get('live_revision')))
     if any(item.get('id') == state_id for item in states):
         phase_started = time.perf_counter()
-        for suffix in ('indicators',):
-            path = f'{prefix}/states/{state_id}/{suffix}'
-            routes[path] = _read(connection, path)
+        path = f'{prefix}/states/{state_id}/indicators'
+        routes[path] = cached_indicators(connection, path, state_id, rev_key)
         timings['indicators_ms'] = round((time.perf_counter() - phase_started) * 1000)
         if view == 'politics':
             path = f'{prefix}/states/{state_id}/politics'
@@ -91,15 +152,14 @@ def build_state_snapshot(connection, state_id: int, view: str):
                 routes[path] = _read(connection, path)
             timings['trade_details_ms'] = round((time.perf_counter() - phase_started) * 1000)
             phase_started = time.perf_counter()
-            connection.execute('RESET ROLE')
-            source = connection.execute('SELECT public.projection_source_api()').fetchone()[0]
-            connection.execute('SET LOCAL ROLE authenticated')
+            source, source_cached = cached_projection_source(connection, rev_key)
             timings['projection_source_ms'] = round((time.perf_counter() - phase_started) * 1000)
+            if source_cached:
+                timings['projection_source_cached'] = 1
             finance_inputs = None
             if view == 'finance':
                 phase_started = time.perf_counter()
-                finance_inputs = connection.execute('SELECT fauxlore_vps_preview.finance_inputs(%s)',
-                                                    (state_id,)).fetchone()[0]
+                finance_inputs = cached_finance_inputs(connection, state_id, prefix, rev_key)
                 timings['finance_inputs_ms'] = round((time.perf_counter() - phase_started) * 1000)
                 routes[f'{prefix}/states/{state_id}/tax-rates'] = finance_inputs['tax_rates']
                 routes['my/trade-agreements'] = finance_inputs['agreements']

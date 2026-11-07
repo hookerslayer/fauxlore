@@ -1,7 +1,7 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=login-fallback-20261107';
-import {localEventsApi} from './supabase-api.js?v=login-fallback-20261107';
-import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=login-fallback-20261107';
-import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=login-fallback-20261107';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=neutral-forces-20261107';
+import {localEventsApi} from './supabase-api.js?v=neutral-forces-20261107';
+import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=neutral-forces-20261107';
+import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=neutral-forces-20261107';
 import {isOlderMapRevision,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {distance,polygonArea,simplePolygon,niceLength} from './map-tools.js';
 // PostgreSQL metadata + tiled WebGL geometry, no full CPU pixel copy.

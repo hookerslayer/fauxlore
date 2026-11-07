@@ -1,12 +1,12 @@
 import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
-import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=login-fallback-20261107';
+import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=neutral-forces-20261107';
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=login-fallback-20261107';
+import {renderWall} from './wall.js?v=neutral-forces-20261107';
 import {renderRules} from './rules.js?v=rules-fauxlore-20261107b';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=login-fallback-20261107';
-import {renderLocalEventAdmin} from './local-events.js?v=login-fallback-20261107';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=neutral-forces-20261107';
+import {renderLocalEventAdmin} from './local-events.js?v=neutral-forces-20261107';
 import {renderNeutralForces} from './neutral-forces-ui.js?v=neutral-forces-20261107';
 import {renderAdminRollback} from './admin-rollback-ui.js?v=admin-rollback-20261107';
 const $=id=>document.getElementById(id);

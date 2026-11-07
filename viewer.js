@@ -29,9 +29,9 @@ function tintedMilitaryIcon(type,color){
   const tint=/^#[0-9a-f]{6}$/i.test(color)?color:'#6e7669',key=`${type}:${tint}`;if(tintedMilitaryIconCache.has(key))return tintedMilitaryIconCache.get(key);
   const icon=document.createElement('canvas');icon.width=32;icon.height=32;const iconContext=icon.getContext('2d');iconContext.drawImage(source,0,0,32,32);iconContext.globalCompositeOperation='source-in';iconContext.fillStyle=tint;iconContext.fillRect(0,0,32,32);tintedMilitaryIconCache.set(key,icon);return icon;
 }
-let colorsTexture,occupationColorsTexture,terrainTexture,fogVisibilityTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
+let colorsTexture,occupationColorsTexture,neutralMarkersTexture,terrainTexture,fogVisibilityTexture,activeSettings=settings,toolMode='',toolPoints=[],areaClosed=false,lastPoint=null,mapMilitary=[],militaryHitTargets=[],constructionHitTargets=[],militaryRefreshTimer=null,militaryRequestToken=0;
 const thematicComponents=new Map();
-let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set();
+let mapMarkers=[],mapColonies=[],applicationPlacement=null,applicationSelectedIds=new Set(),eventProvincePick=false;
 let mapLocalEvents=[],localEventHitTargets=[],localEventRequest=0,selectedLocalEventId=null;
 window.addEventListener('map:local-event-closed',()=>{selectedLocalEventId=null;});
 window.addEventListener('map:close-local-event',closeLocalEvent);
@@ -116,6 +116,7 @@ function setupGL() {
   uniform sampler2D uTypes;
   uniform sampler2D uColors;
   uniform sampler2D uOccupationColors;
+  uniform sampler2D uNeutralMarkers;
   uniform sampler2D uTerrain;
   uniform sampler2D uFogVisibility;
   uniform vec2 uViewport,uOffset,uMapSize,uPickPoint;
@@ -123,7 +124,7 @@ function setupGL() {
   uniform float uScale;
   uniform vec2 uDpr;
   uniform int uTileSize,uColumns,uSelected,uRouteIds[50],uRouteCount;
-  uniform bool uPick,uShowOccupation,uFogEnabled;
+  uniform bool uPick,uShowOccupation,uShowNeutral,uFogEnabled;
   out vec4 color;
   ivec4 bytesAt(ivec2 p){
     if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,ivec2(uMapSize))))return ivec4(0);
@@ -172,6 +173,11 @@ function setupGL() {
 
     vec4 occupation=texelFetch(uOccupationColors,ivec2(id%256,id/256),0);
     if(occupation.a>.5&&uShowOccupation&&mod(float(p.x+p.y),12.)<2.)base=mix(base,occupation.rgb,.92);
+
+    // Ничейные провинции с нейтральным маркером помечены чёрной диагональной
+    // штриховкой; направление противоположно штриховке оккупации.
+    vec4 neutral=texelFetch(uNeutralMarkers,ivec2(id%256,id/256),0);
+    if(neutral.a>.5&&uShowNeutral&&mod(float(p.x-p.y+720000),12.)<2.)base=mix(base,vec3(0.),.82);
 
     // Rivers are packed into the alpha channel of the same nearest-filtered
     // map texture, keeping them pixelated and avoiding a second canvas pass.
@@ -223,7 +229,7 @@ function setupGL() {
   program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
   gl.deleteShader(vertex); gl.deleteShader(fragment); gl.useProgram(program);
-  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','Terrain','FogVisibility','FogEnabled','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation','RouteCount'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
+  loc = Object.fromEntries(['Ids','Types','Colors','OccupationColors','NeutralMarkers','Terrain','FogVisibility','FogEnabled','TileSlots','Region','Viewport','Offset','MapSize','PickPoint','Scale','Dpr','TileSize','Columns','Selected','Pick','ShowOccupation','ShowNeutral','RouteCount'].map(k => [k, gl.getUniformLocation(program, `u${k}`)]));
   loc.RouteIds=gl.getUniformLocation(program,'uRouteIds[0]');
   gl.uniform4f(loc.Region,...region);
   gl.uniform1i(loc.Ids, 0); gl.uniform1i(loc.Types, 1); gl.uniform1i(loc.TileSlots, 2);
@@ -231,6 +237,7 @@ function setupGL() {
   gl.uniform1i(loc.OccupationColors,5);
   gl.uniform1i(loc.Terrain,6);
   gl.uniform1i(loc.FogVisibility,7);
+  gl.uniform1i(loc.NeutralMarkers,8);
   gl.uniform2f(loc.MapSize, width, height); gl.uniform1i(loc.TileSize, tileSize); gl.uniform1i(loc.Columns, columns);
   const maxId = Math.max(...provinces.keys());
   const typeRows = Math.ceil((maxId+1)/256), types = new Uint8Array(256*typeRows);
@@ -266,7 +273,7 @@ function setupGL() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
   gl.disable(gl.DITHER); // Exact byte values for picking, including low province IDs.
-  colorsTexture=gl.createTexture(); occupationColorsTexture=gl.createTexture(); terrainTexture=gl.createTexture(); fogVisibilityTexture=gl.createTexture(); updateLayerColors(); updateTerrainTypes(); updateFogVisibility();
+  colorsTexture=gl.createTexture(); occupationColorsTexture=gl.createTexture(); neutralMarkersTexture=gl.createTexture(); terrainTexture=gl.createTexture(); fogVisibilityTexture=gl.createTexture(); updateLayerColors(); updateTerrainTypes(); updateNeutralFlags(); updateFogVisibility();
 }
 function updateFogVisibility(){
   if(!fogVisibilityTexture)return;
@@ -287,12 +294,30 @@ function updateTerrainTypes(){
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
 }
+function neutralMarkersInProvince(id){
+  return mapMarkers.filter(marker=>Number(marker.province_id)===Number(id)&&(marker.state_id===null||marker.state_id===undefined));
+}
+function updateNeutralFlags(){
+  if(!neutralMarkersTexture||!provinces.size)return;
+  const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),flags=new Uint8Array(256*height*4);
+  const neutral=new Set();
+  for(const marker of mapMarkers){
+    if(marker.state_id!==null&&marker.state_id!==undefined)continue;
+    const province=provinces.get(Number(marker.province_id));
+    if(province?.kind==='land')neutral.add(Number(province.id));
+  }
+  for(const id of neutral)flags.set([0,0,0,255],id*4);
+  gl.activeTexture(gl.TEXTURE8);gl.bindTexture(gl.TEXTURE_2D,neutralMarkersTexture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,flags);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.activeTexture(gl.TEXTURE0);
+}
 function updateLayerColors(){
   if(!colorsTexture)return;
   const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),colors=new Uint8Array(256*height*4);
   const occupations=new Uint8Array(256*height*4);
   const layer=activeSettings.layer,categoryLayer=layer==='military'?'states':layer;
-  gl.useProgram(program);gl.uniform1i(loc.ShowOccupation,layer==='states'||layer==='military'?1:0);
+  gl.useProgram(program);gl.uniform1i(loc.ShowOccupation,layer==='states'||layer==='military'?1:0);gl.uniform1i(loc.ShowNeutral,layer==='states'?1:0);
   const numeric=p=>layer==='population'?(p.kind==='land'&&p.population!=null?Number(p.population):null):(p.development==null?null:Number(p.development));
   const numbers=['population','development'].includes(layer)?[...provinces.values()].map(numeric).filter(v=>v!==null):[];
   const min=numbers.length?Math.min(...numbers):0,max=numbers.length?Math.max(...numbers):0;
@@ -314,6 +339,7 @@ function updateLayerColors(){
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,256,height,0,gl.RGBA,gl.UNSIGNED_BYTE,occupations);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
   gl.activeTexture(gl.TEXTURE0);
+  updateNeutralFlags();
 }
 function uniforms() {
   gl.useProgram(program); gl.uniform2f(loc.Viewport, canvas.width, canvas.height);
@@ -615,6 +641,12 @@ function mapClick(x,y){
   }
   if(colonizationRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри морской провинции.',2500);return;}window.dispatchEvent(new CustomEvent('colonization:route-province-picked',{detail:province}));return;}
   if(tradeRouteMode){const id=pickProvinceId(x,y),province=provinces.get(id);if(!province){status('Нажмите внутри провинции маршрута.',2500);return;}window.dispatchEvent(new CustomEvent('trade:route-province-picked',{detail:province}));return;}
+  if(eventProvincePick){
+    const id=pickProvinceId(x,y),province=provinces.get(id);
+    if(!province||province.kind!=='land'){status('Выберите сухопутную провинцию',2500);return;}
+    eventProvincePick=false;canvas.classList.remove('placing-marker');
+    window.dispatchEvent(new CustomEvent('local-event:province-picked',{detail:{id:Number(province.id),name:province.name}}));return;
+  }
   if(applicationPlacement){
     const id=pickProvinceId(x,y),province=provinces.get(id);
     if(!province||province.kind!=='land'){status('Выберите сухопутную провинцию',2500);return;}
@@ -750,6 +782,7 @@ function select(id, focus=false) {
   const economy=canSeeEconomy?(provinceProjectionCache.get(id)||{}):{};
   const entries=p.kind==='sea'?[['ID',id],['Название',p.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`],['Тип объекта','Море']]:[['ID',id],['Тип объекта',p.kind==='lake'?'Озеро':'Суша'],['Название',p.name],['Раса',p.layers?.races?.name],['Религия',p.layers?.religions?.name],['Государство',p.layers?.states?.name],['Оккупация',p.occupation],['Тип провинции',p.province_type],['Население',Number(p.population??0).toLocaleString('ru-RU')],['Прирост населения (расчёт)',economy.populationGrowth?.toLocaleString('ru-RU')],['Торговый статус',p.trade_status],['Ресурс',p.layers?.resources?.name],['Торговая зона',p.layers?.trade?.name],['Развитие',p.development],['Контроль',`${p.control??100}%`],['Налоги (расчёт)',economy.taxes],['Производство (расчёт)',economy.production],['Торговое влияние (расчёт)',economy.tradeInfluence],['Прирост рекрутов (расчёт)',economy.recruitGrowth],['Лимит рекрутов (расчёт)',economy.recruitLimit],['Ценность (расчёт)',economy.value??null],['Климат',p.layers?.climate?.name],['Площадь',`${p.area.toLocaleString('ru-RU')} km²`]];
   if(p.kind==='land')entries.splice(entries.length-1,0,['Местность',({forest:'Лес',marsh:'Болото',plains:'Равнины',hills:'Холмы',mountains:'Горы',high_mountains:'Высокие горы'})[p.terrain_type]]);
+  if(p.kind==='land'&&!p.layers?.states?.id&&neutralMarkersInProvince(id).length)entries.push(['Колонизация','Недоступна: в провинции есть нейтральный маркер']);
   const projectionFields={
     'Прирост населения (расчёт)':'populationGrowth','Налоги (расчёт)':'taxes',
     'Производство (расчёт)':'production','Торговое влияние (расчёт)':'tradeInfluence',
@@ -911,6 +944,8 @@ window.addEventListener('map:marker-move-saved',e=>{
 window.addEventListener('map:place-port',e=>{portPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!portPlacement);if(portPlacement)status('Щёлкните по точке внутри выбранной морской провинции · Esc — отмена',0);else status('',0);});
 window.addEventListener('map:place-fort',e=>{fortPlacement=e.detail||null;canvas.classList.toggle('placing-marker',!!fortPlacement);if(fortPlacement)status('Выберите точку крепости внутри провинции · Esc — отмена',0);else status('',0);});
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&portPlacement){portPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:port-placement-cancelled'));status('Размещение порта отменено',2500);}if(e.key==='Escape'&&fortPlacement){fortPlacement=null;canvas.classList.remove('placing-marker');window.dispatchEvent(new Event('map:fort-placement-cancelled'));status('Размещение крепости отменено',2500);}});
+window.addEventListener('local-event:pick',e=>{eventProvincePick=Boolean(e.detail?.active);canvas.classList.toggle('placing-marker',eventProvincePick);status(eventProvincePick?'Щёлкните провинцию на карте, чтобы выбрать её для события · Esc — отмена':'',0);});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&eventProvincePick){eventProvincePick=false;canvas.classList.remove('placing-marker');status('Выбор провинции отменён',2500);window.dispatchEvent(new Event('local-event:pick-cancelled'));}});
 window.addEventListener('application:pick',e=>{applicationPlacement=e.detail||null;status(applicationPlacement?.mode==='provinces'?'Выберите пять свободных сухопутных провинций':applicationPlacement?.mode==='capital'?'Выберите провинцию столицы':'',0);if(e.detail?.mode==='provinces'){applicationSelectedIds=new Set((e.detail.ids||[]).map(Number));if(ready)updateLayerColors();schedule();}});
 window.addEventListener('application:selection-updated',e=>{applicationSelectedIds=new Set((e.detail?.ids||[]).map(Number));if(ready)updateLayerColors();schedule();});
 window.addEventListener('application:clear-selection',()=>{applicationSelectedIds.clear();if(ready)updateLayerColors();schedule();});
@@ -945,10 +980,10 @@ async function syncMapInBackground(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(syncTimer);else void syncMapInBackground();});
 window.addEventListener('focus',()=>{if(!document.hidden)void syncMapInBackground();});
-window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);schedule();});
+window.addEventListener('map:marker-created',e=>{mapMarkers.push(e.detail);updateNeutralFlags();schedule();});
 window.addEventListener('map:marker-renamed',e=>{const marker=e.detail;if(!marker)return;mapMarkers=mapMarkers.map(item=>Number(item.id)===Number(marker.id)?{...item,...marker}:item);if(Number(selectedMarkerPopup?.id)===Number(marker.id))selectedMarkerPopup={...selectedMarkerPopup,...marker};schedule();});
-window.addEventListener('map:refreshed',()=>{if(markerMoveDraft)mapMarkers=mapMarkers.map(item=>Number(item.id)===markerMoveDraft.id?{...item,x:markerMoveDraft.x,y:markerMoveDraft.y}:item);schedule();});
-window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;schedule();});
+window.addEventListener('map:refreshed',()=>{if(markerMoveDraft)mapMarkers=mapMarkers.map(item=>Number(item.id)===markerMoveDraft.id?{...item,x:markerMoveDraft.x,y:markerMoveDraft.y}:item);updateNeutralFlags();schedule();});
+window.addEventListener('map:marker-deleted',e=>{mapMarkers=mapMarkers.filter(marker=>marker.id!==e.detail);if(selectedMarkerPopup?.id===e.detail)selectedMarkerPopup=null;updateNeutralFlags();schedule();});
 window.addEventListener('map:close-marker-popup',()=>{selectedMarkerPopup=null;});
 window.addEventListener('province:renamed',e=>{const p=provinces.get(e.detail.id);if(p){p.name=e.detail.name;if(selected===p.id)select(p.id);schedule();}});
 window.addEventListener('map:search',e=>{if(ready)select(e.detail,true);});

@@ -9,6 +9,20 @@ export async function localEventsApi(action,payload={}) {
   return data;
 }
 
+export async function neutralForcesApi(action,payload={}) {
+  const db=await client();
+  const {data,error}=await db.rpc('neutral_forces_api',{action,payload});
+  if(error)throw new Error(error.message||'Не удалось выполнить действие нейтральных сил');
+  return data;
+}
+
+export async function adminRollbackApi(action,payload={}) {
+  const db=await client();
+  const {data,error}=await db.rpc('admin_rollback_api',{action,payload});
+  if(error)throw new Error(error.message||'Не удалось отменить действие');
+  return data;
+}
+
 async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;

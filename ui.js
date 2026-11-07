@@ -7,6 +7,8 @@ import {renderWall} from './wall.js?v=login-fallback-20261107';
 import {renderRules} from './rules.js?v=rules-fauxlore-20261107b';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=login-fallback-20261107';
 import {renderLocalEventAdmin} from './local-events.js?v=login-fallback-20261107';
+import {renderNeutralForces} from './neutral-forces-ui.js?v=neutral-forces-20261107';
+import {renderAdminRollback} from './admin-rollback-ui.js?v=admin-rollback-20261107';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -448,7 +450,7 @@ async function renderProfile(host,showApplicationForm=false){
     if(profile.role!=='admin'){try{const judgeSnapshot=await adminModifiersApi('snapshot');if((judgeSnapshot.states||[]).length&&host.isConnected){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-judge-statistics></section><section class="application-panel admin-modifier-editor" data-judge-modifiers></section><section class="application-panel" data-judge-events></section>');void renderJudgeStatistics(host.querySelector('[data-judge-statistics]'));void renderAdminModifierEditor(host.querySelector('[data-judge-modifiers]'));void renderLocalEventAdmin(host.querySelector('[data-judge-events]'));}}catch(error){if(error.code!=='42501')console.warn('Не удалось загрузить права судьи:',error);}}
     if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-admin-users><h3>Пользователи и государства</h3><p class="hint">Загружаю…</p></section><section class="application-panel" data-judges><h3>Судьи</h3><p class="hint">Загружаю…</p></section>');const adminSnapshot=judgeAssignmentsApi('snapshot');void renderAdminUsers(host.querySelector('[data-admin-users]'),adminSnapshot);void renderJudgeAssignments(host.querySelector('[data-judges]'),adminSnapshot);}
     if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-resource-editor" data-admin-resource-editor><h3>Ресурсы государств</h3><p class="hint">Корректировка Казны руководящего центра, Престижа и Рекрутов.</p><p class="hint">Загружаю данные…</p></section><section class="application-panel admin-modifier-editor" data-admin-modifier-editor><h3>Конструктор модификаторов</h3><p class="hint">Загружаю каталог и действующие назначения…</p></section><section class="application-panel" data-admin-colonization-modifiers><h3>Модификаторы колонизации</h3><p class="hint">Загружаю данные…</p></section><div data-military-admin-queue></div>');void renderAdminResourceEditor(host.querySelector('[data-admin-resource-editor]'));void renderAdminModifierEditor(host.querySelector('[data-admin-modifier-editor]'));void renderAdminColonizationModifiers(host.querySelector('[data-admin-colonization-modifiers]'));void renderMilitaryAdminQueue(host.querySelector('[data-military-admin-queue]'),{notify:message=>showStatus(message,4000)});}
-    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-local-events><h3>Создание местных событий</h3><p>Загружаю…</p></section><section class="application-panel" data-admin-mercenaries><h3>Наёмники</h3><p>Загружаю…</p></section>');void renderLocalEventAdmin(host.querySelector('[data-local-events]'));void renderAdminMercenaries(host.querySelector('[data-admin-mercenaries]'));}
+    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-local-events><h3>Создание местных событий</h3><p>Загружаю…</p></section><section class="application-panel" data-admin-mercenaries><h3>Наёмники</h3><p>Загружаю…</p></section><section class="application-panel" data-neutral-forces><h3>Нейтральные силы</h3><p class="hint">Загружаю…</p></section><section class="application-panel" data-admin-rollback><h3>Откат строительства</h3><p class="hint">Загружаю…</p></section>');void renderLocalEventAdmin(host.querySelector('[data-local-events]'));void renderAdminMercenaries(host.querySelector('[data-admin-mercenaries]'));void renderNeutralForces(host.querySelector('[data-neutral-forces]'));void renderAdminRollback(host.querySelector('[data-admin-rollback]'));}
     if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-global-modifiers" data-global-modifiers><h3>Глобальные модификаторы</h3><p class="hint">Загружаю назначения…</p></section><section class="application-panel" data-military-orders><h3>Приказы о передвижении</h3><p>Загружаю приказы…</p></section>');void renderAdminGlobalModifiers(host.querySelector('[data-global-modifiers]'));void renderAdminMilitaryOrders(host.querySelector('[data-military-orders]'));}
     const contactsSection=host.querySelector('[data-profile-contacts]');
     void playerContactsApi('own').then(contacts=>{if(!contactsSection.isConnected)return;contactsSection.innerHTML=`<h3>Контакты</h3><form class="profile-contacts-form"><label class="field"><span>Telegram</span><input name="telegram_url" type="url" maxlength="200" placeholder="https://t.me/имя" value="${escape(contacts.telegram_url||'')}"></label><label class="field"><span>ВКонтакте</span><input name="vk_url" type="url" maxlength="200" placeholder="https://vk.com/имя" value="${escape(contacts.vk_url||'')}"></label><button type="submit">Сохранить</button><p class="form-message" role="status"></p></form>`;const form=contactsSection.querySelector('form');form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button'),message=form.querySelector('[role="status"]');button.disabled=true;try{await playerContactsApi('save',null,{telegram_url:form.elements.telegram_url.value.trim(),vk_url:form.elements.vk_url.value.trim()});message.textContent='Контакты сохранены';}catch(error){message.textContent=error.message;}finally{button.disabled=false;}};}).catch(error=>{if(contactsSection.isConnected)contactsSection.querySelector('[role="status"]').textContent=error.message;});
@@ -703,6 +705,10 @@ function showMap(fromHistory=false){
   document.title='Карта — Sixième Terre';
   queueLayout();
 }
+// Небольшие мосты для панелей, которым нужен выбор на карте без прямого
+// импорта этого модуля (конструктор событий).
+window.addEventListener('ui:show-map',()=>showMap());
+window.addEventListener('ui:open-profile',()=>renderMenu('Профиль'));
 function renderMenu(section='Статистика',fromHistory=false){
   if(section==='Города')section='Статистика';
   if(section==='Карта'){showMap(fromHistory);return;}
@@ -1959,6 +1965,8 @@ async function renderSelectedColonization(province,revision){
   const neighbors=(provinceAdjacency?.[province.id]||[]).map(Number);
   const adjacent=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='land'&&Number(p.layers?.states?.id)===stateId));
   const coastal=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='sea'));
+  const hasNeutralMarker=mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&(marker.state_id===null||marker.state_id===undefined));
+  if(hasNeutralMarker){const hint=document.createElement('p');hint.className='hint';hint.textContent='Провинцию с нейтральным маркером нельзя колонизировать.';details.append(hint);return;}
   const loadMilitary=()=>loadColonizationMilitary(stateId);
   if(adjacent){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.colonizeLand='';button.textContent='Колонизировать';button.onclick=async()=>{button.disabled=true;try{openColonizationDialog(province,stateId,await loadMilitary(),false);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
   if(!coastal)return;
@@ -2051,7 +2059,15 @@ window.addEventListener('map:port-placement-cancelled',()=>{if(!activePortPlacem
 window.addEventListener('map:port-location-selected',async event=>{
   const {province_id,x,y,state_id}=event.detail||{};
   const placementUI=activePortPlacementUI;activePortPlacementUI=null;if(placementUI)placementUI.cancel.hidden=true;
-  try{await militaryApi('build_port',Number(state_id),{province_id:Number(province_id),x:Number(x),y:Number(y)});showStatus('Строительство порта началось · 1 ход',3000);window.dispatchEvent(new Event('state:resources-changed'));emit('map:refresh');}
+  try{
+    const snapshot=await militaryApi('snapshot',Number(state_id));
+    const cost=Number(snapshot.port_build_cost||0),crown=Number(snapshot.crown||0);
+    if(!(cost>0))throw new Error('Сервер не вернул стоимость порта');
+    if(crown<cost){showStatus(`Для порта нужно ${cost.toLocaleString('ru-RU')} G, в казне ${crown.toLocaleString('ru-RU')} G`,5000);if(placementUI)placementUI.button.disabled=false;return;}
+    if(!confirm(`Построить порт за ${cost.toLocaleString('ru-RU')} G? Остаток казны: ${(crown-cost).toLocaleString('ru-RU')} G`)){if(placementUI)placementUI.button.disabled=false;return;}
+    await militaryApi('build_port',Number(state_id),{province_id:Number(province_id),x:Number(x),y:Number(y)});
+    showStatus('Строительство порта началось · 1 ход',3000);window.dispatchEvent(new Event('state:resources-changed'));emit('map:refresh');
+  }
   catch(error){if(placementUI)placementUI.button.disabled=false;showStatus(error.message,5000);}
 });
 window.addEventListener('ui:open-province',e=>{

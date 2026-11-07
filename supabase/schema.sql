@@ -20702,3 +20702,437 @@ begin
  execute replace(fn,marker,replacement);
 end
 $migration$;
+
+
+-- Migration: 20261107190000_marker_delete_cascade.sql
+
+-- Удаление маркера не должно упираться в FK постройки порта.
+--
+-- Администратор обязан уметь снести порт игрока, в том числе ошибочно
+-- поставленный. Раньше `military_port_builds.marker_id` ссылался на
+-- `map_markers` без `on delete`, поэтому удаление порта падало с ошибкой
+-- «violates foreign key constraint military_port_builds_marker_id_fkey».
+-- Теперь запись о постройке уходит вместе с маркером, а содержание порта
+-- (`fauxlore.port_upkeep`) перестаёт начисляться автоматически.
+--
+-- Откат: пересоздать ограничение без `on delete cascade` (потребует
+-- предварительно почистить висячие строки `military_port_builds`).
+
+alter table fauxlore.military_port_builds
+  drop constraint if exists military_port_builds_marker_id_fkey;
+alter table fauxlore.military_port_builds
+  add constraint military_port_builds_marker_id_fkey
+  foreign key(marker_id) references fauxlore.map_markers(id) on delete cascade;
+
+
+-- Migration: 20261107191000_delete_empty_formations.sql
+
+-- Владелец государства или администратор удаляет пустое формирование
+-- (армию или флотилию), в котором не осталось юнитов.
+--
+-- Удаление мягкое (`active=false`), поэтому история формирований и приказов
+-- сохраняется, а расчёты содержания, боя и списков перестают его видеть.
+-- Формирование нельзя удалить, пока оно перевозит груз, само находится на
+-- борту, имеет нерассмотренный приказ или занято колонизационной миссией.
+
+create or replace function fauxlore.military_delete_formation(sid integer, payload jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; formation_row fauxlore.military_formations;
+  formation_key bigint; unit_count bigint;
+begin
+  actor:=fauxlore.current_account();
+  if actor.id is null then raise sqlstate '42501' using message='Требуется вход'; end if;
+  formation_key:=nullif(payload->>'formation_id','')::bigint;
+  if formation_key is null then raise sqlstate '22023' using message='Не выбрано формирование'; end if;
+  select * into formation_row from fauxlore.military_formations where id=formation_key and active for update;
+  if not found then raise sqlstate 'P0002' using message='Формирование не найдено'; end if;
+  if actor.role<>'admin' and not exists(
+      select 1 from fauxlore.account_states a
+      where a.account_id=actor.id and a.state_id=formation_row.state_id) then
+    raise sqlstate '42501' using message='Нет доступа к формированию';
+  end if;
+  select coalesce(sum(u.quantity),0) into unit_count
+    from fauxlore.military_formation_units u where u.formation_id=formation_key;
+  if unit_count>0 then
+    raise sqlstate '22023' using message='Удалить можно только формирование без юнитов';
+  end if;
+  if formation_row.transported_by is not null
+     or exists(select 1 from fauxlore.military_formations f where f.transported_by=formation_key and f.active) then
+    raise sqlstate '22023' using message='Формирование участвует в перевозке';
+  end if;
+  if exists(select 1 from fauxlore.military_orders o
+      where o.formation_id=formation_key and o.status in ('pending','approved')) then
+    raise sqlstate '22023' using message='Сначала отмените приказ формирования';
+  end if;
+  if exists(select 1 from fauxlore.colonization_missions m
+      where m.fleet_id=formation_key and m.status='active') then
+    raise sqlstate '22023' using message='Флотилия занята колонизационной миссией';
+  end if;
+  update fauxlore.military_formations
+    set active=false, leader_id=null, transported_by=null
+    where id=formation_key;
+  return jsonb_build_object('deleted',true,'formation_id',formation_key,'name',formation_row.name);
+end
+$function$;
+revoke all on function fauxlore.military_delete_formation(integer,jsonb) from public,anon,authenticated;
+
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+  fn:=pg_get_functiondef('fauxlore.military_actions_extra(text,integer,jsonb)'::regprocedure);
+  marker:=' if action=''create_formation'' then';
+  replacement:=' if action=''delete_formation'' then'||E'\n'||
+    '  return fauxlore.military_delete_formation(sid,payload);'||E'\n'||
+    ' end if;'||E'\n'||marker;
+  if position(marker in fn)=0 then raise exception 'Formation delete insertion point missing'; end if;
+  execute replace(fn,marker,replacement);
+
+  fn:=pg_get_functiondef('public.military_api(text,integer,jsonb)'::regprocedure);
+  marker:='''create_formation'',''rename_formation''';
+  replacement:='''delete_formation'','||marker;
+  if position(marker in fn)=0 then raise exception 'Formation delete dispatch insertion point missing'; end if;
+  execute replace(fn,marker,replacement);
+end
+$migration$;
+
+
+-- Migration: 20261107192000_colonization_neutral_markers.sql
+
+-- Провинцию с нейтральным маркером нельзя колонизировать.
+--
+-- Нейтральный маркер — это запись `map_markers` с `state_id is null`, то есть
+-- форт, порт или город, поставленный администратором в ничейной провинции.
+-- Без этой проверки игрок, колонизировав провинцию, получил бы вместе с ней
+-- и чужой нейтральный объект, а маркер остался бы бесхозным.
+--
+-- Проверка поставлена сразу после проверки нейтральности провинции и
+-- действует для обоих путей колонизации — сухопутного и морского.
+
+do $migration$
+declare fn text; marker text; replacement text;
+begin
+  fn:=pg_get_functiondef('fauxlore.colonization_api(text,integer,jsonb)'::regprocedure);
+  marker:=$m$if exists(select 1 from fauxlore.province_values v where v.province_id=target_key and v.layer='states') then raise sqlstate '22023' using message='Колонизировать можно только нейтральную провинцию'; end if;$m$;
+  replacement:=marker||E'\n'||
+    '  if exists(select 1 from fauxlore.map_markers m where m.province_id=target_key and m.state_id is null) then'||E'\n'||
+    '    raise sqlstate ''22023'' using message=''В провинции есть нейтральный маркер: её нельзя колонизировать'';'||E'\n'||
+    '  end if;';
+  if position(marker in fn)=0 then
+    raise exception 'Colonization neutral marker insertion point missing';
+  end if;
+  execute replace(fn,marker,replacement);
+end
+$migration$;
+
+
+-- Migration: 20261107193000_neutral_forces.sql
+
+-- Нейтральные силы администратора: формирования и гарнизоны без государства.
+--
+-- Владение выражается `state_id is null`. Такие формирования и гарнизоны не
+-- попадают в списки государств, не платят содержание из чьей-либо казны и не
+-- участвуют в автоматических расчётах: ими распоряжается только администратор.
+-- Это согласуется с правилом проекта — исходы боёв и осад судит администратор,
+-- автоматические калькуляторы сражений не используются.
+--
+-- Нейтральный гарнизон можно поставить только в провинции с нейтральным
+-- маркером (форт, порт или город, созданный администратором), и только если
+-- провинцию не занял гарнизон государства.
+
+alter table fauxlore.military_formations alter column state_id drop not null;
+alter table fauxlore.garrison_sites alter column state_id drop not null;
+
+create or replace function fauxlore.neutral_forces_api(action text, payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; formation_row fauxlore.military_formations; unit_row fauxlore.military_unit_catalog;
+  formation_key bigint; province_key integer; unit_key bigint; quantity_value integer; capacity_value integer;
+  used_value integer; province_row fauxlore.provinces; site_state integer; has_site boolean;
+begin
+  actor:=fauxlore.current_account();
+  if actor.id is null then raise sqlstate '42501' using message='Требуется вход'; end if;
+  if actor.role<>'admin' then raise sqlstate '42501' using message='Доступно только администратору'; end if;
+
+  if action='snapshot' then
+    return jsonb_build_object(
+      'formations',coalesce((
+        select jsonb_agg(to_jsonb(f)||jsonb_build_object(
+          'province_name',(select p.name from fauxlore.provinces p where p.id=f.province_id),
+          'units',coalesce((
+          select jsonb_agg(jsonb_build_object('unit_id',fu.unit_id,'name',u.name,'quantity',fu.quantity) order by u.name)
+          from fauxlore.military_formation_units fu
+          join fauxlore.military_unit_catalog u on u.id=fu.unit_id
+          where fu.formation_id=f.id),'[]'::jsonb)) order by f.id)
+        from fauxlore.military_formations f where f.state_id is null and f.active),'[]'::jsonb),
+      'provinces',coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'id',p.id,'name',p.name,'kind',p.kind,'province_type',p.province_type,
+          'markers',(select coalesce(jsonb_agg(m.type order by m.id),'[]'::jsonb)
+            from fauxlore.map_markers m where m.province_id=p.id and m.state_id is null),
+          'garrison',coalesce((select jsonb_agg(jsonb_build_object('unit_id',gu.unit_id,'name',c.name,'quantity',gu.quantity) order by c.name)
+            from fauxlore.garrison_units gu join fauxlore.military_unit_catalog c on c.id=gu.unit_id
+            where gu.province_id=p.id and exists(select 1 from fauxlore.garrison_sites g
+              where g.province_id=p.id and g.state_id is null)),'[]'::jsonb),
+          'capacity',fauxlore.garrison_capacity(p.id)) order by p.name)
+        from fauxlore.provinces p
+        where exists(select 1 from fauxlore.map_markers m where m.province_id=p.id and m.state_id is null)),'[]'::jsonb),
+      'catalog',coalesce((select jsonb_agg(to_jsonb(u) order by u.domain,u.id)
+        from fauxlore.military_unit_catalog u where u.active and u.domain in ('land','siege')),'[]'::jsonb)
+    );
+  end if;
+
+  if action='create_formation' then
+    if length(btrim(coalesce(payload->>'name',''))) not between 2 and 100 then
+      raise sqlstate '22023' using message='Название должно содержать от 2 до 100 символов'; end if;
+    if coalesce(payload->>'domain','') not in ('land','naval') then
+      raise sqlstate '22023' using message='Выберите тип формирования'; end if;
+    province_key:=(payload->>'province_id')::integer;
+    select * into province_row from fauxlore.provinces where id=province_key;
+    if not found then raise sqlstate '22023' using message='Провинция не найдена'; end if;
+    if payload->>'domain'='naval' then
+      if province_row.kind<>'sea' or not exists(select 1 from fauxlore.map_markers m
+          where m.province_id=province_key and m.type='port' and m.state_id is null) then
+        raise sqlstate '22023' using message='Нейтральную флотилию можно создать только в нейтральном порту'; end if;
+    elsif province_row.kind<>'land' then
+      raise sqlstate '22023' using message='Нейтральная армия создаётся только в сухопутной провинции';
+    elsif not exists(select 1 from fauxlore.map_markers m
+        where m.province_id=province_key and m.state_id is null) then
+      raise sqlstate '22023' using message='Сначала поставьте в провинции нейтральный маркер'; end if;
+    insert into fauxlore.military_formations(state_id,name,domain,province_id)
+      values(null,btrim(payload->>'name'),payload->>'domain',province_key) returning id into formation_key;
+    return jsonb_build_object('formation_id',formation_key,'name',btrim(payload->>'name'));
+  end if;
+
+  if action='hire_unit' then
+    formation_key:=(payload->>'formation_id')::bigint;
+    select * into formation_row from fauxlore.military_formations
+      where id=formation_key and state_id is null and active for update;
+    if not found then raise sqlstate 'P0002' using message='Нейтральное формирование не найдено'; end if;
+    quantity_value:=coalesce((payload->>'quantity')::integer,0);
+    if quantity_value<1 or quantity_value>100000 then
+      raise sqlstate '22023' using message='Укажите количество от 1 до 100 000'; end if;
+    select * into unit_row from fauxlore.military_unit_catalog
+      where id=(payload->>'unit_id')::bigint and active;
+    if not found then raise sqlstate '22023' using message='Юнит не найден'; end if;
+    if (unit_row.domain='naval')<>(formation_row.domain='naval') then
+      raise sqlstate '22023' using message='Юнит не подходит этому формированию'; end if;
+    insert into fauxlore.military_formation_units(formation_id,unit_id,quantity)
+      values(formation_key,unit_row.id,quantity_value)
+      on conflict(formation_id,unit_id) do update set quantity=fauxlore.military_formation_units.quantity+excluded.quantity;
+    return jsonb_build_object('formation_id',formation_key,'unit_id',unit_row.id,'quantity',quantity_value);
+  end if;
+
+  if action='delete_formation' then
+    return fauxlore.military_delete_formation(null,payload);
+  end if;
+
+  if action='garrison_add' then
+    province_key:=(payload->>'province_id')::integer;
+    select * into province_row from fauxlore.provinces where id=province_key and kind='land';
+    if not found then raise sqlstate '22023' using message='Выберите сухопутную провинцию'; end if;
+    if not exists(select 1 from fauxlore.map_markers m where m.province_id=province_key and m.state_id is null) then
+      raise sqlstate '22023' using message='В провинции нет нейтрального маркера'; end if;
+    select state_id into site_state from fauxlore.garrison_sites where province_id=province_key;
+    if site_state is not null then
+      raise sqlstate '22023' using message='Провинция занята гарнизоном государства'; end if;
+    if not found then
+      insert into fauxlore.garrison_sites(province_id,state_id) values(province_key,null);
+    end if;
+    quantity_value:=coalesce((payload->>'quantity')::integer,0);
+    if quantity_value<1 or quantity_value>100000 then
+      raise sqlstate '22023' using message='Укажите количество от 1 до 100 000'; end if;
+    select * into unit_row from fauxlore.military_unit_catalog
+      where id=(payload->>'unit_id')::bigint and active and domain in ('land','siege');
+    if not found then raise sqlstate '22023' using message='Этот юнит нельзя поставить в гарнизон'; end if;
+    select coalesce(sum(u.quantity*c.recruit_cost),0) into used_value from fauxlore.garrison_units u
+      join fauxlore.military_unit_catalog c on c.id=u.unit_id where u.province_id=province_key;
+    capacity_value:=coalesce(fauxlore.garrison_capacity(province_key),0);
+    if used_value+quantity_value*unit_row.recruit_cost>capacity_value then
+      raise sqlstate '22023' using message='Превышен лимит гарнизона провинции'; end if;
+    insert into fauxlore.garrison_units(province_id,unit_id,quantity)
+      values(province_key,unit_row.id,quantity_value)
+      on conflict(province_id,unit_id) do update set quantity=fauxlore.garrison_units.quantity+excluded.quantity;
+    return jsonb_build_object('province_id',province_key,'unit_id',unit_row.id,'quantity',quantity_value);
+  end if;
+
+  if action='garrison_remove' then
+    province_key:=(payload->>'province_id')::integer;
+    unit_key:=(payload->>'unit_id')::bigint;
+    delete from fauxlore.garrison_units u
+      where u.province_id=province_key and u.unit_id=unit_key
+        and exists(select 1 from fauxlore.garrison_sites g where g.province_id=u.province_id and g.state_id is null);
+    if not found then raise sqlstate 'P0002' using message='В нейтральном гарнизоне нет такого юнита'; end if;
+    delete from fauxlore.garrison_sites g
+      where g.province_id=province_key and g.state_id is null
+        and not exists(select 1 from fauxlore.garrison_units u where u.province_id=g.province_id);
+    return jsonb_build_object('province_id',province_key,'unit_id',unit_key,'removed',true);
+  end if;
+
+  raise sqlstate '22023' using message='Неизвестное действие нейтральных сил';
+end
+$function$;
+revoke all on function fauxlore.neutral_forces_api(text,jsonb) from public,anon,authenticated;
+grant execute on function fauxlore.neutral_forces_api(text,jsonb) to authenticated;
+
+
+-- Migration: 20261107194000_admin_rollback.sql
+
+-- Администратор отменяет ещё не завершённое строительство и возвращает
+-- списанные деньги, либо сносит уже построенный порт и компенсирует его
+-- стоимость. Сумма берётся из сохранённой стоимости проекта или постройки,
+-- поэтому возврат всегда равен исходному списанию.
+--
+-- Возврат пишется в журнал бюджета видом `admin_refund`, чтобы компенсация
+-- была видна в отчётности и не выглядела «потерянными» деньгами.
+
+alter table fauxlore.state_budget_ledger drop constraint if exists state_budget_ledger_kind_check;
+alter table fauxlore.state_budget_ledger add constraint state_budget_ledger_kind_check
+  check (kind in ('army_upkeep','debt_repayment','estate_loyalty_investment','estate_military_tax','port_upkeep','admin_refund'));
+
+create or replace function fauxlore.refund_state_cash(state_key integer, amount numeric, reason text)
+returns numeric language plpgsql security definer set search_path='' as $function$
+declare year_value integer; turn_value integer; updated numeric;
+begin
+  if state_key is null or amount is null or amount<=0 then return 0; end if;
+  update fauxlore.state_treasuries set balance=balance+amount,updated_at=now()
+    where state_id=state_key and estate='Корона';
+  if not found then
+    insert into fauxlore.state_treasuries(state_id,estate,balance) values(state_key,'Корона',amount);
+  end if;
+  select coalesce(sum(balance),0) into updated from fauxlore.state_treasuries where state_id=state_key;
+  update fauxlore.state_profiles set treasury=updated where state_id=state_key;
+  select year,turn into year_value,turn_value from fauxlore.game_calendar where singleton;
+  insert into fauxlore.state_budget_ledger(state_id,estate,year,turn,kind,cash_delta,debt_delta,details)
+    values(state_key,'Корона',year_value,turn_value,'admin_refund',amount,0,jsonb_build_object('reason',reason));
+  return amount;
+end
+$function$;
+revoke all on function fauxlore.refund_state_cash(integer,numeric,text) from public,anon,authenticated;
+
+create or replace function fauxlore.admin_rollback_api(action text, payload jsonb default '{}'::jsonb)
+returns jsonb language plpgsql security definer set search_path='' as $function$
+declare actor fauxlore.accounts; project_row fauxlore.military_port_projects; garrison_row fauxlore.garrison_projects;
+  marker_row fauxlore.map_markers; build_row fauxlore.military_port_builds; refund numeric; state_key integer;
+  province_name text; project_key bigint; marker_key bigint;
+begin
+  actor:=fauxlore.current_account();
+  if actor.id is null then raise sqlstate '42501' using message='Требуется вход'; end if;
+  if actor.role<>'admin' then raise sqlstate '42501' using message='Доступно только администратору'; end if;
+
+  if action='snapshot' then
+    return jsonb_build_object(
+      'port_projects',coalesce((select jsonb_agg(jsonb_build_object(
+          'id',pp.id,'state_id',pp.state_id,
+          'state_name',(select c.name from fauxlore.map_categories c where c.layer='states' and c.id=pp.state_id),
+          'province_name',(select p.name from fauxlore.provinces p where p.id=pp.sea_province_id),
+          'cost',pp.cost,'turns_remaining',pp.turns_remaining) order by pp.id)
+        from fauxlore.military_port_projects pp where pp.status='building'),'[]'::jsonb),
+      'ports',coalesce((select jsonb_agg(jsonb_build_object(
+          'marker_id',m.id,'name',m.name,
+          'province_name',(select p.name from fauxlore.provinces p where p.id=m.province_id),
+          'state_id',coalesce(m.state_id,b.state_id),
+          'state_name',(select c.name from fauxlore.map_categories c where c.layer='states' and c.id=coalesce(m.state_id,b.state_id)),
+          'cost',b.cost) order by m.id)
+        from fauxlore.map_markers m
+        left join fauxlore.military_port_builds b on b.marker_id=m.id
+        where m.type='port'),'[]'::jsonb),
+      'garrison_projects',coalesce((select jsonb_agg(jsonb_build_object(
+          'id',gp.id,'state_id',gp.state_id,
+          'state_name',(select c.name from fauxlore.map_categories c where c.layer='states' and c.id=gp.state_id),
+          'province_name',(select p.name from fauxlore.provinces p where p.id=gp.province_id),
+          'kind',gp.kind,'target_level',gp.target_level,'cost',gp.cost) order by gp.id)
+        from fauxlore.garrison_projects gp where gp.status='building'),'[]'::jsonb)
+    );
+  end if;
+
+  if action='cancel_port_project' then
+    project_key:=(payload->>'project_id')::bigint;
+    select * into project_row from fauxlore.military_port_projects
+      where id=project_key and status='building' for update;
+    if not found then raise sqlstate 'P0002' using message='Строительство порта не найдено или уже завершено'; end if;
+    select name into province_name from fauxlore.provinces where id=project_row.sea_province_id;
+    delete from fauxlore.military_port_projects where id=project_key;
+    refund:=fauxlore.refund_state_cash(project_row.state_id,project_row.cost,
+      format('Отмена строительства порта в провинции «%s»',province_name));
+    insert into fauxlore.notifications(account_id,kind,title,message)
+      select a.account_id,'construction','Строительство отменено',
+        format('Администратор отменил строительство порта в провинции «%s». Возвращено %s G.',province_name,refund)
+      from fauxlore.account_states a where a.state_id=project_row.state_id;
+    return jsonb_build_object('cancelled',true,'refunded',refund);
+  end if;
+
+  if action='cancel_port' then
+    marker_key:=(payload->>'marker_id')::bigint;
+    select * into marker_row from fauxlore.map_markers where id=marker_key and type='port' for update;
+    if not found then raise sqlstate 'P0002' using message='Порт не найден'; end if;
+    select * into build_row from fauxlore.military_port_builds where marker_id=marker_key;
+    state_key:=coalesce(marker_row.state_id,build_row.state_id);
+    delete from fauxlore.map_markers where id=marker_key;
+    refund:=case when build_row.cost is null then 0
+      else fauxlore.refund_state_cash(state_key,build_row.cost,
+        format('Снос порта «%s» администратором',marker_row.name)) end;
+    if state_key is not null then
+      insert into fauxlore.notifications(account_id,kind,title,message)
+        select a.account_id,'construction','Порт снесён администратором',
+          format('Порт «%s» снесён. Возвращено %s G.',marker_row.name,refund)
+        from fauxlore.account_states a where a.state_id=state_key;
+    end if;
+    return jsonb_build_object('cancelled',true,'refunded',refund);
+  end if;
+
+  if action='cancel_garrison_project' then
+    project_key:=(payload->>'project_id')::bigint;
+    select * into garrison_row from fauxlore.garrison_projects
+      where id=project_key and status='building' for update;
+    if not found then raise sqlstate 'P0002' using message='Строительство укрепления не найдено или уже завершено'; end if;
+    select name into province_name from fauxlore.provinces where id=garrison_row.province_id;
+    delete from fauxlore.garrison_projects where id=project_key;
+    refund:=fauxlore.refund_state_cash(garrison_row.state_id,garrison_row.cost,
+      format('Отмена строительства в провинции «%s»',province_name));
+    insert into fauxlore.notifications(account_id,kind,title,message)
+      select a.account_id,'construction','Строительство отменено',
+        format('Администратор отменил строительство в провинции «%s». Возвращено %s G.',province_name,refund)
+      from fauxlore.account_states a where a.state_id=garrison_row.state_id;
+    return jsonb_build_object('cancelled',true,'refunded',refund);
+  end if;
+
+  raise sqlstate '22023' using message='Неизвестное действие отката';
+end
+$function$;
+revoke all on function fauxlore.admin_rollback_api(text,jsonb) from public,anon,authenticated;
+grant execute on function fauxlore.admin_rollback_api(text,jsonb) to authenticated;
+
+
+-- Migration: 20261107193500_neutral_forces_map.sql
+
+-- Нейтральные формирования и гарнизоны должны быть видны на карте.
+--
+-- `public.military_map_api()` соединял формирования и гарнизоны с государством
+-- через inner join, поэтому строки с `state_id is null` выпадали из ответа и
+-- нейтральные чипы не рисовались никому, включая администратора. Заменяем
+-- соединения на left join: чип остаётся с пустым государством и цветом по
+-- умолчанию, а видимость регулируется прежним условием по провинциям.
+
+do $migration$
+declare fn text;
+begin
+  fn:=pg_get_functiondef('public.military_map_api()'::regprocedure);
+
+  if position('left join fauxlore.map_categories state on state.layer=''states'' and state.id=f.state_id' in fn)=0 then
+    if position('join fauxlore.map_categories state on state.layer=''states'' and state.id=f.state_id' in fn)=0 then
+      raise exception 'Neutral formation map join not found';
+    end if;
+    fn:=replace(fn,'join fauxlore.map_categories state on state.layer=''states'' and state.id=f.state_id',
+      'left join fauxlore.map_categories state on state.layer=''states'' and state.id=f.state_id');
+  end if;
+
+  if position('left join fauxlore.map_categories state on state.layer=''states'' and state.id=g.state_id' in fn)=0 then
+    if position('join fauxlore.map_categories state on state.layer=''states'' and state.id=g.state_id' in fn)=0 then
+      raise exception 'Neutral garrison map join not found';
+    end if;
+    fn:=replace(fn,'join fauxlore.map_categories state on state.layer=''states'' and state.id=g.state_id',
+      'left join fauxlore.map_categories state on state.layer=''states'' and state.id=g.state_id');
+  end if;
+
+  execute fn;
+end
+$migration$;

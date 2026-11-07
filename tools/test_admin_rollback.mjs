@@ -15,6 +15,12 @@ assert.ok(schema.includes("'cancel_port_project'") && schema.includes("'cancel_p
 const client = read('vps-postgrest-client.js');
 assert.ok(client.includes("'admin_rollback_api'"), 'RPC не разрешён в клиенте vps-postgrest');
 
+const bridge = read('vps/postgrest_bridge.py');
+assert.ok(bridge.includes("'admin_rollback_api'"), 'RPC не разрешён в серверном мосте PostgREST');
+
+const wrappers = read('supabase/migrations/20261107194500_public_rpc_wrappers.sql');
+assert.ok(wrappers.includes('function public.admin_rollback_api'), 'Нет публичной обёртки для PostgREST');
+
 const api = read('supabase-api.js');
 assert.ok(api.includes('export async function adminRollbackApi'), 'Нет обёртки adminRollbackApi');
 

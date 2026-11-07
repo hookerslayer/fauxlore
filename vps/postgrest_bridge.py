@@ -23,7 +23,8 @@ ALLOWED_RPC = frozenset({'fauxlore_api', 'map_revision_api', 'wall_api', 'state_
                          'military_map_api', 'military_order_api', 'military_split_api', 'military_transport_api',
                          'state_development_growth_api', 'admin_resources_api', 'admin_global_modifiers_api',
                          'admin_mercenaries_api', 'admin_colonization_modifiers_api', 'judge_assignments_api',
-                         'judge_state_statistics_api', 'instant_modifier_api', 'admin_modifiers_api', 'wall_verdict_many'})
+                         'judge_state_statistics_api', 'instant_modifier_api', 'admin_modifiers_api', 'wall_verdict_many',
+                         'neutral_forces_api', 'admin_rollback_api'})
 
 
 def _b64(value):

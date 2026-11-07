@@ -16,6 +16,12 @@ assert.ok(schema.includes('Neutral formation map join not found') && schema.incl
 const client = read('vps-postgrest-client.js');
 assert.ok(client.includes("'neutral_forces_api'"), 'RPC не разрешён в клиенте vps-postgrest');
 
+const bridge = read('vps/postgrest_bridge.py');
+assert.ok(bridge.includes("'neutral_forces_api'"), 'RPC не разрешён в серверном мосте PostgREST');
+
+const wrappers = read('supabase/migrations/20261107194500_public_rpc_wrappers.sql');
+assert.ok(wrappers.includes('function public.neutral_forces_api'), 'Нет публичной обёртки для PostgREST');
+
 const api = read('supabase-api.js');
 assert.ok(api.includes('export async function neutralForcesApi'), 'Нет обёртки neutralForcesApi');
 

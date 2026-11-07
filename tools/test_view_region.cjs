@@ -10,7 +10,7 @@ const functions = ['tileRange','clampView','fit'].map(name => {
   return source.slice(start,end);
 }).join('\n');
 for(const [w,h] of [[1920,1080],[424,900],[1000,1000]]) {
-  const context = {region,innerWidth:w,innerHeight:h,tileSize:2048,
+  const context = {region,innerWidth:w,innerHeight:h,viewportWidth:w,viewportHeight:h,tileSize:2048,
     view:{x:0,y:0,scale:1,min:Math.min(w/(region[2]-region[0]),h/(region[3]-region[1])),max:12},
     schedule(){}};
   vm.createContext(context);

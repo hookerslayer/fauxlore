@@ -1,4 +1,4 @@
-import {garrisonApi} from './supabase-api.js?v=neutral-forces-20261107';
+import {garrisonApi} from './supabase-api.js?v=conquest-20261109';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=value=>Number(value||0).toLocaleString('ru-RU',{maximumFractionDigits:2});

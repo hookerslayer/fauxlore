@@ -1,14 +1,14 @@
 import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
-import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=neutral-forces-20261107';
+import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261109';
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=neutral-forces-20261107';
-import {renderRules} from './rules.js?v=rules-20261109';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=neutral-forces-20261107';
-import {renderLocalEventAdmin} from './local-events.js?v=neutral-forces-20261107';
-import {renderNeutralForces} from './neutral-forces-ui.js?v=neutral-forces-20261107';
-import {renderAdminRollback} from './admin-rollback-ui.js?v=admin-rollback-20261107';
+import {renderWall} from './wall.js?v=conquest-20261109';
+import {renderRules} from './rules.js?v=rules-20261109b';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261109';
+import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261109';
+import {renderNeutralForces} from './neutral-forces-ui.js?v=conquest-20261109';
+import {renderAdminRollback} from './admin-rollback-ui.js?v=conquest-20261109';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -1962,6 +1962,7 @@ async function renderSelectedColonization(province,revision){
   const stateId=Number(user.role==='admin'?lastAdminStateId:user.state_ids?.[0]);
   if(!stateId||province.layers?.states?.id!=null)return;
   const details=$('selection-details');if(!details||$('selection').hidden)return;
+  {const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.conquer='';button.textContent='Завоевать';button.onclick=async()=>{button.disabled=true;try{await openConquestDialog(province,stateId);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
   const neighbors=(provinceAdjacency?.[province.id]||[]).map(Number);
   const adjacent=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='land'&&Number(p.layers?.states?.id)===stateId));
   const coastal=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='sea'));
@@ -2020,6 +2021,46 @@ function openColonizationDialog(province,stateId,military,sea){
   form.elements.gold.addEventListener('input',preview);form.elements.recruits.addEventListener('input',preview);preview();
   const start=form.querySelector('[data-colony-route-start]');start?.addEventListener('click',()=>{colonizationDraft.route=[];preview();window.dispatchEvent(new CustomEvent('colonization:route-pick',{detail:{active:true,clear:true}}));showStatus('Выберите морской маршрут: начинайте у своей суши и завершите у цели.',0);});
   form.addEventListener('submit',async event=>{event.preventDefault();const data=new FormData(form);if(sea&&!colonizationDraft.route.length){showStatus('Сначала выберите маршрут на карте.',4000);return;}if(sea&&!colonizationDraft.fleetId)colonizationDraft.fleetId=Number(data.get('fleet_id'));const button=form.querySelector('[type="submit"]');button.disabled=true;try{const result=await colonizationApi('attempt',stateId,{province_id:province.id,sea,gold:Number(data.get('gold')),recruits:Number(data.get('recruits')),fleet_id:colonizationDraft.fleetId,route:colonizationDraft.route});selection.classList.remove('colonization-open');inline.remove();colonizationDraft=null;showStatus(result.success?`Успех! Итог ${result.result}. Началась колонизация. Срок указан в списке миссий.`:`Провал. Итог ${result.result}; потери рекрутов: ${Number(result.recruits_lost).toLocaleString('ru-RU')}${result.catastrophic?'. Флотилия потеряна.':''}`,6500);window.dispatchEvent(new Event('state:resources-changed'));window.dispatchEvent(new Event('map:refresh'));}catch(error){button.disabled=false;showStatus(error.message,5000);}});
+}
+async function openConquestDialog(province,stateId){
+  $('conquest-inline')?.remove();
+  const snapshot=await conquestApi('snapshot',stateId);
+  const armies=(snapshot.armies||[]).filter(a=>Number(a.province_id)===Number(province.id)&&Number(a.soldiers)>=300);
+  if(!armies.length){showStatus('В провинции нет армии сильнее 300 солдат. Ополчение в завоевании не участвует.',5000);return;}
+  if(Number(snapshot.attempts_left)<=0){showStatus('На этот ход попытки завоевания исчерпаны (2 из 2).',4500);return;}
+  const selection=$('selection');selection.classList.add('colonization-open');
+  const inline=document.createElement('aside');inline.id='conquest-inline';inline.className='colonization-inline';
+  inline.innerHTML=`<div class="colonization-inline-heading"><strong>Завоевание</strong><button type="button" class="colonization-inline-close" aria-label="Закрыть">×</button></div><form id="conquest-form" class="stack"><p>Цель: <strong>${escape(province.name)}</strong>. Провинция станет вашей сразу после успеха; развитие упадёт вдвое, население — до 10% + 500 переселенцев.</p><label class="field"><span>Армия</span><select name="formation_id" required>${armies.map(a=>`<option value="${Number(a.id)}">${escape(a.name)} · ${Number(a.soldiers).toLocaleString('ru-RU')} солдат</option>`).join('')}</select></label><p class="hint" data-conquest-preview></p><p class="hint">Попыток завоевания осталось: ${Number(snapshot.attempts_left)} из 2. Ополчение не участвует; потери всегда применяются к выбранной армии.</p><button type="submit" class="primary">Завоевать</button></form>`;
+  selection.append(inline);
+  const form=inline.querySelector('#conquest-form');
+  const label=form.querySelector('[data-conquest-preview]');
+  const close=()=>{inline.remove();selection.classList.remove('colonization-open');};
+  inline.querySelector('.colonization-inline-close').onclick=close;
+  const preview=async()=>{
+    const id=Number(form.elements.formation_id.value);
+    label.textContent='Проверяю условия…';
+    try{
+      const result=await conquestApi('preview',stateId,{province_id:Number(province.id),formation_id:id});
+      if(!form.isConnected)return;
+      const mods=(result.modifiers||[]).map(m=>`${m.source}: ${Number(m.value)>0?'+':''}${Number(m.value)}`).join(' · ')||'нет';
+      label.textContent=`Развитие ${Number(result.development)} · население ${Number(result.population).toLocaleString('ru-RU')} · модификаторы: ${mods} (итого ${Number(result.modifiers_total)>0?'+':''}${Number(result.modifiers_total)}).`;
+    }catch(error){if(form.isConnected)label.textContent=error.message;}
+  };
+  form.elements.formation_id.addEventListener('change',()=>void preview());
+  void preview();
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();
+    const button=form.querySelector('[type="submit"]');button.disabled=true;
+    try{
+      const result=await conquestApi('attempt',stateId,{province_id:Number(province.id),formation_id:Number(form.elements.formation_id.value)});
+      close();
+      showStatus(result.success
+        ?`Провинция завоёвана! Бросок ${Number(result.roll)}, итог ${Number(result.result)}. Потери: ${Number(result.loss_percent)}% армии.`
+        :`Завоевание не удалось. Бросок ${Number(result.roll)}, итог ${Number(result.result)}. Потери: ${Number(result.loss_percent)}% армии.`,7000);
+      window.dispatchEvent(new Event('state:resources-changed'));
+      window.dispatchEvent(new Event('map:refresh'));
+    }catch(error){button.disabled=false;showStatus(error.message,5000);}
+  });
 }
 window.addEventListener('colonization:route-province-picked',event=>{
   if(!colonizationDraft?.sea)return;const p=event.detail,id=Number(p?.id),route=colonizationDraft.route,last=route.at(-1);

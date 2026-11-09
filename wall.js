@@ -1,6 +1,6 @@
 import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
 import {setupWallEditor,renderWallDocument} from './wall-editor.js?v=wall-list-fix-20261031';
-import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=neutral-forces-20261107';
+import {wallApi,adminModifiersApi,wallVerdictManyApi} from './supabase-api.js?v=conquest-20261109';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=value=>new Date(value).toLocaleString('ru-RU');

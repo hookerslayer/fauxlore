@@ -266,6 +266,17 @@ export async function colonizationApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function conquestApi(action, stateId, payload = {}) {
+  const db = await client();
+  const {data, error} = await db.rpc('conquest_api', {action, target_state: stateId || null, payload});
+  if (error) {
+    const failure = new Error(error.message || 'Не удалось выполнить завоевание');
+    failure.code = error.code;
+    throw failure;
+  }
+  return data;
+}
+
 export async function adminColonizationModifiersApi(action, payload = {}) {
   const db = await client();
   const {data,error}=await db.rpc('admin_colonization_modifiers_api',{action,payload});

@@ -8,6 +8,10 @@ declare
   result jsonb;
   expected_pop bigint;
   old_pop bigint;
+  expected_race integer;
+  expected_religion integer;
+  actual_race integer;
+  actual_religion integer;
   actual_pop bigint;
   before_pop bigint;
   after_pop bigint;
@@ -43,6 +47,16 @@ begin
   end if;
   if (select category_id from fauxlore.province_values where province_id = 2597 and layer = 'states') <> 6 then
     raise exception 'province was not assigned to the state';
+  end if;
+  select official_race_id, official_religion_id into expected_race, expected_religion
+  from fauxlore.state_profiles where state_id = 6;
+  select category_id into actual_race from fauxlore.province_values where province_id = 2597 and layer = 'races';
+  select category_id into actual_religion from fauxlore.province_values where province_id = 2597 and layer = 'religions';
+  if expected_race is not null and actual_race is distinct from expected_race then
+    raise exception 'race expected %, got %', expected_race, actual_race;
+  end if;
+  if expected_religion is not null and actual_religion is distinct from expected_religion then
+    raise exception 'religion expected %, got %', expected_religion, actual_religion;
   end if;
   if (select development from fauxlore.provinces where id = 2597) <> 50 then
     raise exception 'development was not halved';

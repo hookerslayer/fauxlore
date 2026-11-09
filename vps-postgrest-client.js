@@ -2,7 +2,7 @@
 import {createVpsClient} from './vps-client.js';
 
 const enabled = new Set(['fauxlore_api', 'map_revision_api', 'wall_api', 'state_journal_api', 'local_events_api', 'player_contacts_api', 'neutral_forces_api', 'admin_rollback_api',
-  'government_form_preview_api', 'military_api', 'colonization_api', 'militia_api', 'garrison_api',
+  'government_form_preview_api', 'military_api', 'colonization_api', 'conquest_api', 'militia_api', 'garrison_api',
   'estate_investment_api', 'estate_social_api', 'estate_fiscal_api', 'military_map_api', 'military_order_api', 'military_split_api',
   'military_transport_api', 'state_development_growth_api', 'admin_resources_api', 'admin_global_modifiers_api', 'admin_mercenaries_api',
   'admin_colonization_modifiers_api', 'judge_assignments_api', 'judge_state_statistics_api', 'instant_modifier_api',

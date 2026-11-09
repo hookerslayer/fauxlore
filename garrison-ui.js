@@ -1,4 +1,4 @@
-import {garrisonApi} from './supabase-api.js?v=conquest-20261109';
+import {garrisonApi} from './supabase-api.js?v=conquest-20261109b';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=value=>Number(value||0).toLocaleString('ru-RU',{maximumFractionDigits:2});

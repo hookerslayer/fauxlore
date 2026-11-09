@@ -27,7 +27,7 @@ async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;
     if (config?.backend === 'vps-postgrest') {
-      const {createPostgrestClient} = await import('./vps-postgrest-client.js?v=player-contacts-20261105');
+      const {createPostgrestClient} = await import('./vps-postgrest-client.js?v=conquest-20261109b');
       return createPostgrestClient();
     }
     if (config?.backend === 'vps-preview') {

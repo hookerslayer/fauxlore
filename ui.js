@@ -4,7 +4,7 @@ import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
 import {renderWall} from './wall.js?v=neutral-forces-20261107';
-import {renderRules} from './rules.js?v=rules-fauxlore-20261107b';
+import {renderRules} from './rules.js?v=rules-20261109';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=neutral-forces-20261107';
 import {renderLocalEventAdmin} from './local-events.js?v=neutral-forces-20261107';
 import {renderNeutralForces} from './neutral-forces-ui.js?v=neutral-forces-20261107';

@@ -1,7 +1,7 @@
 // Панель администратора: армии и флотилии без государства, а также гарнизоны
 // нейтральных маркеров. Список провинций приходит только для провинций с
 // нейтральными маркерами — там нейтральные силы и размещаются.
-import {neutralForcesApi} from './supabase-api.js?v=conquest-20261110c';
+import {neutralForcesApi} from './supabase-api.js?v=conquest-20261110d';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const domainLabel=value=>value==='naval'?'Флотилия':'Армия';

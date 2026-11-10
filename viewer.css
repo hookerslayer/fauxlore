@@ -868,3 +868,10 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .turn-limit{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.03)}
 .turn-limit small{opacity:.7}
 .turn-limit strong{font-size:1.25rem}
+.table-filters{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.table-filters input,.table-filters select{min-width:160px}
+.table-filter{display:inline-flex;align-items:center;gap:6px;margin:0 0 10px;font-size:.92em;opacity:.85}
+.table-sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.table-sortable:hover{color:#f0d789}
+.table-sortable.sort-asc::after{content:" ▲";font-size:.75em}
+.table-sortable.sort-desc::after{content:" ▼";font-size:.75em}

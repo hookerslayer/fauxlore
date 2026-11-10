@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=conquest-20261109c';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=conquest-20261110';
 import {localEventsApi} from './supabase-api.js?v=conquest-20261109b';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261109b';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=conquest-20261109b';
@@ -317,7 +317,7 @@ function updateLayerColors(){
   const maxId=Math.max(...provinces.keys()),height=Math.ceil((maxId+1)/256),colors=new Uint8Array(256*height*4);
   const occupations=new Uint8Array(256*height*4);
   const layer=activeSettings.layer,categoryLayer=layer==='military'?'states':layer;
-  gl.useProgram(program);gl.uniform1i(loc.ShowOccupation,layer==='states'||layer==='military'?1:0);gl.uniform1i(loc.ShowNeutral,layer==='states'?1:0);
+  gl.useProgram(program);gl.uniform1i(loc.ShowOccupation,layer==='states'||layer==='military'?1:0);gl.uniform1i(loc.ShowNeutral,layer==='states'||layer==='military'?1:0);
   const numeric=p=>layer==='population'?(p.kind==='land'&&p.population!=null?Number(p.population):null):(p.development==null?null:Number(p.development));
   const numbers=['population','development'].includes(layer)?[...provinces.values()].map(numeric).filter(v=>v!==null):[];
   const min=numbers.length?Math.min(...numbers):0,max=numbers.length?Math.max(...numbers):0;

@@ -628,12 +628,21 @@ async function renderAdminApplications(host){
     host.querySelector('#application-back').onclick=()=>renderProfile(host);
   }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p><button id="application-back">Назад</button>`;host.querySelector('#application-back').onclick=()=>renderProfile(host);}
 }
-async function renderNotifications(host){
+async function renderNotifications(host,{compact=false}={}){
   host.innerHTML='<p class="hint">Загружаю уведомления…</p>';
-  try{const requestedUser=user,rows=await api('notifications');if(!host.isConnected||user!==requestedUser)return;setUnreadNotificationCount(rows);host.innerHTML=`<div class="notification-list stack"><h3>Уведомления</h3>${rows.length?rows.map(x=>`<article class="application-panel"><strong>${escape(x.title)}</strong><p>${escape(x.message)}</p><small>${new Date(x.created_at).toLocaleString('ru-RU')}</small>${x.read?'':`<button data-read-notification="${x.id}">Отметить прочитанным</button>`}</article>`).join(''):'<p class="hint">Уведомлений пока нет.</p>'}</div>`;host.querySelectorAll('[data-read-notification]').forEach(b=>b.onclick=async()=>{try{await api(`notifications/${b.dataset.readNotification}/read`,{method:'PATCH',body:'{}'});renderNotifications(host);}catch(e){showStatus(e.message,4000);}});}
-  catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
-}
-function readImageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Не удалось прочитать изображение'));reader.readAsDataURL(file);});}
+  try{
+    const requestedUser=user,rows=await api('notifications');
+    if(!host.isConnected||user!==requestedUser)return;
+    setUnreadNotificationCount(rows);
+    const unread=rows.filter(item=>!item.read);
+    const visible=compact?unread.slice(0,20):rows;
+    const actions=(unread.length||compact)?`<div class="inline-actions notification-actions">${unread.length?`<button type="button" data-read-all>Прочитать всё</button>`:''}${compact?`<button type="button" data-all-notifications>Все уведомления</button>`:''}</div>`:'';
+    host.innerHTML=`<div class="notification-list stack"><h3>Уведомления</h3>${actions}${visible.length?visible.map(x=>`<article class="application-panel"><strong>${escape(x.title)}</strong><p>${escape(x.message)}</p><small>${new Date(x.created_at).toLocaleString('ru-RU')}</small>${x.read?'':`<button data-read-notification="${x.id}">Отметить прочитанным</button>`}</article>`).join(''):`<p class="hint">${compact?'Нет новых уведомлений.':'Уведомлений пока нет.'}</p>`}</div>`;
+    host.querySelector('[data-read-all]')?.addEventListener('click',async()=>{try{await api('notifications/read-all',{method:'PATCH',body:'{}'});await renderNotifications(host,{compact});}catch(error){showStatus(error.message,4000);}});
+    host.querySelector('[data-all-notifications]')?.addEventListener('click',()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();renderMenu('Уведомления');});
+    host.querySelectorAll('[data-read-notification]').forEach(button=>button.onclick=async()=>{try{await api(`notifications/${button.dataset.readNotification}/read`,{method:'PATCH',body:'{}'});await renderNotifications(host,{compact});}catch(error){showStatus(error.message,4000);}});
+  }catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
+}function readImageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Не удалось прочитать изображение'));reader.readAsDataURL(file);});}
 function updateNotificationBadge(){
   const badge=$('header-notification-count'),button=$('header-notifications');
   if(!badge||!button)return;
@@ -692,7 +701,7 @@ function showUtilityPopover(kind){
     popover.innerHTML=`<div class="utility-menu"><strong>${escape(user?.nickname||'Профиль')}</strong><span class="hint">${user?.role==='admin'?'Администратор':user?'Игрок':'Гость'}</span><button type="button" data-open-profile>${user?'Открыть профиль':'Войти'}</button></div>`;
     popover.querySelector('[data-open-profile]').onclick=()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();if(user)renderMenu('Профиль');else renderAuth();};
   }else if(user){
-    void renderNotifications(popover).then(()=>{if(popover.hidden||popover.dataset.kind!=='notifications')return;const button=document.createElement('button');button.type='button';button.className='utility-all';button.textContent='Все уведомления';button.onclick=()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();renderMenu('Уведомления');};popover.append(button);});
+    void renderNotifications(popover,{compact:true});
   }else{
     popover.innerHTML='<p class="hint">Войдите, чтобы увидеть уведомления.</p><button type="button" data-notification-login>Войти</button>';
     popover.querySelector('[data-notification-login]').onclick=()=>{closeUtilityPopover();renderAuth();};
@@ -1962,12 +1971,12 @@ async function renderSelectedColonization(province,revision){
   const stateId=Number(user.role==='admin'?lastAdminStateId:user.state_ids?.[0]);
   if(!stateId||province.layers?.states?.id!=null)return;
   const details=$('selection-details');if(!details||$('selection').hidden)return;
-  {const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.conquer='';button.textContent='Завоевать';button.onclick=async()=>{button.disabled=true;try{await openConquestDialog(province,stateId);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
   const neighbors=(provinceAdjacency?.[province.id]||[]).map(Number);
   const adjacent=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='land'&&Number(p.layers?.states?.id)===stateId));
   const coastal=neighbors.some(id=>allProvinces.some(p=>Number(p.id)===id&&p.kind==='sea'));
   const hasNeutralMarker=mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&(marker.state_id===null||marker.state_id===undefined));
-  if(hasNeutralMarker){const hint=document.createElement('p');hint.className='hint';hint.textContent='Провинцию с нейтральным маркером нельзя колонизировать.';details.append(hint);return;}
+  if(hasNeutralMarker){const hint=document.createElement('p');hint.className='hint';hint.textContent='Провинцию с нейтральным маркером нельзя колонизировать или завоевать.';details.append(hint);return;}
+  {const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.conquer='';button.textContent='Завоевать';button.onclick=async()=>{button.disabled=true;try{await openConquestDialog(province,stateId);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
   const loadMilitary=()=>loadColonizationMilitary(stateId);
   if(adjacent){const button=document.createElement('button');button.type='button';button.className='selection-open-data';button.dataset.colonizeLand='';button.textContent='Колонизировать';button.onclick=async()=>{button.disabled=true;try{openColonizationDialog(province,stateId,await loadMilitary(),false);}catch(error){showStatus(error.message,4000);}finally{button.disabled=false;}};details.prepend(button);}
   if(!coastal)return;

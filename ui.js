@@ -1427,13 +1427,13 @@ async function renderStateModifierTab(host,state,provinces,isAdmin){
         groupRows.push(`<tr><td>${kind}</td><td>${escape(name)}</td><td>${escape(b.status)}</td><td>${Number(b.population||0).toLocaleString('ru-RU')}</td><td>${number(b.baseLoyalty*100)}%</td><td>${signedPP(loyaltyModifier)}</td><td>${signedPP(b.permanentLoyalty)}</td><td><strong>${number(b.effectiveLoyalty*100)}%</strong></td><td>${mult(statusEffects.population)}</td><td>${mult(statusEffects.tax)}</td><td>${mult(statusEffects.production)}</td><td>${mult(statusEffects.recruit)}</td><td>${signedPP(stability||0)}</td></tr>`);
       }
     }
+    const crime=Number(indicators.crime??0),corruption=Number(indicators.corruption??0);
+    const permanentModifiers=Array.isArray(indicators.permanent_modifiers)?indicators.permanent_modifiers:[];
     const modifierSources=[...new Set(permanentModifiers.map(item=>item.source))].sort((a,b)=>String(a).localeCompare(String(b),'ru'));
     const modifierScopes=[...new Set(permanentModifiers.map(item=>item.scope))].sort((a,b)=>String(a).localeCompare(String(b),'ru'));
     const modifierStatuses=[...new Set(permanentModifiers.map(item=>item.status))].sort((a,b)=>String(a).localeCompare(String(b),'ru'));
     const optionList=(values,label)=>`<option value="">${label}</option>`+values.map(value=>`<option value="${escape(value)}">${escape(value)}</option>`).join('');
-    const modifiersFilter=`<div class="table-filters"><select data-modifier-source aria-label="Источник">${optionList(modifierSources,'Все источники')}</select><select data-modifier-scope aria-label="Область">${optionList(modifierScopes,'Все области')}</select><select data-modifier-status aria-label="Статус">${optionList(modifierStatuses,'Все статусы')}</select></div>`;    const crime=Number(indicators.crime??0),corruption=Number(indicators.corruption??0);
-    const permanentModifiers=Array.isArray(indicators.permanent_modifiers)?indicators.permanent_modifiers:[];
-    const permanentRows=permanentModifiers.map(item=>{
+    const modifiersFilter=`<div class="table-filters"><select data-modifier-source aria-label="Источник">${optionList(modifierSources,'Все источники')}</select><select data-modifier-scope aria-label="Область">${optionList(modifierScopes,'Все области')}</select><select data-modifier-status aria-label="Статус">${optionList(modifierStatuses,'Все статусы')}</select></div>`;    const permanentRows=permanentModifiers.map(item=>{
       const amount=['%','п.п.'].includes(item.unit)?Number(item.value)*100:Number(item.value);
       const formatted=number(amount);
       const valueText=item.unit==='статус'?'Ограничение':['%','п.п.'].includes(item.unit)?`${amount>0?'+':amount<0?'−':''}${formatted} ${item.unit}`:`${amount>0?'+':amount<0?'−':''}${formatted} ${item.unit}`;

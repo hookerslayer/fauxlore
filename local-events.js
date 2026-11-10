@@ -1,4 +1,4 @@
-import {localEventsApi} from './supabase-api.js?v=conquest-20261110d';
+import {localEventsApi} from './supabase-api.js?v=conquest-20261110e';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const localKeys=new Set(['tax_efficiency','production','trade_influence','population_growth','recruit_growth','recruit_limit','development']);

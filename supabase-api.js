@@ -27,7 +27,7 @@ async function client() {
   if (!clientPromise) clientPromise = (async () => {
     const config = window.FAUXLORE_CONFIG;
     if (config?.backend === 'vps-postgrest') {
-      const {createPostgrestClient} = await import('./vps-postgrest-client.js?v=conquest-20261110d');
+      const {createPostgrestClient} = await import('./vps-postgrest-client.js?v=conquest-20261110e');
       return createPostgrestClient();
     }
     if (config?.backend === 'vps-preview') {
@@ -266,6 +266,12 @@ export async function colonizationApi(action, stateId, payload = {}) {
   return data;
 }
 
+export async function turnReportApi(stateId) {
+  const db = await client();
+  const {data, error} = await db.rpc('turn_report_api', {target_state: Number(stateId)});
+  if (error) throw new Error(error.message || 'Не удалось загрузить отчёт хода');
+  return data;
+}
 export async function turnLimitsApi(stateId) {
   const db = await client();
   const {data, error} = await db.rpc('turn_limits_api', {target_state: Number(stateId)});

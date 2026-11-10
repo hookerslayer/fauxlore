@@ -1,15 +1,15 @@
 import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
-import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,turnLimitsApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261110d';
+import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,turnLimitsApi,turnReportApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261110e';
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=conquest-20261110d';
+import {renderWall} from './wall.js?v=conquest-20261110e';
 import {renderRules} from './rules.js?v=rules-20261109c';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110db';
-import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110d';
-import {makeSortable,filterRows} from './table-tools.js?v=conquest-20261110d';
-import {renderNeutralForces} from './neutral-forces-ui.js?v=conquest-20261110db';
-import {renderAdminRollback} from './admin-rollback-ui.js?v=conquest-20261110db';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110eb';
+import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110e';
+import {makeSortable,filterRows} from './table-tools.js?v=conquest-20261110e';
+import {renderNeutralForces} from './neutral-forces-ui.js?v=conquest-20261110eb';
+import {renderAdminRollback} from './admin-rollback-ui.js?v=conquest-20261110eb';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -644,13 +644,29 @@ function goToNotification(item){
   if(!host)return;
   host.dataset.stateId=String(stateId);
   try{
-    const data=await turnLimitsApi(stateId);
+    const [data,report]=await Promise.all([turnLimitsApi(stateId),turnReportApi(stateId).catch(()=>null)]);
     if(!host.isConnected)return;
     const cell=(label,item)=>`<div class="turn-limit"><small>${label}</small><strong>${Number(item.used)} / ${Number(item.limit)}</strong></div>`;
-    host.innerHTML=`<section class="application-panel turn-limits"><h4>Лимиты хода</h4><div class="turn-limits-grid">${cell('Колонизации',data.colonization)}${cell('Завоевания',data.conquest)}</div><p class="hint">Ход ${Number(data.turn)} · ${Number(data.year)} год. Приказы передвижения ограничены отдельно для каждого формирования.</p></section>`;
+    const current=report?.current||null,previous=report?.previous||null,history=Array.isArray(report?.history)?report.history:[];
+    const money=value=>Number(value||0).toLocaleString('ru-RU',{maximumFractionDigits:0});
+    const delta=key=>{const a=Number(current?.[key]),b=Number(previous?.[key]);return Number.isFinite(a)&&Number.isFinite(b)?a-b:null;};
+    const deltaText=(value,unit='')=>value==null?'—':`${value>0?'+':value<0?'−':''}${money(Math.abs(value))}${unit}`;
+    const spark=(key,label,unit='')=>{
+      const values=history.map(row=>Number(row[key]||0));
+      if(values.length<2)return `<div class="turn-spark"><small>${label}</small><strong>${values.length?values[0].toLocaleString('ru-RU'):'—'}${unit}</strong><span class="hint">мало данных для графика</span></div>`;
+      const width=140,height=34,min=Math.min(...values),max=Math.max(...values),span=max-min||1;
+      const points=values.map((value,index)=>`${(index/(values.length-1)*width).toFixed(1)},${(height-(value-min)/span*height).toFixed(1)}`).join(' ');
+      const first=values[0],last=values[values.length-1],change=last-first;
+      return `<div class="turn-spark"><small>${label}</small><svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-hidden="true"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><strong>${last.toLocaleString('ru-RU')}${unit}</strong><span class="hint">${change>0?'+':change<0?'−':''}${Math.abs(change).toLocaleString('ru-RU')}${unit} за ${values.length} ход.</span></div>`;
+    };
+    const events=report?.events||{};
+    const list=(items,render)=>items.length?`<ul class="turn-report-list">${items.map(render).join('')}</ul>`:'<p class="hint">Событий этого типа нет.</p>';
+    const reportHtml=`<div class="turn-report-body"><div class="turn-report-deltas"><div><small>Казна</small><strong>${deltaText(delta('treasury'),' G')}</strong></div><div><small>Престиж</small><strong>${deltaText(delta('prestige'),' ОП')}</strong></div><div><small>Население</small><strong>${deltaText(delta('population'))}</strong></div><div><small>Развитие</small><strong>${deltaText(delta('development'))}</strong></div></div><h5>Колонизация</h5>${list(events.colonization||[],item=>`<li>${escape(item.province)}: ${item.success?'успех':'провал'} (итог ${Number(item.result)})</li>`)}<h5>Завоевание</h5>${list(events.conquest||[],item=>`<li>${escape(item.province)}: ${item.success?'успех':'провал'} (итог ${Number(item.result)})</li>`)}<h5>Религия</h5>${list(events.religion||[],item=>`<li>${escape(item.effect)}: ${Number(item.delta)>0?'+':''}${Number(item.delta)}${item.province?` · ${escape(item.province)}`:''}</li>`)}<h5>Приказы</h5>${list(events.orders||[],item=>`<li>${(item.route||[]).join(' → ')} · ${escape(item.status)}</li>`)}</div>`;
+    host.innerHTML=`<section class="application-panel turn-limits"><h4>Лимиты хода</h4><div class="turn-limits-grid">${cell('Колонизации',data.colonization)}${cell('Завоевания',data.conquest)}</div><p class="hint">Ход ${Number(data.turn)} · ${Number(data.year)} год. Приказы передвижения ограничены отдельно для каждого формирования.</p><div class="turn-dynamics">${spark('treasury','Казна',' G')}${spark('prestige','Престиж',' ОП')}${spark('population','Население')}${spark('development','Развитие')}</div><button type="button" class="turn-report-toggle">Итоги хода</button><div class="turn-report" hidden>${report?reportHtml:'<p class="hint">Отчёт появится после первого перехода хода.</p>'}</div></section>`;
+    const toggle=host.querySelector('.turn-report-toggle'),box=host.querySelector('.turn-report');
+    if(toggle&&box)toggle.addEventListener('click',()=>{box.hidden=!box.hidden;toggle.textContent=box.hidden?'Итоги хода':'Скрыть итоги';});
   }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
-}
-window.addEventListener('state:resources-changed',()=>{document.querySelectorAll('[data-turn-limits][data-state-id]').forEach(element=>void renderTurnLimits(element,Number(element.dataset.stateId)));});async function renderNotifications(host,{compact=false}={}){
+}window.addEventListener('state:resources-changed',()=>{document.querySelectorAll('[data-turn-limits][data-state-id]').forEach(element=>void renderTurnLimits(element,Number(element.dataset.stateId)));});async function renderNotifications(host,{compact=false}={}){
   host.innerHTML='<p class="hint">Загружаю уведомления…</p>';
   try{
     const requestedUser=user,rows=await api('notifications');

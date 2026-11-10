@@ -875,3 +875,16 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .table-sortable:hover{color:#f0d789}
 .table-sortable.sort-asc::after{content:" ▲";font-size:.75em}
 .table-sortable.sort-desc::after{content:" ▼";font-size:.75em}
+.turn-dynamics{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:12px 0}
+.turn-spark{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.03)}
+.turn-spark small{opacity:.72}
+.turn-spark svg{color:#d8b96a;max-width:100%}
+.turn-spark strong{font-size:1.05rem}
+.turn-report-toggle{margin-top:4px}
+.turn-report{margin-top:10px;border-top:1px solid rgba(255,255,255,.12);padding-top:10px}
+.turn-report-deltas{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
+.turn-report-deltas div{display:flex;flex-direction:column;gap:2px}
+.turn-report-deltas small{opacity:.7}
+.turn-report h5{margin:10px 0 4px}
+.turn-report-list{margin:0 0 6px 18px;padding:0}
+.turn-report-list li{margin:2px 0}

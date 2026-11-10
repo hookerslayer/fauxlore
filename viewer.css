@@ -888,3 +888,9 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .turn-report h5{margin:10px 0 4px}
 .turn-report-list{margin:0 0 6px 18px;padding:0}
 .turn-report-list li{margin:2px 0}
+.diplomacy-matrix{font-size:.85em}
+.diplomacy-matrix th,.diplomacy-matrix td{padding:4px 6px;text-align:center;white-space:nowrap}
+.diplomacy-matrix tbody th{text-align:left;position:sticky;left:0;background:#171717;z-index:1}
+.diplomacy-matrix .matrix-diagonal{opacity:.25}
+.diplomacy-matrix .matrix-muted{opacity:.12}
+.diplomacy-matrix .matrix-match{color:#f0d789}

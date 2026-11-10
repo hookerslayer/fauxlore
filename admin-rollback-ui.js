@@ -1,6 +1,6 @@
 // Панель администратора: отмена строительства с возвратом денег.
 // Сумма возврата берётся с сервера из сохранённой стоимости проекта.
-import {adminRollbackApi} from './supabase-api.js?v=conquest-20261110e';
+import {adminRollbackApi} from './supabase-api.js?v=conquest-20261110f';
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=value=>`${Number(value||0).toLocaleString('ru-RU')} G`;

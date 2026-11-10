@@ -1,15 +1,15 @@
 import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
-import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,turnLimitsApi,turnReportApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261110e';
+import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,turnLimitsApi,turnReportApi,diplomacyMatrixApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261110f';
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=conquest-20261110e';
+import {renderWall} from './wall.js?v=conquest-20261110f';
 import {renderRules} from './rules.js?v=rules-20261109c';
-import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110eb';
-import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110e';
-import {makeSortable,filterRows} from './table-tools.js?v=conquest-20261110e';
-import {renderNeutralForces} from './neutral-forces-ui.js?v=conquest-20261110eb';
-import {renderAdminRollback} from './admin-rollback-ui.js?v=conquest-20261110eb';
+import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110fb';
+import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110f';
+import {makeSortable,filterRows} from './table-tools.js?v=conquest-20261110f';
+import {renderNeutralForces} from './neutral-forces-ui.js?v=conquest-20261110fb';
+import {renderAdminRollback} from './admin-rollback-ui.js?v=conquest-20261110fb';
 const $=id=>document.getElementById(id);
 export const LAYERS={states:'Государства',races:'Расы',religions:'Религии',resources:'Ресурсы',trade:'Торговые зоны',climate:'Климат',population:'Плотность населения',development:'Развитие',military:'Военный'};
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
@@ -1032,6 +1032,33 @@ function bindTestTurn(host,test,onRefresh=()=>{}){
   if(rollback)rollback.onclick=async()=>{rollback.disabled=true;try{const result=await api('admin/turn/test/rollback',{method:'POST',body:'{}'});renderCalendar(result);showStatus('Тестовый ход и его изменения полностью откатаны.',4500);await onRefresh();}catch(error){rollback.disabled=false;showStatus(error.message,6000);}};
 }
 
+async function renderDiplomacyMatrix(host){
+  if(!host)return;
+  try{
+    const data=await diplomacyMatrixApi();
+    if(!host.isConnected)return;
+    const states=data.states||[],relations=data.relations||[];
+    const find=(a,b)=>relations.find(item=>Number(item.a)===Number(a)&&Number(item.b)===Number(b))||{};
+    const marker=item=>[item.war?'В':'',item.marriage?'Б':'',item.trade?'Т':'',item.peace?'М':''].filter(Boolean).join('·')||'·';
+    const relationKeys=item=>['war','marriage','trade','peace'].filter(key=>item[key]);
+    const body=states.map(a=>`<tr data-state="${a.id}"><th scope="row">${escape(a.name)}</th>${states.map(b=>{if(Number(a.id)===Number(b.id))return '<td class="matrix-diagonal">—</td>';const item=find(a.id,b.id),keys=relationKeys(item);return `<td data-relations="${keys.join(' ')}" title="${escape(a.name)} — ${escape(b.name)}: ${escape(keys.join(', ')||'нет отношений')}">${marker(item)}</td>`;}).join('')}</tr>`).join('');
+    host.innerHTML=`<div class="table-filters"><select data-matrix-filter aria-label="Тип отношений"><option value="">Все отношения</option><option value="war">Война</option><option value="marriage">Династический брак</option><option value="trade">Торговый договор</option><option value="peace">Мир</option></select><input type="search" data-matrix-search placeholder="Поиск государства" aria-label="Поиск государства"></div><div class="table-scroll"><table class="state-data-table diplomacy-matrix"><thead><tr><th></th>${states.map(state=>`<th scope="col" data-state="${state.id}">${escape(state.name)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div><p class="hint">В — война, Б — династический брак, Т — торговый договор, М — мир после войны, · — нет отношений. Поиск подсвечивает строку и столбец государства.</p>`;
+    const filter=host.querySelector('[data-matrix-filter]'),search=host.querySelector('[data-matrix-search]');
+    const apply=()=>{
+      const type=filter?.value||'';
+      host.querySelectorAll('.diplomacy-matrix tbody td[data-relations]').forEach(cell=>{
+        const keys=(cell.dataset.relations||'').split(' ').filter(Boolean);
+        cell.classList.toggle('matrix-muted',!!type&&!keys.includes(type));
+      });
+      const query=(search?.value||'').trim().toLocaleLowerCase('ru-RU');
+      host.querySelectorAll('.diplomacy-matrix [data-state]').forEach(cell=>{
+        const name=cell.textContent.toLocaleLowerCase('ru-RU');
+        cell.classList.toggle('matrix-match',!!query&&name.includes(query));
+      });
+    };
+    filter?.addEventListener('change',apply);search?.addEventListener('input',apply);apply();
+  }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
+}
 async function renderDynasticDiplomacy(host,options={}){
   const stateId=Number(options.stateId)||null,isAdminState=user?.role==='admin'&&stateId!==null;
   host.innerHTML='<h3>Династические браки</h3><p class="hint">Загружаю дипломатические предложения…</p>';
@@ -1065,8 +1092,9 @@ async function renderDynasticDiplomacy(host,options={}){
     const incoming=[...marriageIncoming,...tradeIncoming].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     const outgoing=[...marriageOutgoing,...tradeOutgoing].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     const outgoingRows=outgoing.map(item=>`<tr><td>${escape(item.to_state||'—')}</td><td>${item.contractType==='trade'?'Торговый договор':'Династический брак'}</td><td>${escape(statusLabel(item.status))}</td></tr>`).join('');
-    host.innerHTML=`<div class="state-menu stack diplomacy-page"><h3>Дипломатия</h3><nav class="diplomacy-tabs" aria-label="Разделы дипломатии"><button type="button" class="active" data-diplomacy-tab="countries" aria-selected="true">Государства</button><button type="button" data-diplomacy-tab="summary" aria-selected="false">Дипломатическая сводка</button></nav><section class="diplomacy-view" data-diplomacy-view="countries"><div class="diplomacy-state-list">${stateRowsHtml||'<p class="hint">Нет других государств для отображения.</p>'}</div></section><section class="diplomacy-view" data-diplomacy-view="summary" hidden><h4>Договоры и дипломатические состояния</h4><div class="diplomacy-existing"><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal></div></div></section><section class="application-panel"><h4>Входящие договоры</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>item.contractType==='marriage'?proposalCard(item,true):tradeCard(item,true)).join('')}</div>`:'<p class="hint">Входящих договоров нет.</p>'}</section><section class="application-panel"><h4>Отправленные договоры</h4>${outgoing.length?`<div class="table-scroll"><table class="state-data-table diplomacy-contract-table"><thead><tr><th>Государство</th><th>Тип договора</th><th>Статус договора</th></tr></thead><tbody>${outgoingRows}</tbody></table></div>`:'<p class="hint">Отправленных договоров нет.</p>'}</section><section class="application-panel"><h4>Многосторонние договоры</h4>${multiCreate}${multilateralCards||'<p class="hint">Договоров пока нет.</p>'}</section></div></section><dialog class="diplomacy-dialog"><div class="modal-shell surface"><header><strong data-diplomacy-modal-title></strong><button type="button" class="icon-button" data-diplomacy-close aria-label="Закрыть">×</button></header><div class="diplomacy-modal-content" data-diplomacy-modal-content></div></div></dialog></div>`;
+    host.innerHTML=`<div class="state-menu stack diplomacy-page"><h3>Дипломатия</h3><nav class="diplomacy-tabs" aria-label="Разделы дипломатии"><button type="button" class="active" data-diplomacy-tab="countries" aria-selected="true">Государства</button><button type="button" data-diplomacy-tab="summary" aria-selected="false">Дипломатическая сводка</button><button type="button" data-diplomacy-tab="matrix" aria-selected="false">Матрица отношений</button></nav><section class="diplomacy-view" data-diplomacy-view="countries"><div class="diplomacy-state-list">${stateRowsHtml||'<p class="hint">Нет других государств для отображения.</p>'}</div></section><section class="diplomacy-view" data-diplomacy-view="matrix" hidden><div data-diplomacy-matrix><p class="hint">Загружаю матрицу отношений…</p></div></section><section class="diplomacy-view" data-diplomacy-view="summary" hidden><h4>Договоры и дипломатические состояния</h4><div class="diplomacy-existing"><section class="application-panel"><h4>Предложить договор</h4><label class="field"><span>Тип договора</span><select data-contract-type><option value="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'selected':''}>Династический брак</option><option value="trade" ${activeContractType==='trade'?'selected':''}>Торговый договор</option></select></label><div data-contract-panel="dynastic_marriage" ${activeContractType==='dynastic_marriage'?'':'hidden'}>${sendForm}</div><div data-contract-panel="trade" ${activeContractType==='trade'?'':'hidden'}><div data-trade-proposal></div></div></section><section class="application-panel"><h4>Входящие договоры</h4>${incoming.length?`<div class="marriage-candidates">${incoming.map(item=>item.contractType==='marriage'?proposalCard(item,true):tradeCard(item,true)).join('')}</div>`:'<p class="hint">Входящих договоров нет.</p>'}</section><section class="application-panel"><h4>Отправленные договоры</h4>${outgoing.length?`<div class="table-scroll"><table class="state-data-table diplomacy-contract-table"><thead><tr><th>Государство</th><th>Тип договора</th><th>Статус договора</th></tr></thead><tbody>${outgoingRows}</tbody></table></div>`:'<p class="hint">Отправленных договоров нет.</p>'}</section><section class="application-panel"><h4>Многосторонние договоры</h4>${multiCreate}${multilateralCards||'<p class="hint">Договоров пока нет.</p>'}</section></div></section><dialog class="diplomacy-dialog"><div class="modal-shell surface"><header><strong data-diplomacy-modal-title></strong><button type="button" class="icon-button" data-diplomacy-close aria-label="Закрыть">×</button></header><div class="diplomacy-modal-content" data-diplomacy-modal-content></div></div></dialog></div>`;
     hydrateDiplomacyFlags(host);
+    void renderDiplomacyMatrix(host.querySelector('[data-diplomacy-matrix]'));
     const contractSelect=host.querySelector('[data-contract-type]');
     const contractSection=contractSelect?.closest('section');
     for(const [kind,label] of [['war','Объявить войну'],['peace','Заключить мир'],['passage','Право прохода']]){

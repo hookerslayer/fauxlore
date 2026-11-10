@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=conquest-20261110';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=conquest-20261110b';
 import {localEventsApi} from './supabase-api.js?v=conquest-20261109b';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261109b';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=conquest-20261109b';
@@ -917,7 +917,21 @@ function endPointer(e) {
 canvas.addEventListener('pointerup',endPointer); canvas.addEventListener('pointercancel',endPointer);
 canvas.addEventListener('wheel',e=>{ e.preventDefault();window.dispatchEvent(new Event('map:close-military-popup'));zoom(Math.exp(-e.deltaY*(e.deltaMode===1?.045:.0015)),e.clientX,e.clientY); },{passive:false});
 canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();else if(!toolMode)zoom(2,e.clientX,e.clientY);});
-window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});
+window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});window.addEventListener('map:focus',event=>{
+  const detail=event.detail||{},ids=(detail.provinces||[]).map(Number).filter(Number.isFinite);
+  if(detail.layer){activeSettings.layer=detail.layer;if(ready)updateLayerColors();schedule();}
+  if(!ids.length||!provinces.size)return;
+  const list=ids.map(id=>provinces.get(id)).filter(Boolean);
+  if(!list.length)return;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const p of list){const b=p.bbox;if(!b)continue;x0=Math.min(x0,Number(b[0]));y0=Math.min(y0,Number(b[1]));x1=Math.max(x1,Number(b[2]));y1=Math.max(y1,Number(b[3]));}
+  if(!Number.isFinite(x0))return;
+  const panelSpace=viewportWidth>600?340:128;
+  view.scale=Math.max(view.min,Math.min(view.max,(viewportWidth-panelSpace)/Math.max(x1-x0+1,40)*.65,viewportHeight/Math.max(y1-y0+1,40)*.65));
+  view.x=(viewportWidth+(viewportWidth>600?290:0))/2-(x0+x1)/2*view.scale;
+  view.y=viewportHeight/2-(y0+y1)/2*view.scale;
+  clampView();schedule();
+});
 window.addEventListener('auth:user-changed',()=>{void refreshMapMilitary();scheduleMilitaryRefresh();});
 window.addEventListener('map:refreshed',()=>{void refreshMapMilitary();void refreshLocalEvents();});
 window.addEventListener('map:refresh',()=>{void refreshMapMilitary();});

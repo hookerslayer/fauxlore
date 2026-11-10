@@ -628,7 +628,18 @@ async function renderAdminApplications(host){
     host.querySelector('#application-back').onclick=()=>renderProfile(host);
   }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p><button id="application-back">Назад</button>`;host.querySelector('#application-back').onclick=()=>renderProfile(host);}
 }
-async function renderNotifications(host,{compact=false}={}){
+function goToNotification(item){
+  const provinces=(item?.target_provinces||[]).map(Number).filter(Number.isFinite);
+  if(!provinces.length)return;
+  if(!confirmLeaveEdits())return;
+  closeUtilityPopover();
+  const layer=item.target_layer||'military';
+  if(LAYERS[layer]){settings.layer=layer;window.dispatchEvent(new CustomEvent('map:settings',{detail:settings}));}
+  showMap();
+  const focus=()=>window.dispatchEvent(new CustomEvent('map:focus',{detail:{provinces,layer}}));
+  focus();
+  setTimeout(focus,400);
+}async function renderNotifications(host,{compact=false}={}){
   host.innerHTML='<p class="hint">Загружаю уведомления…</p>';
   try{
     const requestedUser=user,rows=await api('notifications');
@@ -637,10 +648,11 @@ async function renderNotifications(host,{compact=false}={}){
     const unread=rows.filter(item=>!item.read);
     const visible=compact?unread.slice(0,20):rows;
     const actions=(unread.length||compact)?`<div class="inline-actions notification-actions">${unread.length?`<button type="button" data-read-all>Прочитать всё</button>`:''}${compact?`<button type="button" data-all-notifications>Все уведомления</button>`:''}</div>`:'';
-    host.innerHTML=`<div class="notification-list stack"><h3>Уведомления</h3>${actions}${visible.length?visible.map(x=>`<article class="application-panel"><strong>${escape(x.title)}</strong><p>${escape(x.message)}</p><small>${new Date(x.created_at).toLocaleString('ru-RU')}</small>${x.read?'':`<button data-read-notification="${x.id}">Отметить прочитанным</button>`}</article>`).join(''):`<p class="hint">${compact?'Нет новых уведомлений.':'Уведомлений пока нет.'}</p>`}</div>`;
+    host.innerHTML=`<div class="notification-list stack"><h3>Уведомления</h3>${actions}${visible.length?visible.map(x=>`<article class="application-panel"><strong>${escape(x.title)}</strong><p>${escape(x.message)}</p><small>${new Date(x.created_at).toLocaleString('ru-RU')}</small>${x.read?'':`<button data-read-notification="${x.id}">Отметить прочитанным</button>`}${(x.target_provinces||[]).length?`<button type="button" data-notification-go="${x.id}">Перейти</button>`:''}</article>`).join(''):`<p class="hint">${compact?'Нет новых уведомлений.':'Уведомлений пока нет.'}</p>`}</div>`;
     host.querySelector('[data-read-all]')?.addEventListener('click',async()=>{try{await api('notifications/read-all',{method:'PATCH',body:'{}'});await renderNotifications(host,{compact});}catch(error){showStatus(error.message,4000);}});
     host.querySelector('[data-all-notifications]')?.addEventListener('click',()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();renderMenu('Уведомления');});
     host.querySelectorAll('[data-read-notification]').forEach(button=>button.onclick=async()=>{try{await api(`notifications/${button.dataset.readNotification}/read`,{method:'PATCH',body:'{}'});await renderNotifications(host,{compact});}catch(error){showStatus(error.message,4000);}});
+    host.querySelectorAll('[data-notification-go]').forEach(button=>button.onclick=()=>{const item=rows.find(row=>String(row.id)===button.dataset.notificationGo);if(item)goToNotification(item);});
   }catch(error){if(host.isConnected)host.innerHTML=`<p class="form-message">${escape(error.message)}</p>`;}
 }function readImageData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Не удалось прочитать изображение'));reader.readAsDataURL(file);});}
 function updateNotificationBadge(){

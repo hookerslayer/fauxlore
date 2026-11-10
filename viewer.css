@@ -863,3 +863,8 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 @media (max-width:760px){.economy-book-row{grid-template-columns:minmax(0,1fr) 60px 72px 40px}.economy-book-head{display:none}}
 @media (max-width:1000px){.economy-kpi{grid-template-columns:repeat(2,minmax(0,1fr))}.economy-overview-grid2{grid-template-columns:1fr}.economy-flows-row{flex-direction:column}.economy-flows-head{display:none}}
 @media (max-width:620px){.economy-kpi{grid-template-columns:1fr}.economy-estate-cards{grid-template-columns:1fr}.economy-bar-row{grid-template-columns:110px 1fr 82px}}.profile-identity{min-width:0}.profile-contacts{margin:0;padding:12px}.profile-contacts h3{margin:0 0 8px}.profile-contacts-form{display:grid;grid-template-columns:1fr 1fr;gap:8px}.profile-contacts-form .field{gap:3px;min-width:0}.profile-contacts-form input{min-width:0}.profile-contacts-form button{justify-self:start}.profile-contacts-form .form-message{grid-column:1/-1;margin:0}.profile-contacts-form .form-message:empty{display:none}@media(max-width:700px){.profile-header-layout{grid-template-columns:1fr;gap:10px}.profile-contacts-form{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:400px){.profile-contacts-form{grid-template-columns:1fr}}
+
+.turn-limits-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.turn-limit{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.03)}
+.turn-limit small{opacity:.7}
+.turn-limit strong{font-size:1.25rem}

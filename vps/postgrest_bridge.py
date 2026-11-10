@@ -18,7 +18,7 @@ from session_store import DEFAULT_TTL
 
 # This initial list is deliberately small while original database grants are audited.
 ALLOWED_RPC = frozenset({'fauxlore_api', 'map_revision_api', 'wall_api', 'state_journal_api', 'local_events_api', 'player_contacts_api',
-                         'government_form_preview_api', 'military_api', 'colonization_api', 'conquest_api', 'militia_api',
+                         'government_form_preview_api', 'military_api', 'colonization_api', 'conquest_api', 'turn_limits_api', 'militia_api',
                          'garrison_api', 'estate_investment_api', 'estate_social_api', 'estate_fiscal_api',
                          'military_map_api', 'military_order_api', 'military_split_api', 'military_transport_api',
                          'state_development_growth_api', 'admin_resources_api', 'admin_global_modifiers_api',

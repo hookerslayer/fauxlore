@@ -190,7 +190,11 @@ function setupGL() {
     // inside the source texel so it stays fixed even when zoomed in.
     int lineStep=max(1,int(ceil(.75/uScale)));
     bool edge=idAt(p+ivec2(lineStep,0))!=id||idAt(p+ivec2(0,lineStep))!=id;
-    int borderStep=max(1,int(ceil(3./uScale)));
+    // Coast stroke: one source texel, like the province border, but never
+    // thinner than a pixel on screen. It used to ask for three screen pixels,
+    // which made the sea edge four times heavier than every other stroke and
+    // let it swallow small coastal provinces once the map was zoomed out.
+    int borderStep=max(1,int(ceil(1./uScale)));
     bool coastEdge=kind!=0&&(
       kindAt(p+ivec2(borderStep,0))!=kind&&kindAt(p+ivec2(borderStep,0))!=0||
       kindAt(p-ivec2(borderStep,0))!=kind&&kindAt(p-ivec2(borderStep,0))!=0||

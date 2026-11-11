@@ -854,9 +854,16 @@ function pickProvinceId(x,y) {
   const id = (pixel[0]<<16)|(pixel[1]<<8)|pixel[2];
   return id;
 }
+function clearSelection() {
+  selected=0; $('selection').hidden=true;
+  window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:null}));
+  window.dispatchEvent(new CustomEvent('map:garrison-info',{detail:null}));
+  schedule();
+}
 function pick(x,y) {
   const id=pickProvinceId(x,y);
-  if (id) select(id); else { selected=0; $('selection').hidden=true; }
+  // Clicking the province that is already selected clears the selection.
+  if (!id||Number(id)===Number(selected)) clearSelection(); else select(id);
   schedule();
 }
 function pickMarker(x,y){
@@ -920,7 +927,7 @@ function endPointer(e) {
 }
 canvas.addEventListener('pointerup',endPointer); canvas.addEventListener('pointercancel',endPointer);
 canvas.addEventListener('wheel',e=>{ e.preventDefault();window.dispatchEvent(new Event('map:close-military-popup'));zoom(Math.exp(-e.deltaY*(e.deltaMode===1?.045:.0015)),e.clientX,e.clientY); },{passive:false});
-canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();else if(!toolMode)zoom(2,e.clientX,e.clientY);});
+canvas.addEventListener('dblclick',e=>{e.preventDefault();if(toolMode==='area')finishArea();});
 window.addEventListener('map:settings',e=>{activeSettings=e.detail;showIds=!!e.detail.showIds;if(ready)updateLayerColors();schedule();});window.addEventListener('map:focus',event=>{
   const detail=event.detail||{},ids=(detail.provinces||[]).map(Number).filter(Number.isFinite);
   if(detail.layer){activeSettings.layer=detail.layer;if(ready)updateLayerColors();schedule();}
@@ -1011,7 +1018,7 @@ window.addEventListener('map:undo',()=>{toolPoints.pop();areaClosed=false;toolRe
 window.addEventListener('map:clear-tool',()=>{toolPoints=[];areaClosed=false;toolResult('Измерение очищено');schedule();});
 window.addEventListener('map:coordinate',e=>{const[x,y]=e.detail;if(x<region[0]||x>=region[2]||y<region[1]||y>=region[3]){status('Точка находится вне игровой области',4000);return;}view.scale=Math.max(view.scale,1);view.x=viewportWidth/2-x*view.scale;view.y=viewportHeight/2-y*view.scale;clampView();schedule();});
 window.addEventListener('map:copy-coordinates',async()=>{if(!lastPoint){status('Сначала выберите точку на карте',3000);return;}try{await navigator.clipboard.writeText(lastPoint.map(v=>v.toFixed(2)).join(', '));status('Координаты скопированы',2500);}catch{status('Не удалось скопировать координаты',3000);}});
-$('clear-selection').onclick=()=>{selected=0;$('selection').hidden=true;window.dispatchEvent(new CustomEvent('map:selection-changed',{detail:null}));window.dispatchEvent(new CustomEvent('map:garrison-info',{detail:null}));schedule();};
+$('clear-selection').onclick=clearSelection;
 window.addEventListener('resize',resize);
 window.visualViewport?.addEventListener('resize',resize);
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();ready=false;status('Графический контекст потерян. Перезагрузите страницу.');});

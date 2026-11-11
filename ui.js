@@ -3,7 +3,7 @@ import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAu
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=conquest-20261110f';
+import {renderWall} from './wall.js?v=wall-hint-20261111';
 import {renderRules} from './rules.js?v=rules-20261109c';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110fb';
 import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110f';

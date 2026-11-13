@@ -1435,7 +1435,7 @@ async function renderStateModifierTab(host,state,provinces,isAdmin){
     const optionList=(values,label)=>`<option value="">${label}</option>`+values.map(value=>`<option value="${escape(value)}">${escape(value)}</option>`).join('');
     const modifiersFilter=`<div class="table-filters"><select data-modifier-source aria-label="Источник">${optionList(modifierSources,'Все источники')}</select><select data-modifier-scope aria-label="Область">${optionList(modifierScopes,'Все области')}</select><select data-modifier-status aria-label="Статус">${optionList(modifierStatuses,'Все статусы')}</select></div>`;    const permanentRows=permanentModifiers.map(item=>{
       const amount=['%','п.п.'].includes(item.unit)?Number(item.value)*100:Number(item.value);
-      const formatted=number(amount);
+      const formatted=number(Math.abs(amount));
       const valueText=item.unit==='статус'?'Ограничение':['%','п.п.'].includes(item.unit)?`${amount>0?'+':amount<0?'−':''}${formatted} ${item.unit}`:`${amount>0?'+':amount<0?'−':''}${formatted} ${item.unit}`;
       return `<tr data-source="${escape(item.source)}" data-scope="${escape(item.scope)}" data-status="${escape(item.status)}"><td>${escape(item.effect)}</td><td>${escape(valueText)}</td><td>${escape(item.scope)}</td><td>${escape(item.source)}</td><td>${escape(item.condition||'—')}</td><td>${escape(item.duration)}</td><td>${escape(item.status)}</td></tr>`;
     }).join('');

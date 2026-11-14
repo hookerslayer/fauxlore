@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=repo-20261114';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=repo-20261115';
 import {localEventsApi} from './supabase-api.js?v=conquest-20261110f';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=conquest-20261110f';
@@ -637,7 +637,7 @@ function mapClick(x,y){
     if(!province||province.kind!==(draft.formation.domain==='naval'?'sea':'land')){status('Выберите провинцию нужного типа.',3000);return;}
     const previous=draft.route.at(-1);
     if(Number(previous.province_id)!==Number(id)&&!(provinceAdjacency[previous.province_id]||[]).includes(Number(id))){status('Выберите соседнюю провинцию.',3000);return;}
-    const port=draft.formation.domain==='naval'?mapMarkers.find(marker=>marker.type==='port'&&Number(marker.province_id)===Number(id)):null;
+    const port=draft.formation.domain==='naval'?(mapMarkers.find(marker=>marker.type==='port'&&Number(marker.province_id)===Number(id)&&Number(marker.state_id)===Number(draft.formation.state_id))||mapMarkers.find(marker=>marker.type==='port'&&Number(marker.province_id)===Number(id))):null;
     const point=port?{x:Number(port.x),y:Number(port.y)}:{x:p[0],y:p[1]};
     if(Number(previous.province_id)===Number(id))draft.route[draft.route.length-1]={...point,province_id:Number(id)};
     else draft.route.push({...point,province_id:Number(id)});

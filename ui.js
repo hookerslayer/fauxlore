@@ -2306,7 +2306,7 @@ async function renderSelectedPortAction(province,revision){
   if(province?.kind!=='sea'||!user)return;
   const stateId=Number(user.role==='admin'?lastAdminStateId:user.state_ids?.[0]);
   if(!stateId)return;
-  const hasPort=mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&marker.type==='port');
+  const hasPort=mapMarkers.some(marker=>Number(marker.province_id)===Number(province.id)&&marker.type==='port'&&Number(marker.state_id)===Number(stateId));
   const neighbors=provinceAdjacency?.[province.id]||[];
   const hasControlledShore=neighbors.some(id=>{const shore=allProvinces.find(item=>Number(item.id)===Number(id));return shore?.kind==='land'&&Number(shore.layers?.states?.id)===stateId;});
   if(hasPort||!hasControlledShore)return;

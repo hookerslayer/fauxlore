@@ -1,9 +1,9 @@
-import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=20261102d';
+import {modifierTypes,resourceModifiers,isResourceModifier,resourceModifierPayload,instantModifiers,isInstantModifier} from './modifier-catalog.js?v=modifiers-20261112';
 import {playerContactsApi,supabaseApi,supabaseLogin,loadSupabaseInitialMap,hasAuthenticatedSession,militaryApi,militaryOrderApi,militarySplitApi,militiaApi,garrisonApi,estateInvestmentApi,estateSocialApi,estateFiscalApi,colonizationApi,conquestApi,turnLimitsApi,turnReportApi,diplomacyMatrixApi,adminColonizationModifiersApi,adminResourcesApi,adminModifiersApi,instantModifierApi,judgeAssignmentsApi,judgeStateStatisticsApi,adminGlobalModifiersApi,stateProvinceProjectionApi as requestStateProjection,provinceProjectionApi as requestProvinceProjection,governmentFormPreviewApi,stateJournalApi,stateDevelopmentGrowthApi,adminMercenariesApi} from './supabase-api.js?v=conquest-20261110f';
 import {loadConsistentProjection,scheduleAutomaticRetry} from './projection-sync.js?v=auto-recovery-20261031';
 import {refreshStateView} from './view-state.js?v=quiet-refresh-20261031';
 import {PRINCIPLES} from './state-principles.js';
-import {renderWall} from './wall.js?v=wall-hint-20261111';
+import {renderWall} from './wall.js?v=modifiers-20261112';
 import {renderRules} from './rules.js?v=rules-20261109c';
 import {renderMilitaryPanel,renderMilitaryDiplomacy,renderMilitaryContract,renderMilitaryAdminQueue} from './military-ui.js?v=conquest-20261110fb';
 import {renderLocalEventAdmin} from './local-events.js?v=conquest-20261110f';
@@ -15,7 +15,7 @@ export const LAYERS={states:'Государства',races:'Расы',religions:
 const MARKERS={capital:'Столица',city:'Город',fortress:'Крепость',port:'Порт'};
 const INFO={routes:'Торговые пути',provinces:'Названия провинций',states:'Названия государств',races:'Названия рас',religions:'Названия религий',resources:'Названия ресурсов',trade:'Названия торговых зон'};
 const STATE_SECTIONS=['Статистика','Провинции','Экономика','Торговля','Дипломатия','Власть и династия','Военное дело','Модификаторы','Журнал'];
-const PANELS={legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Администрирование','shield','right']};
+const PANELS={legend:['Легенда','list','left'],control:['Управление','sliders-horizontal','right'],markers:['Маркеры','map-pin','right'],info:['Информация','info','right'],tools:['Инструменты','ruler','right'],admin:['Редактор карты','shield','right']};
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emit=(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail}));
 let current=null,user=null,categories=[],allProvinces=[],provinceAdjacency={},mapMarkers=[],activeColonies=[],selectedProvince=null,pendingMarkerDraft=null,toolMode='',lastToolResult='',saveTimer,showStatus=()=>{},adminEditing=false,paintField='climate',paintValue='',paintActive=false,legendOpen=false,stateRows=[],applicationDraft=null,applicationPickMode=null,unreadNotificationCount=0,notificationFetchToken=0,activeMenuSection='Профиль',tradeRoutePick=null,pendingStateNavigation=null,activeContractType='dynastic_marriage',tradeAvailability={},tradeProposalDraft={fromStateId:null,toStateId:null,route:[],fromGoods:[{name:'',quantity:0}],toGoods:[{name:'',quantity:0}],fromGold:0,toGold:0};
@@ -66,6 +66,7 @@ function stateProvinceProjectionApi(stateId,view='provinces'){
 export function consistentProvinceProjectionApi(provinceId){return consistentProjection(()=>requestProvinceProjection(provinceId));}
 
 let lastStateSection='Статистика',lastAdminStateId=null,lastAdminStateTab='Статистика',pendingProvinceId=null,activePortPlacementUI=null;
+let judgeStates=[],judgeAccessPromise=null,masterTab='applications';
 let provinceColumnPreset='Основное',provinceSearchQuery='';
 let headerResourceToken=0;
 let visibleGarrisonsByProvince=new Map();
@@ -423,7 +424,7 @@ async function refreshHeaderResources(){
   }catch{/* The header keeps placeholders while state data is unavailable. */}
 }
 async function acceptUser(next){
-  user=next;colonizationMilitaryCache.clear();if(user?.state_ids?.[0])void loadColonizationMilitary(Number(user.state_ids[0])).catch(()=>{});notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);}$('panel-admin').hidden=user?.role!=='admin';
+  user=next;colonizationMilitaryCache.clear();if(user?.state_ids?.[0])void loadColonizationMilitary(Number(user.state_ids[0])).catch(()=>{});notificationFetchToken++;unreadNotificationCount=0;updateNotificationBadge();$('advance-turn').hidden=user?.role!=='admin';$('header-profile-name').textContent=user?.nickname||'Профиль';$('header-profile').setAttribute('aria-label',user?`Профиль: ${user.nickname}`:'Профиль');if(user?.role!=='admin'){adminEditing=false;paintActive=false;emit('map:admin-paint',null);}$('panel-admin').hidden=user?.role!=='admin';judgeStates=[];judgeAccessPromise=null;updateMasterEntry();if(user&&user.role!=='admin')void ensureJudgeAccess();
   emit('auth:user-changed',user);
   void refreshHeaderResources();
   if(!user&&current==='admin')closeDrawer();
@@ -439,20 +440,138 @@ function renderAuth(){
   host.innerHTML='<div class="stack"><button id="google-login" class="primary">Войти через Google</button><p class="hint">При первом входе игровой аккаунт создаётся автоматически.</p><p id="auth-message" class="hint" role="status"></p></div>';
   $('google-login').onclick=async()=>{const button=$('google-login');button.disabled=true;try{const result=await supabaseLogin();await acceptUser(result.user);$("modal").close();showStatus(`Вы вошли как ${result.user.nickname}`,3000);}catch(error){$('auth-message').textContent=error.message;}finally{button.disabled=false;}};
 }
+const MASTER_TABS_ADMIN=[
+  ['applications','Анкеты'],
+  ['players','Игроки'],
+  ['modifiers','Модификаторы'],
+  ['events','События'],
+  ['military','Военное'],
+  ['economy','Экономика'],
+  ['map','Карта'],
+];
+const MASTER_TABS_JUDGE=[
+  ['states','Мои государства'],
+  ['modifiers','Модификаторы'],
+  ['events','События'],
+];
+async function ensureJudgeAccess(){
+  if(!user)return false;
+  if(user.role==='admin')return true;
+  if(judgeAccessPromise)return judgeAccessPromise;
+  judgeAccessPromise=(async()=>{
+    try{
+      const snapshot=await adminModifiersApi('snapshot');
+      judgeStates=Array.isArray(snapshot?.states)?snapshot.states:[];
+    }catch{
+      judgeStates=[];
+    }
+    updateMasterEntry();
+    return judgeStates.length>0;
+  })();
+  return judgeAccessPromise;
+}
+function updateMasterEntry(){
+  const entry=$('header-master');
+  if(entry)entry.hidden=!(user&&(user.role==='admin'||judgeStates.length));
+}
+function renderMasterTab(container,tab){
+  if(!container)return;
+  if(tab==='applications'){void renderAdminApplications(container);return;}
+  if(tab==='states'){
+    container.innerHTML='<section class="application-panel" data-master-states></section>';
+    void renderJudgeStatistics(container.querySelector('[data-master-states]'));
+    return;
+  }
+  if(tab==='players'){
+    container.innerHTML='<section class="application-panel" data-master-users><h3>Пользователи и государства</h3><p class="hint">Загружаю…</p></section><section class="application-panel" data-master-judges><h3>Судьи</h3><p class="hint">Загружаю…</p></section>';
+    const snapshot=judgeAssignmentsApi('snapshot');
+    void renderAdminUsers(container.querySelector('[data-master-users]'),snapshot);
+    void renderJudgeAssignments(container.querySelector('[data-master-judges]'),snapshot);
+    return;
+  }
+  if(tab==='modifiers'){
+    if(user?.role!=='admin'){
+      container.innerHTML='<section class="application-panel" data-master-constructor></section>';
+      void renderAdminModifierEditor(container.querySelector('[data-master-constructor]'));
+      return;
+    }
+    container.innerHTML='<section class="application-panel" data-master-constructor></section><section class="application-panel" data-master-global></section><section class="application-panel" data-master-colonization></section>';
+    void renderAdminModifierEditor(container.querySelector('[data-master-constructor]'));
+    void renderAdminGlobalModifiers(container.querySelector('[data-master-global]'));
+    void renderAdminColonizationModifiers(container.querySelector('[data-master-colonization]'));
+    return;
+  }
+  if(tab==='events'){
+    container.innerHTML='<section class="application-panel" data-master-events></section>';
+    void renderLocalEventAdmin(container.querySelector('[data-master-events]'));
+    return;
+  }
+  if(tab==='military'){
+    container.innerHTML='<div data-master-decisions></div><section class="application-panel" data-master-orders></section><section class="application-panel" data-master-mercenaries></section><section class="application-panel" data-master-neutral></section>';
+    void renderMilitaryAdminQueue(container.querySelector('[data-master-decisions]'),{notify:message=>showStatus(message,4000)});
+    void renderAdminMilitaryOrders(container.querySelector('[data-master-orders]'));
+    void renderAdminMercenaries(container.querySelector('[data-master-mercenaries]'));
+    void renderNeutralForces(container.querySelector('[data-master-neutral]'));
+    return;
+  }
+  if(tab==='economy'){
+    container.innerHTML='<section class="application-panel" data-master-economy></section>';
+    void renderAdminResourceEditor(container.querySelector('[data-master-economy]'));
+    return;
+  }
+  if(tab==='map'){
+    container.innerHTML='<section class="application-panel"><h3>Редактор карты</h3><p class="hint">Рисование провинций, маркеры и цвета остаются на карте, чтобы не терять контекст.</p><button type="button" id="master-open-map">Открыть карту и редактор</button></section><section class="application-panel" data-master-rollback></section>';
+    container.querySelector('#master-open-map').onclick=()=>{showMap();setTimeout(()=>{if(!$('panel-admin').hidden)togglePanel('admin');},60);};
+    void renderAdminRollback(container.querySelector('[data-master-rollback]'));
+  }
+}
+async function renderMasterPage(host,requestedTab=masterTab){
+  const admin=user?.role==='admin';
+  const allowed=admin||await ensureJudgeAccess();
+  if(!allowed||!host.isConnected){
+    if(!host.isConnected)return;
+    host.innerHTML='<div class="empty-page"><span class="badge">ДОСТУП</span><h2>Мастерская</h2><p>Раздел доступен администратору и судье.</p><button type="button" id="master-login">Открыть профиль</button></div>';
+    host.querySelector('#master-login').onclick=()=>user?renderMenu('Профиль'):renderAuth();
+    return;
+  }
+  const tabs=admin?MASTER_TABS_ADMIN:MASTER_TABS_JUDGE;
+  const valid=tabs.some(([key])=>key===requestedTab)?requestedTab:tabs[0][0];
+  masterTab=valid;
+  host.innerHTML=`<div class="master-page stack"><nav class="master-tabs" aria-label="Разделы мастерской">${tabs.map(([key,label])=>`<button type="button" data-master-tab="${key}" class="${key===valid?'active':''}" ${key===valid?'aria-current="page"':''}>${label}</button>`).join('')}</nav><label class="master-tab-picker"><span>Раздел мастерской</span><select>${tabs.map(([key,label])=>`<option value="${key}" ${key===valid?'selected':''}>${label}</option>`).join('')}</select></label><div class="master-content stack" data-master-content></div></div>`;
+  const content=host.querySelector('[data-master-content]');
+  const tabsEl=host.querySelector('.master-tabs');
+  const picker=host.querySelector('.master-tab-picker select');
+  const setActive=tab=>{
+    tabsEl.querySelectorAll('[data-master-tab]').forEach(button=>{
+      const active=button.dataset.masterTab===tab;
+      button.classList.toggle('active',active);
+      if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+    });
+    picker.value=tab;
+  };
+  const activate=(tab,writeHistory=true)=>{
+    if(!tabs.some(([key])=>key===tab))return;
+    masterTab=tab;
+    setActive(tab);
+    if(writeHistory)history.replaceState({section:'Мастерская',tab},'',routeHash('Мастерская',null,tab));
+    content.replaceChildren();
+    renderMasterTab(content,tab);
+  };
+  tabsEl.querySelectorAll('[data-master-tab]').forEach(button=>button.onclick=()=>{if(confirmLeaveEdits())activate(button.dataset.masterTab);});
+  picker.onchange=()=>{if(confirmLeaveEdits())activate(picker.value);else picker.value=masterTab;};
+  activate(valid);
+}
 async function renderProfile(host,showApplicationForm=false){
   if(!user){host.innerHTML='<h3>Профиль</h3><p class="hint">Войдите или зарегистрируйтесь, чтобы управлять профилем.</p><button id="profile-login">Войти</button>';host.querySelector('#profile-login').onclick=()=>renderAuth();return;}
   if(showApplicationForm||applicationDraft){renderApplicationForm(host);return;}
   host.innerHTML='<p class="hint">Загружаю профиль…</p>';
   try{
     const [profile,applications]=await Promise.all([api('profile'),api('my/applications')]);if(!host.isConnected)return;
+    await ensureJudgeAccess();if(!host.isConnected)return;
     const pending=applications.find(item=>item.status==='На рассмотрении');
+    const masterAccess=profile.role==='admin'||judgeStates.length>0;
     const avatar=profile.avatar_url?`<img class="profile-avatar" src="${escape(profile.avatar_url)}${profile.avatar_url.startsWith('data:')?'':`?v=${Date.now()}`}" alt="Аватар">`:`<span class="profile-avatar profile-avatar-fallback">${escape(profile.nickname.slice(0,1).toUpperCase())}</span>`;
-    host.innerHTML=`<div class="profile-header-layout"><div class="profile-identity"><div class="profile-card">${avatar}<div><h3>${escape(profile.nickname)}</h3><p class="hint">${escape(profile.email||'')} · ${profile.role==='admin'?'Администратор':'Игрок'}</p><p>Репутация: <strong>${profile.reputation}</strong></p></div></div><div class="profile-avatar-actions"><label class="profile-avatar-upload">${profile.avatar_url?'Сменить аватар':'Загрузить аватар'}<input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>${profile.avatar_url?'<button id="profile-avatar-delete">Удалить аватар</button>':''}<span class="hint">PNG, JPEG, GIF или WebP · до 2 МБ</span></div></div><section class="application-panel profile-contacts" data-profile-contacts><h3>Контакты</h3><p class="hint" role="status">Загружаю контакты…</p></section></div>${profile.role==='admin'?'<section class="application-panel"><h3>Модерация</h3><button id="admin-applications">Анкеты игроков</button></section>':''}${profile.role!=='admin'&&!profile.state_ids?.length?`<section class="application-panel"><h3>Государство</h3>${pending?`<p>Анкета «${escape(pending.state_name)}» — <strong>На рассмотрении</strong></p><button data-open-application="${pending.id}">Открыть анкету</button>`:`<button id="create-application" class="primary">Создать государство</button>`}${applications.filter(item=>item.status!=='На рассмотрении').map(item=>`<button class="application-history" type="button" data-open-application="${item.id}">${escape(item.state_name)} — ${escape(item.status)}</button>`).join('')}</section>`:''}${applications.some(item=>item.status==='Принято')?`<p>Ваше государство: <strong>${escape(applications.find(item=>item.status==='Принято').state_name)}</strong></p>`:''}`;
-    if(profile.role!=='admin'){try{const judgeSnapshot=await adminModifiersApi('snapshot');if((judgeSnapshot.states||[]).length&&host.isConnected){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-judge-statistics></section><section class="application-panel admin-modifier-editor" data-judge-modifiers></section><section class="application-panel" data-judge-events></section>');void renderJudgeStatistics(host.querySelector('[data-judge-statistics]'));void renderAdminModifierEditor(host.querySelector('[data-judge-modifiers]'));void renderLocalEventAdmin(host.querySelector('[data-judge-events]'));}}catch(error){if(error.code!=='42501')console.warn('Не удалось загрузить права судьи:',error);}}
-    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-admin-users><h3>Пользователи и государства</h3><p class="hint">Загружаю…</p></section><section class="application-panel" data-judges><h3>Судьи</h3><p class="hint">Загружаю…</p></section>');const adminSnapshot=judgeAssignmentsApi('snapshot');void renderAdminUsers(host.querySelector('[data-admin-users]'),adminSnapshot);void renderJudgeAssignments(host.querySelector('[data-judges]'),adminSnapshot);}
-    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-resource-editor" data-admin-resource-editor><h3>Ресурсы государств</h3><p class="hint">Корректировка Казны руководящего центра, Престижа и Рекрутов.</p><p class="hint">Загружаю данные…</p></section><section class="application-panel admin-modifier-editor" data-admin-modifier-editor><h3>Конструктор модификаторов</h3><p class="hint">Загружаю каталог и действующие назначения…</p></section><section class="application-panel" data-admin-colonization-modifiers><h3>Модификаторы колонизации</h3><p class="hint">Загружаю данные…</p></section><div data-military-admin-queue></div>');void renderAdminResourceEditor(host.querySelector('[data-admin-resource-editor]'));void renderAdminModifierEditor(host.querySelector('[data-admin-modifier-editor]'));void renderAdminColonizationModifiers(host.querySelector('[data-admin-colonization-modifiers]'));void renderMilitaryAdminQueue(host.querySelector('[data-military-admin-queue]'),{notify:message=>showStatus(message,4000)});}
-    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel" data-local-events><h3>Создание местных событий</h3><p>Загружаю…</p></section><section class="application-panel" data-admin-mercenaries><h3>Наёмники</h3><p>Загружаю…</p></section><section class="application-panel" data-neutral-forces><h3>Нейтральные силы</h3><p class="hint">Загружаю…</p></section><section class="application-panel" data-admin-rollback><h3>Откат строительства</h3><p class="hint">Загружаю…</p></section>');void renderLocalEventAdmin(host.querySelector('[data-local-events]'));void renderAdminMercenaries(host.querySelector('[data-admin-mercenaries]'));void renderNeutralForces(host.querySelector('[data-neutral-forces]'));void renderAdminRollback(host.querySelector('[data-admin-rollback]'));}
-    if(profile.role==='admin'){host.insertAdjacentHTML('beforeend','<section class="application-panel admin-global-modifiers" data-global-modifiers><h3>Глобальные модификаторы</h3><p class="hint">Загружаю назначения…</p></section><section class="application-panel" data-military-orders><h3>Приказы о передвижении</h3><p>Загружаю приказы…</p></section>');void renderAdminGlobalModifiers(host.querySelector('[data-global-modifiers]'));void renderAdminMilitaryOrders(host.querySelector('[data-military-orders]'));}
+    host.innerHTML=`<div class="profile-header-layout"><div class="profile-identity"><div class="profile-card">${avatar}<div><h3>${escape(profile.nickname)}</h3><p class="hint">${escape(profile.email||'')} · ${profile.role==='admin'?'Администратор':judgeStates.length?'Судья':'Игрок'}</p><p>Репутация: <strong>${profile.reputation}</strong></p></div></div><div class="profile-avatar-actions"><label class="profile-avatar-upload">${profile.avatar_url?'Сменить аватар':'Загрузить аватар'}<input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>${profile.avatar_url?'<button id="profile-avatar-delete">Удалить аватар</button>':''}<span class="hint">PNG, JPEG, GIF или WebP · до 2 МБ</span></div></div><section class="application-panel profile-contacts" data-profile-contacts><h3>Контакты</h3><p class="hint" role="status">Загружаю контакты…</p></section></div>${masterAccess?'<section class="application-panel"><h3>Мастерская</h3><p class="hint">Анкеты, игроки, модификаторы, события и военные инструменты.</p><button id="open-master">Открыть мастерскую</button></section>':''}${profile.role!=='admin'&&!profile.state_ids?.length?`<section class="application-panel"><h3>Государство</h3>${pending?`<p>Анкета «${escape(pending.state_name)}» — <strong>На рассмотрении</strong></p><button data-open-application="${pending.id}">Открыть анкету</button>`:`<button id="create-application" class="primary">Создать государство</button>`}${applications.filter(item=>item.status!=='На рассмотрении').map(item=>`<button class="application-history" type="button" data-open-application="${item.id}">${escape(item.state_name)} — ${escape(item.status)}</button>`).join('')}</section>`:''}${applications.some(item=>item.status==='Принято')?`<p>Ваше государство: <strong>${escape(applications.find(item=>item.status==='Принято').state_name)}</strong></p>`:''}`;
     const contactsSection=host.querySelector('[data-profile-contacts]');
     void playerContactsApi('own').then(contacts=>{if(!contactsSection.isConnected)return;contactsSection.innerHTML=`<h3>Контакты</h3><form class="profile-contacts-form"><label class="field"><span>Telegram</span><input name="telegram_url" type="url" maxlength="200" placeholder="https://t.me/имя" value="${escape(contacts.telegram_url||'')}"></label><label class="field"><span>ВКонтакте</span><input name="vk_url" type="url" maxlength="200" placeholder="https://vk.com/имя" value="${escape(contacts.vk_url||'')}"></label><button type="submit">Сохранить</button><p class="form-message" role="status"></p></form>`;const form=contactsSection.querySelector('form');form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button'),message=form.querySelector('[role="status"]');button.disabled=true;try{await playerContactsApi('save',null,{telegram_url:form.elements.telegram_url.value.trim(),vk_url:form.elements.vk_url.value.trim()});message.textContent='Контакты сохранены';}catch(error){message.textContent=error.message;}finally{button.disabled=false;}};}).catch(error=>{if(contactsSection.isConnected)contactsSection.querySelector('[role="status"]').textContent=error.message;});
     host.insertAdjacentHTML('beforeend','<div class="profile-session-actions"><button type="button" id="profile-logout">Выйти из аккаунта</button></div>');
@@ -461,7 +580,7 @@ async function renderProfile(host,showApplicationForm=false){
     host.querySelector('#profile-avatar-file').onchange=async event=>{const file=event.target.files?.[0];if(!file)return;if(file.size>2*1024*1024){showStatus('Аватар должен быть не больше 2 МБ',4000);return;}try{const image_data=await readImageData(file);await api('profile/avatar',{method:'POST',body:JSON.stringify({image_data})});showStatus('Аватар обновлён',2500);renderProfile(host);}catch(error){showStatus(error.message,5000);}};
     host.querySelector('#profile-avatar-delete')?.addEventListener('click',async()=>{try{await api('profile/avatar',{method:'POST',body:JSON.stringify({image_data:null})});showStatus('Аватар удалён',2500);renderProfile(host);}catch(error){showStatus(error.message,5000);}});
     host.querySelector('#create-application')?.addEventListener('click',()=>{applicationDraft={province_ids:[],principles:Object.fromEntries(Object.entries(PRINCIPLES).map(([key,values])=>[key,values[0]])),state_color:'#657e91'};renderProfile(host,true);});
-    host.querySelector('#admin-applications')?.addEventListener('click',()=>renderAdminApplications(host));
+    host.querySelector('#open-master')?.addEventListener('click',()=>renderMenu('Мастерская'));
     host.querySelectorAll('[data-open-application]').forEach(button=>button.onclick=()=>showApplication(host,applications.find(item=>String(item.id)===button.dataset.openApplication)));
   }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p><button type="button" id="profile-logout">Выйти из аккаунта</button>`;host.querySelector('#profile-logout').onclick=async()=>{try{await api('auth/logout',{method:'POST',body:'{}'});await acceptUser(null);emit('map:refresh');renderMenu('Профиль');}catch(failure){showStatus(failure.message,5000);}};}
 }
@@ -623,11 +742,11 @@ async function showApplication(host,summary){
 }
 async function renderAdminApplications(host){
   host.innerHTML='<p class="hint">Загружаю анкеты…</p>';
-  try{const rows=await api('admin/applications');if(!host.isConnected)return;host.innerHTML=`<div class="application-review stack"><h3>Анкеты игроков</h3>${rows.length?rows.map(x=>`<article class="application-panel"><h3>${escape(x.state_name)}</h3><p>Автор: ${escape(x.applicant_nickname)} · ${escape(x.applicant_email)}</p><p>${escape(x.ruler_title)} ${escape(x.ruler_name)} · ${x.ruler_gender}, ${x.ruler_age} лет</p><p>${Object.values(x.principles).map(escape).join(' · ')}</p><p>Столица: ${escape(x.capital_name)} · провинция ${x.capital_province_id}</p><p>Территории: ${x.province_ids.map(id=>escape(allProvinces.find(p=>p.id===Number(id))?.name||`ID ${id}`)).join(', ')}</p><img class="application-emblem-preview" src="data:${x.emblem_type};base64,${x.emblem_base64}" alt="Символика"><details><summary>История (${x.history.length} символов)</summary><p>${escape(x.history)}</p></details><textarea data-reason="${x.id}" maxlength="1000" placeholder="Причина отказа" rows="2"></textarea><div class="application-actions"><button class="primary" data-accept="${x.id}">Принять</button><button class="danger-button" data-reject="${x.id}">Отклонить</button></div></article>`).join(''):'<p class="hint">Нет заявок на рассмотрении.</p>'}<button id="application-back">Назад в профиль</button></div>`;
+  try{const rows=await api('admin/applications');if(!host.isConnected)return;host.innerHTML=`<div class="application-review stack"><h3>Анкеты игроков</h3>${rows.length?rows.map(x=>`<article class="application-panel"><h3>${escape(x.state_name)}</h3><p>Автор: ${escape(x.applicant_nickname)} · ${escape(x.applicant_email)}</p><p>${escape(x.ruler_title)} ${escape(x.ruler_name)} · ${x.ruler_gender}, ${x.ruler_age} лет</p><p>${Object.values(x.principles).map(escape).join(' · ')}</p><p>Столица: ${escape(x.capital_name)} · провинция ${x.capital_province_id}</p><p>Территории: ${x.province_ids.map(id=>escape(allProvinces.find(p=>p.id===Number(id))?.name||`ID ${id}`)).join(', ')}</p><img class="application-emblem-preview" src="data:${x.emblem_type};base64,${x.emblem_base64}" alt="Символика"><details><summary>История (${x.history.length} символов)</summary><p>${escape(x.history)}</p></details><textarea data-reason="${x.id}" maxlength="1000" placeholder="Причина отказа" rows="2"></textarea><div class="application-actions"><button class="primary" data-accept="${x.id}">Принять</button><button class="danger-button" data-reject="${x.id}">Отклонить</button></div></article>`).join(''):'<p class="hint">Нет заявок на рассмотрении.</p>'}<button id="application-back">Назад в мастерскую</button></div>`;
     host.querySelectorAll('[data-accept]').forEach(b=>b.onclick=async()=>{if(!confirm('Принять анкету и создать государство?'))return;b.disabled=true;try{await api(`admin/applications/${b.dataset.accept}`,{method:'PATCH',body:JSON.stringify({status:'Принято'})});emit('map:refresh');showStatus('Государство создано',3000);renderAdminApplications(host);}catch(e){b.disabled=false;showStatus(e.message,5000);}});
     host.querySelectorAll('[data-reject]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api(`admin/applications/${b.dataset.reject}`,{method:'PATCH',body:JSON.stringify({status:'Отклонено',rejection_reason:host.querySelector(`[data-reason="${b.dataset.reject}"]`).value})});emit('map:refresh');showStatus('Анкета отклонена',2500);renderAdminApplications(host);}catch(e){b.disabled=false;showStatus(e.message,5000);}});
-    host.querySelector('#application-back').onclick=()=>renderProfile(host);
-  }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p><button id="application-back">Назад</button>`;host.querySelector('#application-back').onclick=()=>renderProfile(host);}
+    host.querySelector('#application-back').onclick=()=>renderMenu('Мастерская');
+  }catch(error){host.innerHTML=`<p class="form-message">${escape(error.message)}</p><button id="application-back">Назад в мастерскую</button>`;host.querySelector('#application-back').onclick=()=>renderMenu('Мастерская');}
 }
 function goToNotification(item){
   const provinces=(item?.target_provinces||[]).map(Number).filter(Number.isFinite);
@@ -706,10 +825,15 @@ function confirmLeaveEdits(){
   if(!host||$('app-page').hidden)return true;
   return !hasUnsavedStateEdits(host)||window.confirm('Есть несохранённые изменения. Перейти в другой раздел без сохранения?');
 }
-const routeHash=(section,stateId=null,tab='Статистика')=>`#view=${encodeURIComponent(section)}${section==='Государства'&&stateId?`&state=${Number(stateId)}&tab=${encodeURIComponent(tab)}`:''}`;
+const routeHash=(section,stateId=null,tab='Статистика')=>{
+  if(section==='Государства'&&stateId)return `#view=${encodeURIComponent(section)}&state=${Number(stateId)}&tab=${encodeURIComponent(tab)}`;
+  if(section==='Мастерская')return `#view=${encodeURIComponent(section)}&tab=${encodeURIComponent(tab||'applications')}`;
+  return `#view=${encodeURIComponent(section)}`;
+};
 function sectionFromLocation(){
   const params=new URLSearchParams(location.hash.slice(1)),section=params.get('view')||'map';
   if(section==='Города'){history.replaceState({section:'Статистика'},'',routeHash('Статистика'));return 'Статистика';}
+  if(section==='Мастерская'){masterTab=params.get('tab')||'applications';}
   if(section==='Государства'){
     const stateId=Number(params.get('state'))||null,tab=params.get('tab')||'Статистика';
     lastAdminStateId=stateId;lastAdminStateTab=STATE_SECTIONS.includes(tab)?tab:'Статистика';
@@ -737,7 +861,7 @@ function showUtilityPopover(kind){
   $('header-notifications').setAttribute('aria-expanded',String(kind==='notifications'));
   $('header-profile').setAttribute('aria-expanded',String(kind==='profile'));
   if(kind==='profile'){
-    popover.innerHTML=`<div class="utility-menu"><strong>${escape(user?.nickname||'Профиль')}</strong><span class="hint">${user?.role==='admin'?'Администратор':user?'Игрок':'Гость'}</span><button type="button" data-open-profile>${user?'Открыть профиль':'Войти'}</button></div>`;
+    popover.innerHTML=`<div class="utility-menu"><strong>${escape(user?.nickname||'Профиль')}</strong><span class="hint">${user?.role==='admin'?'Администратор':judgeStates.length?'Судья':user?'Игрок':'Гость'}</span><button type="button" data-open-profile>${user?'Открыть профиль':'Войти'}</button></div>`;
     popover.querySelector('[data-open-profile]').onclick=()=>{if(!confirmLeaveEdits())return;closeUtilityPopover();if(user)renderMenu('Профиль');else renderAuth();};
   }else if(user){
     void renderNotifications(popover,{compact:true});
@@ -771,7 +895,8 @@ function renderMenu(section='Статистика',fromHistory=false){
   $('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');
   const tabs=$('page-tabs'),picker=$('page-tab-picker'),tabSelect=$('page-tab-select'),heading=$('page-heading'),content=$('menu-section');
   const isState=view==='state';
-  heading.innerHTML=`<div><span class="page-eyebrow">${isState?'УПРАВЛЕНИЕ ГОСУДАРСТВОМ':'FAUXLORE'}</span><h1>${escape(isState?'Государство':section)}</h1></div>`;
+  const isMaster=section==='Мастерская';
+  heading.innerHTML=`<div><span class="page-eyebrow">${isState?'УПРАВЛЕНИЕ ГОСУДАРСТВОМ':isMaster?'РАБОЧЕЕ ПРОСТРАНСТВО':'FAUXLORE'}</span><h1>${escape(isState?'Государство':section)}</h1></div>`;
   tabs.hidden=!isState||user?.role==='admin';
   picker.hidden=tabs.hidden;
   if(!tabs.hidden){
@@ -782,10 +907,11 @@ function renderMenu(section='Статистика',fromHistory=false){
   }else{tabs.replaceChildren();tabSelect.replaceChildren();}
   content.replaceChildren();
   $('app-page').scrollTop=0;
-  const nextHash=routeHash(section,section==='Государства'?(pendingStateNavigation?.stateId||lastAdminStateId):null,pendingStateNavigation?.tab||lastAdminStateTab);
+  const nextHash=section==='Мастерская'?routeHash('Мастерская',null,masterTab):routeHash(section,section==='Государства'?(pendingStateNavigation?.stateId||lastAdminStateId):null,pendingStateNavigation?.tab||lastAdminStateTab);
   if(!fromHistory&&location.hash!==nextHash)history.pushState({section},'',nextHash);
   document.title=`${isState?(section==='Статистика'?'Обзор':section):section} — Sixième Terre`;
   if(section==='Профиль')renderProfile(content);
+  else if(section==='Мастерская')void renderMasterPage(content,masterTab);
   else if(section==='Стена')void renderWall(content,user,()=>window.dispatchEvent(new Event('state:resources-changed')));
   else if(section==='Государства'&&user?.role==='admin')renderStatesMenu(content);
   else if(section==='Уведомления'&&user)renderNotifications(content);
@@ -1925,6 +2051,7 @@ export function initUI(notify){
     else renderMenu(view==='wall'?'Стена':'Правила и механики');
   });
   $('header-profile').onclick=()=>showUtilityPopover('profile');
+  $('header-master')?.addEventListener('click',()=>{if(confirmLeaveEdits())renderMenu('Мастерская');});
   $('header-notifications').onclick=()=>showUtilityPopover('notifications');
   $('calendar-toggle').onclick=()=>{closeUtilityPopover();const popover=$('calendar-popover');popover.hidden=!popover.hidden;$('calendar-toggle').setAttribute('aria-expanded',String(!popover.hidden));};
   document.addEventListener('click',event=>{if(!event.target.closest('.turn-badge')){$('calendar-popover').hidden=true;$('calendar-toggle').setAttribute('aria-expanded','false');}if(!event.target.closest('.app-utilities,.utility-popover'))closeUtilityPopover();});

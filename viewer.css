@@ -894,3 +894,22 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
 .diplomacy-matrix .matrix-diagonal{opacity:.25}
 .diplomacy-matrix .matrix-muted{opacity:.12}
 .diplomacy-matrix .matrix-match{color:#f0d789}
+#header-master{width:38px;padding:7px}
+.master-page{display:grid;gap:12px;min-width:0}
+.master-tabs{display:flex;gap:4px;min-height:44px;overflow-x:auto;border-bottom:1px solid var(--ui-border);scrollbar-width:thin}
+.master-tabs button{position:relative;flex:none;min-height:40px;padding:8px 12px;border:0;border-radius:0;background:transparent;color:var(--ui-muted);font-size:13px;font-weight:500;white-space:nowrap}
+.master-tabs button.active{color:var(--ui-text);background:var(--ui-accent-soft);font-weight:650}
+.master-tabs button.active::after{content:"";position:absolute;inset:auto 0 0;height:2px;background:var(--ui-accent)}
+.master-tabs button:hover:not(:disabled){border:0;background:var(--ui-surface-hover);color:var(--ui-text)}
+.master-tab-picker{display:none}
+.master-content{min-width:0}
+@media(max-width:900px){#header-master{width:38px;padding:7px}}
+@media(max-width:767px){
+  .master-tabs{display:none}
+  .master-tab-picker{display:grid;gap:6px;max-width:420px;font-size:12px;color:var(--ui-muted)}
+  .master-tab-picker select{min-height:44px;width:100%;padding:8px 12px;font-size:14px;color:var(--ui-text);background:var(--ui-surface-raised);border:1px solid var(--ui-border);border-radius:6px}
+  .app-header{grid-template-columns:auto minmax(0,1fr) auto auto auto}
+  #header-notifications{grid-column:3}
+  #header-master{grid-column:4}
+  #header-profile{grid-column:5}
+}

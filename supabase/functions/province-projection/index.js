@@ -68,7 +68,7 @@ export async function handleProvinceProjection(request, {
       const state = states.find(item => Number(item.id) === stateId);
       if (!state) return json(403, {error: 'Нет доступа к государству'});
       const indicators = await read(`${prefix}/states/${stateId}/indicators`);
-      const context = {...state, permanent_modifiers: indicators.permanent_modifiers || []};
+      const context = {...state, permanent_modifiers: indicators.permanent_modifiers || [], estate_loyalties: indicators.estate_loyalties || []};
       if (view === 'trade' || view === 'finance') {
         const secret = getEnv('SUPABASE_SERVICE_ROLE_KEY');
         if (!secret) throw new Error('Не настроен серверный ключ прогнозов');

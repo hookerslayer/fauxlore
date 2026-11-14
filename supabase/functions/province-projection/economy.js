@@ -293,9 +293,11 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
   const principles=stateContext?.principles||state?.principles||{};
   const activeElfFaith=(provinces||[]).some(p=>p.kind==='land'&&p.layers?.states?.name===stateName&&p.layers?.races?.name==='Эльфы');
   const activeOrthodoxy=(provinces||[]).some(p=>p.kind==='land'&&p.layers?.states?.name===stateName&&p.layers?.religions?.name==='Правоверие');
+  const authoritativeLoyalties=new Map((stateContext?.estate_loyalties||[]).map(item=>[item.name,item]));
   for(const name of ESTATE_NAMES) {
     const row=rowsByKey.get(`estate:${name}`);
-    const influence=adjusted[name];
+    const authoritative=authoritativeLoyalties.get(name);
+    const influence=authoritative?Number(authoritative.influence):adjusted[name];
     const ambition=ESTATE_AMBITIONS[row?.status]??0;
     const burden=taxBurden[name];
     const rateRatio=burden.baseline?burden.actual/burden.baseline:1;
@@ -309,7 +311,7 @@ export function calculateStatePolitics(provinces,politicsRows,stateName,stateCon
     const principleLoyalty=listedModifiers
       ?modifierTotal('estate_loyalty')+(name==='Знать'?modifierTotal('nobility_loyalty'):0)+(name==='Крестьяне'?modifierTotal('peasant_loyalty'):0)+(name==='Духовенство'?modifierTotal('clergy_loyalty'):0)+(name==='Горожане'?modifierTotal('burgher_loyalty'):0)
       :fallbackLoyalty;
-    const loyalty=clamp01(Number(row?.loyalty??.5)+influence-ambition-taxAdjustment+bonus+principleLoyalty);
+    const loyalty=authoritative?clamp01(Number(authoritative.effective_loyalty)):clamp01(Number(row?.loyalty??.5)+influence-ambition-taxAdjustment+bonus+principleLoyalty);
     estateInfluence[name]=influence;
     estateLoyalty[name]=loyalty;
     const factor=estateStatusFactors[row?.status];

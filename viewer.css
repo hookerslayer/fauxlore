@@ -913,3 +913,7 @@ dialog.military-formation-dialog .modal-shell{height:auto;max-height:calc(100dvh
   #header-master{grid-column:4}
   #header-profile{grid-column:5}
 }
+
+.wall-state-info{display:grid;gap:8px;margin:4px 0 8px}
+.wall-state-card{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border:1px solid rgba(255,255,255,.12);border-radius:9px;background:rgba(255,255,255,.03);font-size:.92em}
+.wall-state-card strong{font-size:1rem}

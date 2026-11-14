@@ -1240,7 +1240,15 @@ async function renderDynasticDiplomacy(host,options={}){
     const diplomacyPanels=[...host.querySelector('.state-menu').children].filter(node=>node.classList.contains('application-panel'));
     if(diplomacyPanels.length===3)diplomacyPanels[2].after(diplomacyPanels[0]);
     const tradeHost=host.querySelector('[data-trade-proposal]');
-    void renderTradeProposal(tradeHost,{stateId});
+    const tradeRenderPromise=renderTradeProposal(tradeHost,{stateId});    if(pendingTradeReturn){
+      pendingTradeReturn=false;
+      tradeRenderPromise.then(()=>{
+        host.querySelector('[data-diplomacy-tab="summary"]')?.click();
+        activeContractType='trade';
+        const selector=host.querySelector('[data-contract-type]');
+        if(selector){selector.value='trade';selector.dispatchEvent(new Event('change',{bubbles:true}));}
+      }).catch(()=>{});
+    }
     host.querySelector('[data-contract-type]')?.addEventListener('change',event=>{
       activeContractType=event.target.value;
       host.querySelectorAll('[data-contract-panel]').forEach(panel=>{panel.hidden=panel.dataset.contractPanel!==event.target.value;});
@@ -1324,6 +1332,7 @@ function tradeTermsText(goods,gold){
   if(Number(gold)>0)parts.push(`${Number(gold).toLocaleString('ru-RU')} G`);
   return parts.length?parts.join(', '):'ничего';
 }
+let pendingTradeReturn=false;
 function tradeAvailable(data,stateId,name){return Number(tradeAvailability[Number(stateId)]?.find(row=>row.name===name)?.available||0);}
 async function loadTradeAvailability(stateId){
   const key=Number(stateId);if(!key)return [];
@@ -1382,7 +1391,7 @@ window.addEventListener('trade:route-province-picked',event=>{
   if(!(provinceAdjacency[last]||[]).some(value=>Number(value)===id)){showStatus('Следующая провинция должна быть соседней. Выберите промежуточную провинцию.',3500);return;}
   if(tradeRoutePick.ids.length>=10){showStatus('Маршрут ограничен 10 провинциями.',3500);return;}
   tradeRoutePick.ids.push(id);window.dispatchEvent(new CustomEvent('trade:route-progress',{detail:{ids:[...tradeRoutePick.ids]}}));
-  if(isCity&&stateId===tradeRoutePick.toStateId){const context=tradeRoutePick;tradeProposalDraft.route=[...context.ids];tradeProposalDraft.fromStateId=context.fromStateId;tradeProposalDraft.toStateId=context.toStateId;tradeRoutePick=null;window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:false}}));showStatus('Маршрут выбран.',3000);if(context.adminStateId){pendingStateNavigation={stateId:context.adminStateId,tab:'Дипломатия'};renderMenu('Государства');}else renderMenu('Дипломатия');return;}
+  if(isCity&&stateId===tradeRoutePick.toStateId){const context=tradeRoutePick;tradeProposalDraft.route=[...context.ids];tradeProposalDraft.fromStateId=context.fromStateId;tradeProposalDraft.toStateId=context.toStateId;tradeRoutePick=null;pendingTradeReturn=true;window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:false}}));showStatus('Маршрут выбран.',3000);if(context.adminStateId){pendingStateNavigation={stateId:context.adminStateId,tab:'Дипломатия'};renderMenu('Государства');}else renderMenu('Дипломатия');return;}
   showStatus(`Провинция добавлена (${tradeRoutePick.ids.length}/10). Выберите следующую соседнюю провинцию.`,0);
 });
 window.addEventListener('trade:route-cancelled',()=>{if(!tradeRoutePick)return;const context=tradeRoutePick;tradeRoutePick=null;window.dispatchEvent(new CustomEvent('trade:route-pick',{detail:{active:false,clear:true}}));showStatus('Выбор маршрута отменён.',2500);if(context.adminStateId){pendingStateNavigation={stateId:context.adminStateId,tab:'Дипломатия'};renderMenu('Государства');}else renderMenu('Дипломатия');});

@@ -18,6 +18,10 @@ declare
   scoped_bonus numeric;
   other_bonus numeric;
   clean_state integer;
+  clean_count integer;
+  limit_base integer;
+  limit_modifier numeric;
+  limit_effective integer;
 begin
   select count(*) into effects from fauxlore.resource_balance_effects;
   if effects<60 then raise exception 'Слишком мало эффектов ресурсов: %',effects; end if;
@@ -72,9 +76,9 @@ begin
   select sp.state_id into clean_state from fauxlore.state_profiles sp
     where not exists(select 1 from fauxlore.trade_state_resource_turns r where r.state_id=sp.state_id) limit 1;
   if clean_state is not null then
-    select count(*) into resource_count from jsonb_array_elements(fauxlore.state_permanent_modifiers(clean_state))
+    select count(*) into clean_count from jsonb_array_elements(fauxlore.state_permanent_modifiers(clean_state))
       where value->>'source_kind'='resource';
-    if resource_count>0 then raise exception 'Ресурсные модификаторы без журнала у %',clean_state; end if;
+    if clean_count>0 then raise exception 'Ресурсные модификаторы без журнала у %',clean_state; end if;
   end if;
 
   if position('construction_cost' in pg_get_functiondef('public.garrison_api(text,integer,integer,jsonb)'::regprocedure))=0 then
@@ -85,6 +89,18 @@ begin
     raise exception 'Стоимость колонизации не учитывает модификатор'; end if;
   if position('key_estate_loyalty' in pg_get_functiondef('fauxlore.effective_estate_loyalties(integer)'::regprocedure))=0 then
     raise exception 'Лояльность ключевых сословий не учитывает модификатор'; end if;
+
+  -- Действующий лимит развития = база + модификаторы, и оба значения отдаются API.
+  select (fauxlore.state_indicators(example_state)->>'development_limit_base')::integer,
+    (fauxlore.state_indicators(example_state)->>'development_limit_modifier')::numeric,
+    (fauxlore.state_indicators(example_state)->>'development_limit')::integer
+    into limit_base,limit_modifier,limit_effective;
+  if limit_base is null or limit_modifier is null or limit_effective is null then
+    raise exception 'API не отдаёт базовый и действующий лимит развития'; end if;
+  if limit_effective<>greatest(0,(limit_base+limit_modifier)::integer) then
+    raise exception 'Лимит развития не равен базе с модификаторами: % <> % + %',limit_effective,limit_base,limit_modifier; end if;
+  if limit_modifier<>fauxlore.state_permanent_modifier_total(example_state,array['development_limit_flat'],null,null) then
+    raise exception 'Модификатор лимита развития не совпадает с суммой модификаторов'; end if;
 
   raise notice 'Resource balance modifiers: % effects, state %, % statuses, % resource modifiers',
     effects,example_state,statuses,resource_count;

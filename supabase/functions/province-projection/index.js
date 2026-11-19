@@ -90,7 +90,7 @@ export async function handleProvinceProjection(request, {
           (Number(province.layers?.states?.id) === stateId || province.occupation === state.name));
         const production = calculateStateProduction(owned, state.name, context);
         const previousStatePrices = new Map((overview.resources || []).map(row => [row.resource_name, Number(row.dynamic_price)]));
-        const internal = calculateInternalTradeForecast(production, Number(duty.rate) || 15, previousStatePrices);
+        const internal = calculateInternalTradeForecast(production, Number(duty.rate) || 15, previousStatePrices, overview.resources || []);
         const rates = Object.fromEntries((estateRates.groups || []).map(group => [group.estate, Number(group.rate)]));
         const buckets = ['Корона','Знать','Духовенство','Горожане','Крестьяне'];
         const taxForecast = {total: 0, buckets: Object.fromEntries(buckets.map(name => [name, 0]))};

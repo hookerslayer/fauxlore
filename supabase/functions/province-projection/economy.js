@@ -402,17 +402,34 @@ export function calculateTradePrice(basePrice,demand,supply,resourceName,previou
   const delta=Math.max(-previous*.1,Math.min(previous*.1,target-previous));
   return Math.round(Math.max(minimum,Math.min(maximum,previous+delta))*10000)/10000;
 }
-export function calculateInternalTradeForecast(productionRows,dutyRate=15,previousPrices=new Map()){
+export function calculateInternalTradeForecast(productionRows,dutyRate=15,previousPrices=new Map(),actualFlows=[]){
+  // `actualFlows` is the last computed turn journal (fauxlore.trade_overview_api):
+  // it carries the resource volumes actually delivered by agreements, trade zones
+  // and inter-zone flows. The balance shown to players must include them,
+  // otherwise surplus and deficit would ignore every trade delivery.
+  const flows=new Map((actualFlows||[]).filter(row=>row&&row.resource_name)
+    .map(row=>[row.resource_name,row]));
   const resources=(productionRows||[]).map(row=>{
     const config=(activeConfig.resources||ECONOMY_RESOURCES).find(item=>item.name===row.resource);
-    const basePrice=Number(config?.value)||0,demand=Math.max(0,Number(row.consumption)||0),supply=Math.max(0,Number(row.production)||0);
+    const basePrice=Number(config?.value)||0,demand=Math.max(0,Number(row.consumption)||0),localSupply=Math.max(0,Number(row.production)||0);
+    const flow=flows.get(row.resource)||{};
+    const contractImport=Number(flow.contract_import)||0,contractExport=Number(flow.contract_export)||0;
+    const zoneImport=Number(flow.zone_import)||0,zoneExport=Number(flow.zone_export)||0;
+    // Pricing follows the turn journal: local production plus agreement
+    // deliveries minus agreement exports. Zone flows change the displayed
+    // balance but are already cleared at the zone price.
+    const supply=Math.max(0,localSupply+contractImport-contractExport);
     const previousValue=Number(previousPrices.get?.(row.resource)??previousPrices[row.resource]??basePrice);
     const previousPrice=previousValue>0?previousValue:basePrice;
-    const dynamicPrice=calculateTradePrice(basePrice,demand,supply,row.resource,previousPrice),quantity=Math.min(supply,demand);
+    const dynamicPrice=calculateTradePrice(basePrice,demand,supply,row.resource,previousPrice);
+    const quantity=Math.min(localSupply,demand);
     const turnover=floorToInteger(quantity*dynamicPrice),dutyIncome=floorToInteger(quantity*dynamicPrice*Number(dutyRate||0)/100);
-    return {resource_name:row.resource,production:supply,consumption:demand,balance:row.balance,base_price:basePrice,dynamic_price:dynamicPrice,
+    const balance=row.balance===null||row.balance===undefined?null:Math.round((Number(row.balance)+contractImport+zoneImport-contractExport-zoneExport)*100)/100;
+    return {resource_name:row.resource,production:localSupply,consumption:demand,balance,base_price:basePrice,dynamic_price:dynamicPrice,
       price_trend:dynamicPrice>previousPrice?'up':dynamicPrice<previousPrice?'down':'stable',
-      contract_import:0,contract_export:0,zone_import:0,zone_export:0,internal_quantity:quantity,turnover,duty_income:dutyIncome};
+      contract_import:contractImport,contract_export:contractExport,zone_import:zoneImport,zone_export:zoneExport,
+      delivered:Math.round((contractExport+zoneExport)*100)/100,received:Math.round((contractImport+zoneImport)*100)/100,
+      internal_quantity:quantity,turnover,duty_income:dutyIncome};
   });
   const dutyIncome=resources.reduce((sum,row)=>sum+row.duty_income,0);
   const estatePool=Math.max(0,resources.reduce((sum,row)=>sum+floorToInteger(row.turnover),0)-dutyIncome);

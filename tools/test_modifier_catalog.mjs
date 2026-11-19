@@ -5,7 +5,7 @@ const source=[
  {key:'crime_pp',effect:'old name',unit:'п.п.',value:0},
  {key:'production',effect:'old name',unit:'%',value:0},
  {key:'production',effect:'duplicate',unit:'%',value:0},
- {key:'colonization_chance',effect:'unrequested',unit:'п.п.',value:0},
+ {key:'spy_growth',effect:'unrequested',unit:'п.п.',value:0},
  {key:'race_assimilation_turns',effect:'old name',unit:'ход',value:0},
  {key:'military_tradition_pp',effect:'old name',unit:'п.п.',value:0},
 ];

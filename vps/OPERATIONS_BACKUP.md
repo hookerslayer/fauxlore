@@ -58,7 +58,7 @@ rm -f "$temporary"
 
 ```powershell
 New-Item -ItemType Directory -Force -Path '.local\vps-backups' | Out-Null
-scp -i "$env:USERPROFILE\.ssh\fauxlore_vps_ed25519" root@89.125.38.213:/root/fauxlore-backups/ИМЯ_АРХИВА.dump '.local\vps-backups\'
+scp -i "$env:USERPROFILE\.ssh\fauxlore_vps_ed25519" root@89.125.62.17:/root/fauxlore-backups/ИМЯ_АРХИВА.dump '.local\vps-backups\'
 Get-FileHash -Algorithm SHA256 '.local\vps-backups\ИМЯ_АРХИВА.dump'
 ```
 

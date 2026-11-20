@@ -498,6 +498,12 @@ body{background:var(--ui-canvas)}
 .overview-details[open]>summary{border-bottom:1px solid var(--ui-border-subtle);margin-bottom:16px}
 .overview-details>h4{margin:18px 0 10px}
 .overview-details>.table-scroll{margin-bottom:16px}
+.state-formulas{margin-top:10px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-bg)}
+.state-formulas>summary{cursor:pointer;padding:10px 12px;color:var(--ui-accent);font-weight:650}
+.state-formulas[open]>summary{border-bottom:1px solid var(--ui-border-subtle);margin-bottom:8px}
+.state-formulas-body{padding:0 12px 12px}
+.state-formula-list{margin:0 0 8px;padding-left:18px;display:grid;gap:6px;font-size:12.5px;line-height:1.45}
+.state-formula-list b{color:var(--ui-text)}
 .advisors-panel{display:grid;gap:12px}
 .advisors-panel>h4{margin:0}
 .local-spouse-search>summary{cursor:pointer;color:var(--ui-text);font-size:15px;font-weight:650}

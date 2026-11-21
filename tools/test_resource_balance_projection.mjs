@@ -51,5 +51,24 @@ const journal=[
   assert.equal(forest.balance,10699);
 }
 
+{
+  // Экспорт больше доступного излишка: вывезти можно только 700, баланс 0,
+  // а не отрицательный «дефицит» из-за старых поставок.
+  const forecast=calculateInternalTradeForecast(production,15,new Map(),[{resource_name:'Лес',zone_export:1000}]);
+  const forest=forecast.resources.find(row=>row.resource_name==='Лес');
+  assert.equal(forest.delivered,700,'экспорт ограничен излишком после потребления');
+  assert.equal(forest.balance,0,'экспорт не создаёт ложный дефицит');
+}
+
+{
+  // Если потребление больше производства, экспортировать нечего,
+  // и баланс остаётся настоящим дефицитом.
+  const deficitProduction=[{resource:'Лес',category:'Повседневные товары',population:1000,production:100,consumption:1000,balance:-900}];
+  const forecast=calculateInternalTradeForecast(deficitProduction,15,new Map(),[{resource_name:'Лес',zone_export:200}]);
+  const forest=forecast.resources.find(row=>row.resource_name==='Лес');
+  assert.equal(forest.delivered,0);
+  assert.equal(forest.balance,-900,'дефицит сохраняется');
+}
+
 setEconomyConfig(previous);
 console.log('Resource balance projection: local production, contract and zone flows: OK');

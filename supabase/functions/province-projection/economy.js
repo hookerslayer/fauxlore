@@ -424,11 +424,17 @@ export function calculateInternalTradeForecast(productionRows,dutyRate=15,previo
     const dynamicPrice=calculateTradePrice(basePrice,demand,supply,row.resource,previousPrice);
     const quantity=Math.min(localSupply,demand);
     const turnover=floorToInteger(quantity*dynamicPrice),dutyIncome=floorToInteger(quantity*dynamicPrice*Number(dutyRate||0)/100);
-    const balance=row.balance===null||row.balance===undefined?null:Math.round((Number(row.balance)+contractImport+zoneImport-contractExport-zoneExport)*100)/100;
+    // Export cannot exceed what remains after local consumption and imports.
+    // Without this cap a state that exported its previous surplus would show a
+    // false deficit after production fell, even though current production still
+    // covers current consumption.
+    const availableForExport=Math.max(0,localSupply+contractImport+zoneImport-demand);
+    const delivered=Math.min(contractExport+zoneExport,availableForExport);
+    const balance=row.balance===null||row.balance===undefined?null:Math.round((localSupply+contractImport+zoneImport-demand-delivered)*100)/100;
     return {resource_name:row.resource,production:localSupply,consumption:demand,balance,base_price:basePrice,dynamic_price:dynamicPrice,
       price_trend:dynamicPrice>previousPrice?'up':dynamicPrice<previousPrice?'down':'stable',
       contract_import:contractImport,contract_export:contractExport,zone_import:zoneImport,zone_export:zoneExport,
-      delivered:Math.round((contractExport+zoneExport)*100)/100,received:Math.round((contractImport+zoneImport)*100)/100,
+      delivered:Math.round(delivered*100)/100,received:Math.round((contractImport+zoneImport)*100)/100,
       internal_quantity:quantity,turnover,duty_income:dutyIncome};
   });
   const dutyIncome=resources.reduce((sum,row)=>sum+row.duty_income,0);

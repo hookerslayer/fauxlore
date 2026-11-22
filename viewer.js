@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122c';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122d';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -541,12 +541,13 @@ function drawLabels() {
       return sum+(w>0&&h>0?w*h:0);
     },0);
     const inside=rect=>rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight;
-    const options=candidates.map(candidate=>({candidate,rect:rectFor(candidate)})).filter(item=>inside(item.rect));
-    const clean=options.find(item=>overlapArea(item.rect,labelRects)===0);
-    // Если все позиции заняты, текст всё равно показываем, но только там,
-    // где он не перекроет ни один маркер.
-    const chosen=clean||options.filter(item=>overlapArea(item.rect,markerIconRects)===0)
-      .sort((a,b)=>overlapArea(a.rect,labelRects)-overlapArea(b.rect,labelRects))[0];
+    const options=candidates.map((candidate,index)=>({candidate,index,rect:rectFor(candidate)})).filter(item=>inside(item.rect));
+    const markerFree=options.filter(item=>overlapArea(item.rect,markerIconRects)===0);
+    const byTextOverlap=(a,b)=>overlapArea(a.rect,labelRects)-overlapArea(b.rect,labelRects);
+    // Сначала пробуем вплотную к маркеру. Дальние позиции — только если
+    // рядом все места заняты самими маркерами, а не другим текстом.
+    const chosen=markerFree.filter(item=>item.index<4).sort(byTextOverlap)[0]||
+      markerFree.filter(item=>item.index>=4).sort(byTextOverlap)[0];
     if(!chosen)continue;
     ctx.textAlign=chosen.candidate.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
     ctx.strokeText(name,chosen.candidate.x,chosen.candidate.y);ctx.fillText(name,chosen.candidate.x,chosen.candidate.y);

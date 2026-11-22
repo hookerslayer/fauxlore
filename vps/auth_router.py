@@ -17,7 +17,7 @@ SESSION_COOKIE = '__Host-fauxlore_session'
 _COMPLETION_SCRIPT = ("const ok=new URLSearchParams(location.search).get('status')==='ok';"
                       "if(window.opener){window.opener.postMessage({type:'fauxlore:vps-oauth',success:ok},location.origin);"
                       "window.close();}"
-                      "else if(ok){location.replace('/');}")
+                      "else{location.replace(ok?'/':'/?auth=failed');}")
 _COMPLETION_HASH = base64.b64encode(hashlib.sha256(_COMPLETION_SCRIPT.encode()).digest()).decode()
 
 

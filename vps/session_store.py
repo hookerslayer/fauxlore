@@ -6,7 +6,7 @@ import secrets
 from uuid import UUID
 
 _TOKEN_PATTERN = re.compile(r'^[A-Za-z0-9_-]{43}$')
-DEFAULT_TTL = 12 * 60 * 60
+DEFAULT_TTL = 30 * 24 * 60 * 60
 _MAX_TTL = DEFAULT_TTL
 
 

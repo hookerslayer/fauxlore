@@ -1,4 +1,4 @@
-import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=conquest-20261110f';
+import {militaryApi,militaryOrderApi,militarySplitApi,militaryTransportApi,militiaApi,garrisonApi} from './supabase-api.js?v=session-persist-20261122';
 import {makeSortable,filterRows} from './table-tools.js?v=conquest-20261110f';
 import {renderGarrisonPanel} from './garrison-ui.js?v=conquest-20261110fb';
 

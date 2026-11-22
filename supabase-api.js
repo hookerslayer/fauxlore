@@ -395,22 +395,16 @@ export async function loadSupabaseInitialMap() {
 }
 
 export async function supabaseLogin() {
-  const popup = window.open('about:blank', 'fauxlore-supabase-login', 'popup,width=520,height=680');
-  if (!popup) {
-    // Embedded browsers and strict popup blockers cannot open the OAuth window.
-    // Fall back to a full-page redirect; /auth/complete returns to the game.
-    if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {
-      window.location.assign('/auth/google/start');
-      return new Promise(() => {});
-    }
-    throw new Error('Разрешите всплывающее окно для входа через Google');
+  if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {
+    // Full-page navigation keeps the session cookie in the main browsing
+    // context; popup OAuth is unreliable in mobile and embedded browsers.
+    window.location.assign('/auth/google/start');
+    return new Promise(() => {});
   }
+  const popup = window.open('about:blank', 'fauxlore-supabase-login', 'popup,width=520,height=680');
+  if (!popup) throw new Error('Разрешите всплывающее окно для входа через Google');
   let cleanup = () => {};
   try {
-    if (['vps', 'vps-postgrest'].includes(window.FAUXLORE_CONFIG?.backend)) {
-      const {completeVpsLogin} = await import('./vps-client.js');
-      return await completeVpsLogin(popup, () => supabaseApi('auth/me'));
-    }
     const db = await client(), nonce = crypto.randomUUID();
     const callback = new URL('supabase-return.html', location.href);
     callback.searchParams.set('login', nonce);

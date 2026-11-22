@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122e';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122f';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -523,7 +523,7 @@ function drawLabels() {
     const labelSize=Math.max(9,size*(2/3));
     ctx.font=`600 ${labelSize}px system-ui`;
     const width=ctx.measureText(name).width;
-    const gap=2,pad=2;
+    const gap=4,pad=2;
     const candidates=[
       {x:mx+iconWidth/2+gap,y:my,align:'left',left:mx+iconWidth/2+gap,top:my-labelSize/2},
       {x:mx-iconWidth/2-gap-width,y:my,align:'left',left:mx-iconWidth/2-gap-width,top:my-labelSize/2},

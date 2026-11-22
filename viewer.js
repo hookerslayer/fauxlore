@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122b';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -487,7 +487,7 @@ function drawLabels() {
   for(const marker of mapMarkers)if(activeSettings.markers?.[marker.type]){const list=markersByProvince.get(marker.province_id)||[];list.push(marker);markersByProvince.set(marker.province_id,list);}
   ctx.font = '600 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 3; ctx.strokeStyle = '#13232ddd'; ctx.fillStyle = '#fff9e8';
-  const occupied = new Set(),labelRects=[];
+  const occupied = new Set(),labelRects=[],provinceLabels=[];
   const ordered = [...provinces.values()].sort((a,b) => (b.id===selected)-(a.id===selected) || b.area-a.area);
   for (const p of ordered) {
     if(p.center[0]<region[0]||p.center[1]<region[1]||p.center[0]>=region[2]||p.center[1]>=region[3])continue;
@@ -508,7 +508,7 @@ function drawLabels() {
         if(image?.complete&&image.naturalWidth){ctx.drawImage(image,mx-iconWidth/2,my-size/2,iconWidth,size);labelRects.push({left:mx-iconWidth/2-2,right:mx+iconWidth/2+2,top:my-size/2-2,bottom:my+size/2+2});}
         const name=markerRows.includes(marker)?marker.name:null;
         if(name){
-          const labelSize=size*(2/3);
+          const labelSize=Math.max(9,size*(2/3));
           ctx.font=`600 ${labelSize}px system-ui`;
           const width=ctx.measureText(name).width;
           const gap=1.5*view.scale,pad=2;
@@ -518,19 +518,29 @@ function drawLabels() {
             {x:mx,y:my-size/2-labelSize/2-3,align:'center',left:mx-width/2,top:my-size/2-labelSize-3,leader:true},
             {x:mx,y:my+size/2+labelSize/2+3,align:'center',left:mx-width/2,top:my+size/2+3,leader:true}
           ];
-          const chosen=candidates.find(candidate=>{
-            const rect={left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad};
-            return rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight&&
-              !labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4);
-          });
+          const rectFor=candidate=>({left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad});
+          const overlapArea=rect=>labelRects.reduce((sum,other)=>{
+            const w=Math.min(rect.right,other.right)-Math.max(rect.left,other.left);
+            const h=Math.min(rect.bottom,other.bottom)-Math.max(rect.top,other.top);
+            return sum+(w>0&&h>0?w*h:0);
+          },0);
+          const inside=rect=>rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight;
+          const clean=candidates.map(candidate=>({candidate,rect:rectFor(candidate),area:0}))
+            .filter(item=>inside(item.rect)&&overlapArea(item.rect)===0)[0];
+          let chosen=clean;
+          if(!chosen){
+            chosen=candidates.map(candidate=>({candidate,rect:rectFor(candidate)}))
+              .filter(item=>inside(item.rect))
+              .sort((a,b)=>overlapArea(a.rect)-overlapArea(b.rect))[0];
+          }
           if(chosen){
-            if(chosen.leader){
+            ctx.textAlign=chosen.candidate.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
+            if(chosen.candidate.leader){
               ctx.save();ctx.lineWidth=.75*view.scale;ctx.strokeStyle='#000';ctx.beginPath();ctx.moveTo(mx,my);
-              ctx.lineTo(chosen.align==='center'?mx:chosen.x+(chosen.align==='left'?0:width),chosen.y);ctx.stroke();ctx.restore();
+              ctx.lineTo(chosen.candidate.align==='center'?mx:chosen.candidate.x+(chosen.candidate.align==='left'?0:width),chosen.candidate.y);ctx.stroke();ctx.restore();
             }
-            ctx.textAlign=chosen.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
-            ctx.strokeText(name,chosen.x,chosen.y);ctx.fillText(name,chosen.x,chosen.y);
-            labelRects.push({left:chosen.left-pad,right:chosen.left+width+pad,top:chosen.top-pad,bottom:chosen.top+labelSize+pad});
+            ctx.strokeText(name,chosen.candidate.x,chosen.candidate.y);ctx.fillText(name,chosen.candidate.x,chosen.candidate.y);
+            labelRects.push(chosen.rect);
           }
         }
       });
@@ -541,8 +551,13 @@ function drawLabels() {
     ctx.font='600 11px system-ui';
     const textWidth=ctx.measureText(text).width;
     const labelRect={left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9};
-    if(labelRects.some(other=>labelRect.left<other.right+4&&labelRect.right>other.left-4&&labelRect.top<other.bottom+4&&labelRect.bottom>other.top-4))continue;
-    occupied.add(key);ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';labelRects.push(labelRect);ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
+    provinceLabels.push({text,x,y,rect:labelRect});
+    occupied.add(key);
+  }
+  for(const item of provinceLabels){
+    if(labelRects.some(other=>item.rect.left<other.right+4&&item.rect.right>other.left-4&&item.rect.top<other.bottom+4&&item.rect.bottom>other.top-4))continue;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';
+    labelRects.push(item.rect);ctx.strokeText(item.text,item.x,item.y);ctx.fillText(item.text,item.x,item.y);
   }
   let pendingLabelLayout=false,layoutsThisFrame=0;
   for(const layer of ['states','races','religions','resources','trade']){

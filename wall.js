@@ -6,7 +6,8 @@ const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 const date=value=>new Date(value).toLocaleString('ru-RU');
 const avatar=(source,name)=>source?`<img class="wall-avatar" src="${escape(source)}" alt="">`:`<span class="wall-avatar wall-avatar-fallback">${escape((name||'?')[0])}</span>`;
 const options=(rows,label='name')=>rows.map(row=>`<option value="${Number(row.id)}">${escape(row[label])}</option>`).join('');
-const renderComment=comment=>`<div class="wall-comment" data-comment="${Number(comment.id)}">${avatar(comment.avatar,comment.author)}<div><strong>${escape(comment.author)} · ${escape(comment.role==='admin'?'Администратор':comment.state||'Игрок')}</strong><small>${date(comment.created_at)}</small><p>${escape(comment.body)}</p>${comment.can_edit?'<button type="button" data-edit-comment>Редактировать</button>':''}</div></div>`;
+const commentReactionButton=(reaction,count,active)=>`<button type="button" class="wall-comment-reaction${active?' active':''}" data-comment-reaction="${reaction}" aria-label="${reaction==='like'?'Нравится':'Не нравится'}" aria-pressed="${active?'true':'false'}"><span class="wall-thumb wall-thumb-${reaction}" aria-hidden="true"></span><span data-reaction-count>${Number(count)||0}</span></button>`;
+const renderComment=comment=>`<div class="wall-comment" data-comment="${Number(comment.id)}">${avatar(comment.avatar,comment.author)}<div><strong>${escape(comment.author)} · ${escape(comment.role==='admin'?'Администратор':comment.state||'Игрок')}</strong><small>${date(comment.created_at)}</small><p>${escape(comment.body)}</p><div class="wall-comment-reactions">${commentReactionButton('like',comment.likes,comment.my_reaction==='like')}${commentReactionButton('dislike',comment.dislikes,comment.my_reaction==='dislike')}</div>${comment.can_edit?'<button type="button" data-edit-comment>Редактировать</button>':''}</div></div>`;
 
 export async function renderWall(host,user,onChange=()=>{}){
   host.innerHTML='<p class="hint">Загружаю Стену…</p>';
@@ -76,6 +77,33 @@ export async function renderWall(host,user,onChange=()=>{}){
         }catch(error){button.title=error.message;}
         finally{reactionButtons.forEach(item=>item.disabled=false);}
       });
+      const commentsHost=card.querySelector('.wall-comments');
+      if(commentsHost)commentsHost.addEventListener('click',async event=>{
+        const button=event.target.closest('[data-comment-reaction]');
+        if(!button)return;
+        const row=button.closest('[data-comment]');
+        const reaction=button.dataset.commentReaction;
+        const current=post.comments.find(item=>Number(item.id)===Number(row?.dataset.comment));
+        if(!current)return;
+        const previous=current.my_reaction||null,next=previous===reaction?null:reaction;
+        const buttons=[...row.querySelectorAll('[data-comment-reaction]')];
+        buttons.forEach(item=>item.disabled=true);
+        try{
+          await wallApi('react_comment',{comment_id:Number(current.id),reaction});
+          if(previous==='like')current.likes=Math.max(0,Number(current.likes||0)-1);
+          if(previous==='dislike')current.dislikes=Math.max(0,Number(current.dislikes||0)-1);
+          if(next==='like')current.likes=Number(current.likes||0)+1;
+          if(next==='dislike')current.dislikes=Number(current.dislikes||0)+1;
+          current.my_reaction=next;
+          buttons.forEach(item=>{
+            const kind=item.dataset.commentReaction,active=kind===next;
+            item.classList.toggle('active',active);
+            item.setAttribute('aria-pressed',String(active));
+            item.querySelector('[data-reaction-count]').textContent=Number(kind==='like'?current.likes:current.dislikes)||0;
+          });
+        }catch(error){button.title=error.message;}
+        finally{buttons.forEach(item=>item.disabled=false);}
+      });
       const comment=card.querySelector('.wall-comment-form');if(comment)comment.onsubmit=async event=>{
         event.preventDefault();
         const button=comment.querySelector('button'),body=comment.elements.body.value;
@@ -92,7 +120,7 @@ export async function renderWall(host,user,onChange=()=>{}){
             post.comments=updated.comments;
             card.querySelector('.wall-comments').innerHTML=post.comments.map(renderComment).join('');
           }else{
-            const fallback={id:created.id,body,author:user.nickname,avatar:user.avatar_url||null,role:user.role,state:null,created_at:new Date().toISOString()};
+            const fallback={id:created.id,body,author:user.nickname,avatar:user.avatar_url||null,role:user.role,state:null,created_at:new Date().toISOString(),likes:0,dislikes:0,my_reaction:null};
             post.comments.push(fallback);
             card.querySelector('.wall-comments').insertAdjacentHTML('beforeend',renderComment(fallback));
           }

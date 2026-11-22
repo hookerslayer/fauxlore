@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=trade-cleanup-20261122';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122e';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -523,16 +523,12 @@ function drawLabels() {
     const labelSize=Math.max(9,size*(2/3));
     ctx.font=`600 ${labelSize}px system-ui`;
     const width=ctx.measureText(name).width;
-    const gap=1.5*view.scale,far=gap+Math.max(14,labelSize*1.6),pad=2;
+    const gap=2,pad=2;
     const candidates=[
       {x:mx+iconWidth/2+gap,y:my,align:'left',left:mx+iconWidth/2+gap,top:my-labelSize/2},
       {x:mx-iconWidth/2-gap-width,y:my,align:'left',left:mx-iconWidth/2-gap-width,top:my-labelSize/2},
-      {x:mx,y:my-size/2-labelSize/2-3,align:'center',left:mx-width/2,top:my-size/2-labelSize-3},
-      {x:mx,y:my+size/2+labelSize/2+3,align:'center',left:mx-width/2,top:my+size/2+3},
-      {x:mx+iconWidth/2+far,y:my,align:'left',left:mx+iconWidth/2+far,top:my-labelSize/2},
-      {x:mx-iconWidth/2-far-width,y:my,align:'left',left:mx-iconWidth/2-far-width,top:my-labelSize/2},
-      {x:mx,y:my-size/2-labelSize-far,align:'center',left:mx-width/2,top:my-size/2-labelSize-far},
-      {x:mx,y:my+size/2+far,align:'center',left:mx-width/2,top:my+size/2+far}
+      {x:mx,y:my-size/2-labelSize/2-gap,align:'center',left:mx-width/2,top:my-size/2-labelSize-gap},
+      {x:mx,y:my+size/2+labelSize/2+gap,align:'center',left:mx-width/2,top:my+size/2+gap}
     ];
     const rectFor=candidate=>({left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad});
     const overlapArea=(rect,list)=>list.reduce((sum,other)=>{
@@ -544,10 +540,9 @@ function drawLabels() {
     const options=candidates.map((candidate,index)=>({candidate,index,rect:rectFor(candidate)})).filter(item=>inside(item.rect));
     const markerFree=options.filter(item=>overlapArea(item.rect,markerIconRects)===0);
     const byTextOverlap=(a,b)=>overlapArea(a.rect,labelRects)-overlapArea(b.rect,labelRects);
-    // Сначала пробуем вплотную к маркеру. Дальние позиции — только если
-    // рядом все места заняты самими маркерами, а не другим текстом.
-    const chosen=markerFree.filter(item=>item.index<4).sort(byTextOverlap)[0]||
-      markerFree.filter(item=>item.index>=4).sort(byTextOverlap)[0];
+    // Подпись всегда ставим вплотную к маркеру; пересечение с другим текстом
+    // допустимо, а перекрывать сами маркеры — нет.
+    const chosen=markerFree.sort(byTextOverlap)[0];
     if(!chosen)continue;
     ctx.textAlign=chosen.candidate.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
     ctx.strokeText(name,chosen.candidate.x,chosen.candidate.y);ctx.fillText(name,chosen.candidate.x,chosen.candidate.y);

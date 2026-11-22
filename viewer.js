@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=wall-comments-20261122';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -509,17 +509,40 @@ function drawLabels() {
         const name=markerRows.includes(marker)?marker.name:null;
         if(name){
           const labelSize=size*(2/3);
-          ctx.font=`600 ${labelSize}px system-ui`;ctx.textAlign='left';ctx.textBaseline='middle';
-          const left=mx+iconWidth/2+1.5*view.scale;
-          ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
-          ctx.strokeText(name,left,my);ctx.fillText(name,left,my);const width=ctx.measureText(name).width;labelRects.push({left:left-2,right:left+width+2,top:my-labelSize/2-2,bottom:my+labelSize/2+2});
+          ctx.font=`600 ${labelSize}px system-ui`;
+          const width=ctx.measureText(name).width;
+          const gap=1.5*view.scale,pad=2;
+          const candidates=[
+            {x:mx+iconWidth/2+gap,y:my,align:'left',left:mx+iconWidth/2+gap,top:my-labelSize/2,leader:false},
+            {x:mx-iconWidth/2-gap-width,y:my,align:'left',left:mx-iconWidth/2-gap-width,top:my-labelSize/2,leader:true},
+            {x:mx,y:my-size/2-labelSize/2-3,align:'center',left:mx-width/2,top:my-size/2-labelSize-3,leader:true},
+            {x:mx,y:my+size/2+labelSize/2+3,align:'center',left:mx-width/2,top:my+size/2+3,leader:true}
+          ];
+          const chosen=candidates.find(candidate=>{
+            const rect={left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad};
+            return rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight&&
+              !labelRects.some(other=>rect.left<other.right+4&&rect.right>other.left-4&&rect.top<other.bottom+4&&rect.bottom>other.top-4);
+          });
+          if(chosen){
+            if(chosen.leader){
+              ctx.save();ctx.lineWidth=.75*view.scale;ctx.strokeStyle='#000';ctx.beginPath();ctx.moveTo(mx,my);
+              ctx.lineTo(chosen.align==='center'?mx:chosen.x+(chosen.align==='left'?0:width),chosen.y);ctx.stroke();ctx.restore();
+            }
+            ctx.textAlign=chosen.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
+            ctx.strokeText(name,chosen.x,chosen.y);ctx.fillText(name,chosen.x,chosen.y);
+            labelRects.push({left:chosen.left-pad,right:chosen.left+width+pad,top:chosen.top-pad,bottom:chosen.top+labelSize+pad});
+          }
         }
       });
     if (x < -30 || y < -10 || x > viewportWidth+30 || y > viewportHeight+10) continue;
     if (occupied.has(key) && p.id !== selected) continue;
     const text=showIds?String(p.id):(!hasVisibleMarker||!activeSettings.markers?.names)&&activeSettings.information.provinces?p.name:'';
     if(!text)continue;
-    occupied.add(key);ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';const textWidth=ctx.measureText(text).width;labelRects.push({left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9});ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
+    ctx.font='600 11px system-ui';
+    const textWidth=ctx.measureText(text).width;
+    const labelRect={left:x-textWidth/2-3,right:x+textWidth/2+3,top:y-9,bottom:y+9};
+    if(labelRects.some(other=>labelRect.left<other.right+4&&labelRect.right>other.left-4&&labelRect.top<other.bottom+4&&labelRect.bottom>other.top-4))continue;
+    occupied.add(key);ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='600 11px system-ui';ctx.lineWidth=3;ctx.strokeStyle='#13232ddd';ctx.fillStyle='#fff9e8';labelRects.push(labelRect);ctx.strokeText(text,x,y); ctx.fillText(text,x,y);
   }
   let pendingLabelLayout=false,layoutsThisFrame=0;
   for(const layer of ['states','races','religions','resources','trade']){

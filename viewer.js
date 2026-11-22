@@ -1,4 +1,4 @@
-import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122b';
+import {initUI,hydrateUI,api,loadInitialMap,settings,LAYERS,isAdmin,isAdminEditing,isAdminPainting,canRenameProvince,canRenameMarker,consistentProvinceProjectionApi} from './ui.js?v=map-label-offset-20261122c';
 import {localEventsApi} from './supabase-api.js?v=session-persist-20261122';
 import {showLocalEvent,positionLocalEvent,closeLocalEvent} from './local-events.js?v=conquest-20261110f';
 import {militaryMapApi,militaryOrderApi} from './supabase-api.js?v=session-persist-20261122';
@@ -487,65 +487,79 @@ function drawLabels() {
   for(const marker of mapMarkers)if(activeSettings.markers?.[marker.type]){const list=markersByProvince.get(marker.province_id)||[];list.push(marker);markersByProvince.set(marker.province_id,list);}
   ctx.font = '600 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 3; ctx.strokeStyle = '#13232ddd'; ctx.fillStyle = '#fff9e8';
-  const occupied = new Set(),labelRects=[],provinceLabels=[];
+  const occupied = new Set(),labelRects=[],markerIconRects=[],markerLabels=[],provinceLabels=[];
   const ordered = [...provinces.values()].sort((a,b) => (b.id===selected)-(a.id===selected) || b.area-a.area);
+  const markersForProvince=p=>{
+    const list=markersByProvince.get(p.id)||[];
+    if(activeSettings.markers?.capital&&p.has_capital_marker&&!list.some(m=>m.type==='capital'))list.push({type:'capital',name:p.name});
+    if(activeSettings.markers?.city&&p.has_city_marker&&!list.some(m=>m.type==='city'))list.push({type:'city',name:p.name});
+    return list;
+  };
+  // Сначала рисуем все маркеры и запоминаем их прямоугольники. Маркеры
+  // являются препятствиями для подписей, но сами никогда не смещаются.
+  for (const p of ordered) {
+    if(p.center[0]<region[0]||p.center[1]<region[1]||p.center[0]>=region[2]||p.center[1]>=region[3])continue;
+    const visibleMarkers=markersForProvince(p);
+    const markerRows=activeSettings.markers?.names?visibleMarkers.filter(marker=>marker.name):[];
+    for(const marker of visibleMarkers){
+      const mx=(Number.isFinite(marker.x)?marker.x:p.center[0])*view.scale+view.x;
+      const my=(Number.isFinite(marker.y)?marker.y:p.center[1])*view.scale+view.y;
+      const size=(MARKER_HEIGHT[marker.type]||10)*view.scale,image=markerIcons[marker.type];
+      const imageRatio=image?.naturalWidth&&image?.naturalHeight?image.naturalWidth/image.naturalHeight:1;
+      const iconWidth=size*imageRatio;
+      if(mx<-iconWidth||my<-size||mx>viewportWidth+iconWidth||my>viewportHeight+size)continue;
+      if(image?.complete&&image.naturalWidth){
+        ctx.drawImage(image,mx-iconWidth/2,my-size/2,iconWidth,size);
+        const rect={left:mx-iconWidth/2-2,right:mx+iconWidth/2+2,top:my-size/2-2,bottom:my+size/2+2};
+        markerIconRects.push(rect);labelRects.push(rect);
+      }
+      if(markerRows.includes(marker)&&marker.name)markerLabels.push({name:marker.name,mx,my,size,iconWidth});
+    }
+  }
+  // Подписи маркеров размещаем после всех иконок, чтобы ни один маркер не
+  // оказался поверх текста. Смещаем только текст, маркеры не двигаем.
+  for(const label of markerLabels){
+    const {name,mx,my,size,iconWidth}=label;
+    const labelSize=Math.max(9,size*(2/3));
+    ctx.font=`600 ${labelSize}px system-ui`;
+    const width=ctx.measureText(name).width;
+    const gap=1.5*view.scale,far=gap+Math.max(14,labelSize*1.6),pad=2;
+    const candidates=[
+      {x:mx+iconWidth/2+gap,y:my,align:'left',left:mx+iconWidth/2+gap,top:my-labelSize/2},
+      {x:mx-iconWidth/2-gap-width,y:my,align:'left',left:mx-iconWidth/2-gap-width,top:my-labelSize/2},
+      {x:mx,y:my-size/2-labelSize/2-3,align:'center',left:mx-width/2,top:my-size/2-labelSize-3},
+      {x:mx,y:my+size/2+labelSize/2+3,align:'center',left:mx-width/2,top:my+size/2+3},
+      {x:mx+iconWidth/2+far,y:my,align:'left',left:mx+iconWidth/2+far,top:my-labelSize/2},
+      {x:mx-iconWidth/2-far-width,y:my,align:'left',left:mx-iconWidth/2-far-width,top:my-labelSize/2},
+      {x:mx,y:my-size/2-labelSize-far,align:'center',left:mx-width/2,top:my-size/2-labelSize-far},
+      {x:mx,y:my+size/2+far,align:'center',left:mx-width/2,top:my+size/2+far}
+    ];
+    const rectFor=candidate=>({left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad});
+    const overlapArea=(rect,list)=>list.reduce((sum,other)=>{
+      const w=Math.min(rect.right,other.right)-Math.max(rect.left,other.left);
+      const h=Math.min(rect.bottom,other.bottom)-Math.max(rect.top,other.top);
+      return sum+(w>0&&h>0?w*h:0);
+    },0);
+    const inside=rect=>rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight;
+    const options=candidates.map(candidate=>({candidate,rect:rectFor(candidate)})).filter(item=>inside(item.rect));
+    const clean=options.find(item=>overlapArea(item.rect,labelRects)===0);
+    // Если все позиции заняты, текст всё равно показываем, но только там,
+    // где он не перекроет ни один маркер.
+    const chosen=clean||options.filter(item=>overlapArea(item.rect,markerIconRects)===0)
+      .sort((a,b)=>overlapArea(a.rect,labelRects)-overlapArea(b.rect,labelRects))[0];
+    if(!chosen)continue;
+    ctx.textAlign=chosen.candidate.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
+    ctx.strokeText(name,chosen.candidate.x,chosen.candidate.y);ctx.fillText(name,chosen.candidate.x,chosen.candidate.y);
+    labelRects.push(chosen.rect);
+  }
+  // Названия провинций уступают маркерам и их подписям.
   for (const p of ordered) {
     if(p.center[0]<region[0]||p.center[1]<region[1]||p.center[0]>=region[2]||p.center[1]>=region[3])continue;
     const x = p.center[0]*view.scale+view.x, y = p.center[1]*view.scale+view.y;
     const key = `${Math.floor(x/42)},${Math.floor(y/18)}`;
-    const visibleMarkers=markersByProvince.get(p.id)||[];
-    if(activeSettings.markers?.capital&&p.has_capital_marker&&!visibleMarkers.some(m=>m.type==='capital'))visibleMarkers.push({type:'capital',name:p.name});
-    if(activeSettings.markers?.city&&p.has_city_marker&&!visibleMarkers.some(m=>m.type==='city'))visibleMarkers.push({type:'city',name:p.name});
-    const hasVisibleMarker=visibleMarkers.length>0;
-    const markerRows=activeSettings.markers?.names?visibleMarkers.filter(marker=>marker.name):[];
-    if(hasVisibleMarker)visibleMarkers.forEach(marker=>{
-        const mx=(Number.isFinite(marker.x)?marker.x:p.center[0])*view.scale+view.x;
-        const my=(Number.isFinite(marker.y)?marker.y:p.center[1])*view.scale+view.y;
-        const size=(MARKER_HEIGHT[marker.type]||10)*view.scale,image=markerIcons[marker.type];
-        const imageRatio=image?.naturalWidth&&image?.naturalHeight?image.naturalWidth/image.naturalHeight:1;
-        const iconWidth=size*imageRatio;
-        if(mx<-iconWidth||my<-size||mx>viewportWidth+iconWidth||my>viewportHeight+size)return;
-        if(image?.complete&&image.naturalWidth){ctx.drawImage(image,mx-iconWidth/2,my-size/2,iconWidth,size);labelRects.push({left:mx-iconWidth/2-2,right:mx+iconWidth/2+2,top:my-size/2-2,bottom:my+size/2+2});}
-        const name=markerRows.includes(marker)?marker.name:null;
-        if(name){
-          const labelSize=Math.max(9,size*(2/3));
-          ctx.font=`600 ${labelSize}px system-ui`;
-          const width=ctx.measureText(name).width;
-          const gap=1.5*view.scale,pad=2;
-          const candidates=[
-            {x:mx+iconWidth/2+gap,y:my,align:'left',left:mx+iconWidth/2+gap,top:my-labelSize/2,leader:false},
-            {x:mx-iconWidth/2-gap-width,y:my,align:'left',left:mx-iconWidth/2-gap-width,top:my-labelSize/2,leader:true},
-            {x:mx,y:my-size/2-labelSize/2-3,align:'center',left:mx-width/2,top:my-size/2-labelSize-3,leader:true},
-            {x:mx,y:my+size/2+labelSize/2+3,align:'center',left:mx-width/2,top:my+size/2+3,leader:true}
-          ];
-          const rectFor=candidate=>({left:candidate.left-pad,right:candidate.left+width+pad,top:candidate.top-pad,bottom:candidate.top+labelSize+pad});
-          const overlapArea=rect=>labelRects.reduce((sum,other)=>{
-            const w=Math.min(rect.right,other.right)-Math.max(rect.left,other.left);
-            const h=Math.min(rect.bottom,other.bottom)-Math.max(rect.top,other.top);
-            return sum+(w>0&&h>0?w*h:0);
-          },0);
-          const inside=rect=>rect.right>0&&rect.left<viewportWidth&&rect.bottom>0&&rect.top<viewportHeight;
-          const clean=candidates.map(candidate=>({candidate,rect:rectFor(candidate),area:0}))
-            .filter(item=>inside(item.rect)&&overlapArea(item.rect)===0)[0];
-          let chosen=clean;
-          if(!chosen){
-            chosen=candidates.map(candidate=>({candidate,rect:rectFor(candidate)}))
-              .filter(item=>inside(item.rect))
-              .sort((a,b)=>overlapArea(a.rect)-overlapArea(b.rect))[0];
-          }
-          if(chosen){
-            ctx.textAlign=chosen.candidate.align;ctx.textBaseline='middle';ctx.lineWidth=.75*view.scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle='#fff';
-            if(chosen.candidate.leader){
-              ctx.save();ctx.lineWidth=.75*view.scale;ctx.strokeStyle='#000';ctx.beginPath();ctx.moveTo(mx,my);
-              ctx.lineTo(chosen.candidate.align==='center'?mx:chosen.candidate.x+(chosen.candidate.align==='left'?0:width),chosen.candidate.y);ctx.stroke();ctx.restore();
-            }
-            ctx.strokeText(name,chosen.candidate.x,chosen.candidate.y);ctx.fillText(name,chosen.candidate.x,chosen.candidate.y);
-            labelRects.push(chosen.rect);
-          }
-        }
-      });
     if (x < -30 || y < -10 || x > viewportWidth+30 || y > viewportHeight+10) continue;
     if (occupied.has(key) && p.id !== selected) continue;
+    const hasVisibleMarker=markersForProvince(p).length>0;
     const text=showIds?String(p.id):(!hasVisibleMarker||!activeSettings.markers?.names)&&activeSettings.information.provinces?p.name:'';
     if(!text)continue;
     ctx.font='600 11px system-ui';

@@ -81,7 +81,9 @@ export async function handleProvinceProjection(request, {
           read(`${prefix}/states/${stateId}/trade-overview`),
           read(`${prefix}/states/${stateId}/trade-duty`),
           read(`${prefix}/states/${stateId}/estate-tax-rates`),
-          read('my/trade-agreements'),
+          // Если снимок проекции не содержит договоров, прогноз строится без них,
+          // а не падает целиком.
+          read('my/trade-agreements').catch(() => ({agreements: []})),
         ]);
         if (!sourceResponse.ok) throw new Error(`Private projection source: ${sourceResponse.status}`);
         const source = await sourceResponse.json();

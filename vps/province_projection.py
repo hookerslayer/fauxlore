@@ -163,6 +163,9 @@ def build_state_snapshot(connection, state_id: int, view: str):
                 timings['finance_inputs_ms'] = round((time.perf_counter() - phase_started) * 1000)
                 routes[f'{prefix}/states/{state_id}/tax-rates'] = finance_inputs['tax_rates']
                 routes['my/trade-agreements'] = finance_inputs['agreements']
+            else:
+                # The trade forecast needs the active agreement terms.
+                routes['my/trade-agreements'] = _read(connection, 'my/trade-agreements')
             snapshot = {'state_id': state_id, 'view': view, 'routes': routes,
                         'local_events': [], 'projection_source': source, 'finance_inputs': finance_inputs}
             snapshot['_timings'] = timings

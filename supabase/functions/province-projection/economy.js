@@ -402,39 +402,72 @@ export function calculateTradePrice(basePrice,demand,supply,resourceName,previou
   const delta=Math.max(-previous*.1,Math.min(previous*.1,target-previous));
   return Math.round(Math.max(minimum,Math.min(maximum,previous+delta))*10000)/10000;
 }
-export function calculateInternalTradeForecast(productionRows,dutyRate=15,previousPrices=new Map(),actualFlows=[]){
-  // `actualFlows` is the last computed turn journal (fauxlore.trade_overview_api):
-  // it carries the resource volumes actually delivered by agreements, trade zones
-  // and inter-zone flows. The balance shown to players must include them,
-  // otherwise surplus and deficit would ignore every trade delivery.
-  const flows=new Map((actualFlows||[]).filter(row=>row&&row.resource_name)
-    .map(row=>[row.resource_name,row]));
+export function calculateInternalTradeForecast(productionRows,dutyRate=15,previousPrices=new Map(),options={}){
+  // Прогноз на следующий расчёт: поставки по действующим договорам берутся из
+  // условий соглашений, а не из журнала прошлого хода. Торговая зона покрывает
+  // остаток спроса или принимает остаток излишка; коэффициент покрытия — оценка
+  // по суммарному предложению и спросу зон, в которых состоит государство.
+  const agreements=Array.isArray(options.agreements)?options.agreements:[];
+  const zones=Array.isArray(options.zones)?options.zones:[];
+  const stateId=Number(options.stateId)||0;
+  const contractIn=new Map(),contractOut=new Map();
+  for(const agreement of agreements){
+    if(!agreement||agreement.status!=='accepted')continue;
+    const from=Number(agreement.from_state_id),to=Number(agreement.to_state_id);
+    const terms=agreement.terms||{};
+    // from_goods отправляет государство-отправитель, поэтому оно вывозит их и
+    // ввозит to_goods; получатель — наоборот.
+    const outgoing=from===stateId?(terms.from_goods||[]):to===stateId?(terms.to_goods||[]):null;
+    const incoming=from===stateId?(terms.to_goods||[]):to===stateId?(terms.from_goods||[]):null;
+    if(!outgoing||!incoming)continue;
+    for(const good of outgoing){
+      const name=good?.name,quantity=Number(good?.quantity)||0;
+      if(!name||quantity<=0)continue;
+      contractOut.set(name,(contractOut.get(name)||0)+quantity);
+    }
+    for(const good of incoming){
+      const name=good?.name,quantity=Number(good?.quantity)||0;
+      if(!name||quantity<=0)continue;
+      contractIn.set(name,(contractIn.get(name)||0)+quantity);
+    }
+  }
+  const zoneTotals=new Map();
+  for(const zone of zones)for(const row of zone.resources||[]){
+    const name=row.resource_name;if(!name)continue;
+    const total=zoneTotals.get(name)||{supply:0,demand:0};
+    total.supply+=Math.max(0,Number(row.local_supply)||0);
+    total.demand+=Math.max(0,Number(row.demand)||0);
+    zoneTotals.set(name,total);
+  }
   const resources=(productionRows||[]).map(row=>{
     const config=(activeConfig.resources||ECONOMY_RESOURCES).find(item=>item.name===row.resource);
     const basePrice=Number(config?.value)||0,demand=Math.max(0,Number(row.consumption)||0),localSupply=Math.max(0,Number(row.production)||0);
-    const flow=flows.get(row.resource)||{};
-    const contractImport=Number(flow.contract_import)||0,contractExport=Number(flow.contract_export)||0;
-    const zoneImport=Number(flow.zone_import)||0,zoneExport=Number(flow.zone_export)||0;
-    // Pricing follows the turn journal: local production plus agreement
-    // deliveries minus agreement exports. Zone flows change the displayed
-    // balance but are already cleared at the zone price.
+    const scheduledImport=contractIn.get(row.resource)||0;
+    const scheduledExport=contractOut.get(row.resource)||0;
+    // Экспорт не может превысить остаток после собственного потребления и ввоза.
+    const contractImport=scheduledImport;
+    const contractExport=Math.min(scheduledExport,Math.max(0,localSupply+contractImport-demand));
+    const residual=localSupply+contractImport-demand-contractExport;
+    const totals=zoneTotals.get(row.resource);
+    let zoneImport=0,zoneExport=0;
+    if(residual<0&&totals){
+      const coverage=totals.demand>0?Math.min(1,totals.supply/totals.demand):0;
+      zoneImport=Math.round((-residual)*coverage*100)/100;
+    }else if(residual>0&&totals){
+      const coverage=totals.supply>0?Math.min(1,totals.demand/totals.supply):0;
+      zoneExport=Math.round(residual*coverage*100)/100;
+    }
     const supply=Math.max(0,localSupply+contractImport-contractExport);
     const previousValue=Number(previousPrices.get?.(row.resource)??previousPrices[row.resource]??basePrice);
     const previousPrice=previousValue>0?previousValue:basePrice;
     const dynamicPrice=calculateTradePrice(basePrice,demand,supply,row.resource,previousPrice);
     const quantity=Math.min(localSupply,demand);
     const turnover=floorToInteger(quantity*dynamicPrice),dutyIncome=floorToInteger(quantity*dynamicPrice*Number(dutyRate||0)/100);
-    // Export cannot exceed what remains after local consumption and imports.
-    // Without this cap a state that exported its previous surplus would show a
-    // false deficit after production fell, even though current production still
-    // covers current consumption.
-    const availableForExport=Math.max(0,localSupply+contractImport+zoneImport-demand);
-    const delivered=Math.min(contractExport+zoneExport,availableForExport);
-    const balance=row.balance===null||row.balance===undefined?null:Math.round((localSupply+contractImport+zoneImport-demand-delivered)*100)/100;
+    const balance=row.balance===null||row.balance===undefined?null:Math.round((residual+zoneImport-zoneExport)*100)/100;
     return {resource_name:row.resource,production:localSupply,consumption:demand,balance,base_price:basePrice,dynamic_price:dynamicPrice,
       price_trend:dynamicPrice>previousPrice?'up':dynamicPrice<previousPrice?'down':'stable',
       contract_import:contractImport,contract_export:contractExport,zone_import:zoneImport,zone_export:zoneExport,
-      delivered:Math.round(delivered*100)/100,received:Math.round((contractImport+zoneImport)*100)/100,
+      delivered:Math.round((contractExport+zoneExport)*100)/100,received:Math.round((contractImport+zoneImport)*100)/100,
       internal_quantity:quantity,turnover,duty_income:dutyIncome};
   });
   const dutyIncome=resources.reduce((sum,row)=>sum+row.duty_income,0);

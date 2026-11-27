@@ -72,7 +72,7 @@ export async function handleProvinceProjection(request, {
       if (view === 'trade' || view === 'finance') {
         const secret = getEnv('SUPABASE_SERVICE_ROLE_KEY');
         if (!secret) throw new Error('Не настроен серверный ключ прогнозов');
-        const [sourceResponse, overview, duty, estateRates] = await Promise.all([
+        const [sourceResponse, overview, duty, estateRates, agreementsData] = await Promise.all([
           fetchImpl(`${url}/rest/v1/rpc/projection_source_api`, {
             method: 'POST',
             headers: {authorization: `Bearer ${secret}`, apikey: secret, 'Content-Type': 'application/json'},
@@ -81,6 +81,7 @@ export async function handleProvinceProjection(request, {
           read(`${prefix}/states/${stateId}/trade-overview`),
           read(`${prefix}/states/${stateId}/trade-duty`),
           read(`${prefix}/states/${stateId}/estate-tax-rates`),
+          read('my/trade-agreements'),
         ]);
         if (!sourceResponse.ok) throw new Error(`Private projection source: ${sourceResponse.status}`);
         const source = await sourceResponse.json();
@@ -90,7 +91,16 @@ export async function handleProvinceProjection(request, {
           (Number(province.layers?.states?.id) === stateId || province.occupation === state.name));
         const production = calculateStateProduction(owned, state.name, context);
         const previousStatePrices = new Map((overview.resources || []).map(row => [row.resource_name, Number(row.dynamic_price)]));
-        const internal = calculateInternalTradeForecast(production, Number(duty.rate) || 15, previousStatePrices, overview.resources || []);
+        const previousZonePrices = new Map((overview.zones || []).map(zone =>
+          [Number(zone.id), new Map((zone.resources || []).map(row => [row.resource_name, Number(row.dynamic_price)]))]));
+        const zones = calculateTradeZoneForecast(allProvinces, previousZonePrices)
+          .filter(zone => (zone.participants || []).some(participant => Number(participant.state_id) === stateId || participant.state_name === state.name))
+          .map(zone => ({...zone, participants: (zone.participants || []).map(participant =>
+            Number(participant.state_id) === stateId || participant.state_name === state.name
+              ? participant
+              : {...participant, local_income: null, export_income: null})}));
+        const internal = calculateInternalTradeForecast(production, Number(duty.rate) || 15, previousStatePrices,
+          {agreements: agreementsData?.agreements || [], zones, stateId});
         const rates = Object.fromEntries((estateRates.groups || []).map(group => [group.estate, Number(group.rate)]));
         const buckets = ['Корона','Знать','Духовенство','Горожане','Крестьяне'];
         const taxForecast = {total: 0, buckets: Object.fromEntries(buckets.map(name => [name, 0]))};
@@ -117,14 +127,6 @@ export async function handleProvinceProjection(request, {
         }
         taxForecast.total = Math.floor(taxForecast.total);
         for (const name of buckets) taxForecast.buckets[name] = Math.floor(taxForecast.buckets[name]);
-        const previousZonePrices = new Map((overview.zones || []).map(zone =>
-          [Number(zone.id), new Map((zone.resources || []).map(row => [row.resource_name, Number(row.dynamic_price)]))]));
-        const zones = calculateTradeZoneForecast(allProvinces, previousZonePrices)
-          .filter(zone => (zone.participants || []).some(participant => Number(participant.state_id) === stateId || participant.state_name === state.name))
-          .map(zone => ({...zone, participants: (zone.participants || []).map(participant =>
-            Number(participant.state_id) === stateId || participant.state_name === state.name
-              ? participant
-              : {...participant, local_income: null, export_income: null})}));
         const modifierTotal = key => (indicators.permanent_modifiers || [])
           .filter(item => item.key === key && item.scope === 'Государство')
           .reduce((sum, item) => sum + Number(item.value || 0), 0);
